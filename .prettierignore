@@ -1,0 +1,9 @@
+.next
+node_modules
+coverage
+playwright-report
+test-results
+package-lock.json
+
+# User-authored doc — not ours to restyle
+development-workflow.md

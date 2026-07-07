@@ -4,6 +4,15 @@
 > **Approved — do not re-run Step A/B.** `PROGRESS.md` is the living log; update this file
 > immediately whenever a technical limitation forces a design change.
 
+**Deviation log:** `create-next-app@latest` installed **Next.js 16.2.10** (16 is now latest
+stable; 15 was latest at planning time). Accepted rather than pinned back to 15 — fighting the
+toolchain for an already-superseded major has no upside. Next.js itself warns (see
+`AGENTS.md`) that v16 may differ from agent training data; consult
+`node_modules/next/dist/docs/` before assuming App Router API shape. Auth: confirmed **custom
+session-table auth** over Neon Auth (Stack Auth) — our household/role/invite model was already
+designed around it; Neon Auth's Teams model would require adapting our design to theirs, not
+saving work, and avoids a third-party identity dependency on top of Neon itself.
+
 ## Context
 
 `FinanceTracker/` (sibling project, not in this repo) is a single-user finance planner
@@ -24,7 +33,7 @@ transactions), formal SLOs.
 
 ## Stack
 
-Next.js 15 (App Router) + React 19 + TS on **Vercel** · **Neon Postgres** + Drizzle +
+Next.js 16 (App Router) + React 19 + TS on **Vercel** · **Neon Postgres** + Drizzle +
 drizzle-kit migrations · sessions table + opaque token + argon2 + secure cookies + origin/CSRF
 checks · roles owner/member/viewer · **Resend** (invites/reminders/recap, keys-optional) +
 Vercel Cron · Tailwind v4 + shadcn/ui (light+dark) · Recharts · lucide-react · PWA.
@@ -64,22 +73,22 @@ accounts/recurring items from `FinanceTracker/src/lib/server/db.ts`).
 CRUD; recurring CRUD + generate/propagate; monthly entries + calendar/agenda/list; dashboard;
 CSV export (fixed); health check + structured logging.
 
-**Optional** — two kinds of flags. *Config* = env var (flip = redeploy, fine for low-risk).
-*Kill-switch* = runtime-toggleable without redeploy, required for risky/externally-triggerable.
+**Optional** — two kinds of flags. _Config_ = env var (flip = redeploy, fine for low-risk).
+_Kill-switch_ = runtime-toggleable without redeploy, required for risky/externally-triggerable.
 **Runtime source:** `household_settings` DB rows read per request with ~30s in-memory cache
 (no new dependency; confirmed in Phase 0).
 
-| Flag | Feature | Kind | Default |
-| --- | --- | --- | --- |
-| `category_budgets` | Per-category caps + progress | config (env) | on |
-| `savings_goals` | Goals progress | config (env) | on |
-| `net_worth` | Balances + net-worth trend | config (env) | on |
-| `entry_attribution` | `paid_by` tagging + per-person view | config (env) | on |
-| `pwa` | Installable PWA | config (env) | on |
-| `auto_generate` | Rolling materialize next N months (cron mutates data) | **kill-switch (DB)** | on |
-| `csv_import` | Statement import (uploaded file, bulk mutation) | **kill-switch (DB)** | **off** |
-| `email_reminders` | Bill-due reminders (email blast radius) | **kill-switch (DB)** | **off** |
-| `monthly_recap` | Month-end summary email | **kill-switch (DB)** | **off** |
+| Flag                | Feature                                               | Kind                 | Default |
+| ------------------- | ----------------------------------------------------- | -------------------- | ------- |
+| `category_budgets`  | Per-category caps + progress                          | config (env)         | on      |
+| `savings_goals`     | Goals progress                                        | config (env)         | on      |
+| `net_worth`         | Balances + net-worth trend                            | config (env)         | on      |
+| `entry_attribution` | `paid_by` tagging + per-person view                   | config (env)         | on      |
+| `pwa`               | Installable PWA                                       | config (env)         | on      |
+| `auto_generate`     | Rolling materialize next N months (cron mutates data) | **kill-switch (DB)** | on      |
+| `csv_import`        | Statement import (uploaded file, bulk mutation)       | **kill-switch (DB)** | **off** |
+| `email_reminders`   | Bill-due reminders (email blast radius)               | **kill-switch (DB)** | **off** |
+| `monthly_recap`     | Month-end summary email                               | **kill-switch (DB)** | **off** |
 
 ## Out of Scope
 
@@ -91,12 +100,12 @@ receipts/attachments; investment tracking.
 
 Auth/sessions: stolen/forged cookie → takeover; opaque tokens, secure cookies, expiry, origin
 check. Invites: token guessing/replay → unauthorized join; single-use expiring email-bound
-tokens. Scoping: missing `household_id` filter → cross-tenant leak; centralized scoped queries
-+ tests. RBAC: viewer writes → tampering; server-side `requireRole`. CSV import: huge/malicious
-file → DoS/injection; size+row caps, zod rows, no formula eval, export escapes `=+-@` (CSV
-injection). Cron: unauth trigger → spam/abuse; `CRON_SECRET` check. Money math: bad
-propagation/rollover → silent corruption; pure functions + property tests + never overwrite
-actualized rows.
+tokens. Scoping: missing `household_id` filter → cross-tenant leak; centralized scoped queries,
+tested directly. RBAC: viewer writes → tampering; server-side `requireRole`. CSV import:
+huge/malicious file → DoS/injection; size/row caps, zod rows, no formula eval, export escapes
+`=-@` cells (CSV injection). Cron: unauth trigger → spam/abuse; `CRON_SECRET` check. Money
+math: bad propagation/rollover → silent corruption; pure functions, property tests, never
+overwrite actualized rows.
 
 ---
 
@@ -117,13 +126,15 @@ CI secrets.
    `AGENTS.md` (identical content — short entry-point pointing any agent session at
    `development-workflow.md` for process, `spec.md` for the approved plan, `PROGRESS.md` for
    status; note "spec approved, do not re-run Step A/B"). `git init`; `gh repo create fintrack
-   --private` + push.
+--private` + push.
 2. Scaffold: `create-next-app` (TS, App Router, Tailwind v4, ESLint); pin Node in `.nvmrc` +
    `engines`; commit lockfile. Prettier + `eslint-plugin-security`; `tsc --noEmit` strict script.
-3. **Neon setup (manual, blocking):** you sign up at neon.tech (free tier), create a project,
-   pick a region, and create a second branch for CI/integration tests. Paste both connection
-   strings into `.env` (dev) and GitHub Actions secrets (CI) when prompted — I'll pause here
-   and give exact steps at the time.
+3. **Neon setup (manual, blocking):** you sign up at neon.tech (free tier), create a project
+   (default branch = **Production**, reserved for real deployed data — never used for dev/CI).
+   Create two child branches off Production: **`dev`** (local development, freely
+   reset/reseed) and **`ci`** (GitHub Actions integration tests). Paste both connection
+   strings into `.env` (`dev` branch) and GitHub Actions secrets (`ci` branch) when prompted —
+   I'll pause here and give exact steps at the time.
 4. `lib/env.ts` — zod-validated env access (fail loud at boot in dev); `.env.example` with every
    var documented (`DATABASE_URL`, `SESSION_SECRET`, `RESEND_API_KEY?`, `SENTRY_DSN?`,
    `CRON_SECRET`, feature-flag defaults).
@@ -239,9 +250,10 @@ in percentages; months with budget but no actuals (charts show budget-only); pre
 
 **Ready:** AC = per-category caps with progress + overspend; goals CRUD + progress; running
 balances + net-worth trend. Edge cases: budget of 0 vs null (unset ≠ zero cap); overspend
->100% bar rendering; goal with past target_date; account with negative running balance; credit
-account math (outflows via credit roll up to linked bank). Trust boundaries: all new action
-inputs (zod).
+
+> 100% bar rendering; goal with past target_date; account with negative running balance; credit
+> account math (outflows via credit roll up to linked bank). Trust boundaries: all new action
+> inputs (zod).
 
 1. **Pure logic:** budget-progress calc (spent/cap, clamp+overflow flag), goal progress +
    naive projected-completion (linear from savings deltas), running-balance walk

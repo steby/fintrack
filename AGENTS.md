@@ -18,3 +18,12 @@ around at least through Phase 5 (CSV export fix references its broken query).
 
 Rigor Tier: **2** (Core + Hardened, pragmatic — see `spec.md` for the exact scope of what's
 hardened vs. deliberately skipped).
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from
+your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing
+any code. Heed deprecation notices.
+<!-- END:nextjs-agent-rules -->
