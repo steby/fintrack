@@ -1,9 +1,13 @@
 # Known-safe findings, allowlisted by fingerprint (not by disabling the rule).
 #
-# 1118ec45abccfdd0e8e36d827171c96b11178df5:lib/__adversarial_secret.ts:generic-api-key:4
+# 6f7574f88d3e1e139b04f0e117882df2d6c7adf1:lib/__adversarial_secret.ts:generic-api-key:4
 #   Deliberately-planted fake secret from the Phase 0 adversarial pass (proving the
 #   gitleaks CI gate actually blocks a build). Random value, never a real credential for
 #   any service, file removed in the very next commit. Still present in git history —
 #   which is exactly what this scanner is supposed to catch — so it's allowlisted here
 #   by exact fingerprint rather than removed from history. See PROGRESS.md Phase 0 entry.
-1118ec45abccfdd0e8e36d827171c96b11178df5:lib/__adversarial_secret.ts:generic-api-key:4
+#   Fingerprint updated 2026-07-09 after a `git filter-repo` history rewrite (scrubbing
+#   real seed data ahead of making the repo public) changed every commit SHA from this
+#   point forward — fingerprints here are commit-hash-pinned, so any future history
+#   rewrite will require updating this file again or CI's gitleaks step will false-fail.
+6f7574f88d3e1e139b04f0e117882df2d6c7adf1:lib/__adversarial_secret.ts:generic-api-key:4
