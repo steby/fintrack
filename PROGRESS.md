@@ -622,10 +622,11 @@ broken. 7 items triaged fix-now, all fixed; the rest deferred with reasoning:
   new partial unique index, `household_invitations_household_email_pending_unique`
   ON `(household_id, email) WHERE accepted_at IS NULL`, makes "one pending invite per
   household+email" a real Postgres constraint, not an application-level race. The
-  insert is now `INSERT ... ON CONFLICT (household_id, email) WHERE accepted_at IS
-  NULL DO UPDATE ... WHERE expires_at < now()` — reissues an expired pending invite
-  in place (same row, fresh token) and no-ops (returns nothing from `RETURNING`) when
-  a live one already exists, all in one atomic statement; no separate `SELECT` at all.
+  insert is now an `INSERT ... ON CONFLICT ... DO UPDATE`, matching that same partial
+  index, that only overwrites when the conflicting row is expired — reissuing an
+  expired pending invite in place (same row, fresh token) and no-oping (nothing comes
+  back from `RETURNING`) when a live one already exists, all in one atomic statement;
+  no separate `SELECT` at all.
   Verified with a real concurrency test: two simultaneous `createInviteAction` calls
   for the same email, asserting exactly one succeeds and the other gets "An invite is
   already pending for that email," with exactly one row left in the table. Also
