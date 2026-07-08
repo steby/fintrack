@@ -84,6 +84,20 @@ describe('session.ts', () => {
       await expect(getSessionUser()).resolves.toBeNull();
     });
 
+    it('fails closed (returns null, does not throw) when the DB query itself errors', async () => {
+      cookieStore.get.mockReturnValue({ value: 'some-token' });
+      const chain = {
+        from: vi.fn(() => chain),
+        innerJoin: vi.fn(() => chain),
+        where: vi.fn(() => chain),
+        limit: vi.fn(() => Promise.reject(new Error('connection reset'))),
+      };
+      dbMock.select.mockReturnValue(chain);
+
+      const { getSessionUser } = await import('./session');
+      await expect(getSessionUser()).resolves.toBeNull();
+    });
+
     it('returns null (not the stale user) when the matched session row is expired', async () => {
       cookieStore.get.mockReturnValue({ value: 'some-token' });
       dbMock.select.mockReturnValue(

@@ -8,6 +8,13 @@
       "when": 1783500224790,
       "tag": "0000_first_moira_mactaggert",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783509724961,
+      "tag": "0001_left_tyrannus",
+      "breakpoints": true
     }
   ]
 }

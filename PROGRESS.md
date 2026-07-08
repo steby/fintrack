@@ -500,6 +500,112 @@ db:seed` (idempotent, built for exactly this recovery) and removing two orphaned
 (created in this phase's migration per the phase plan) but have no business logic yet —
 that's Phase 2, which adds no new tables per the plan.
 
+**Second hardening pass (`/code-review` on Phase 1, extra-high effort, 2026-07-08):**
+Unlike the three Phase 0 rounds (diminishing returns on already-reviewed plumbing), this
+was fresh, unreviewed, security-critical code — auth, sessions, RBAC, cross-tenant
+scoping — and the review found real, exploitable gaps. 15 findings, all fixed:
+
+- _Fixed_ — `createInviteAction` wasn't idempotent (only checked for an existing
+  _user_, never an existing _pending invite_) and `acceptInviteAction` had a genuine
+  TOCTOU race: `validateInvite()` ran against a row read before the transaction
+  started, so two concurrent submissions of the same link both passed it, and the
+  losing `INSERT` threw an uncaught unique-violation instead of a friendly error.
+  Fixed the first with a pending-invite check (expired invites don't block a resend);
+  fixed the second by making the acceptance itself an atomic claim — `UPDATE
+household_invitations SET accepted_at = now() WHERE id = $1 AND accepted_at IS
+NULL`, checking whether that update actually affected a row _before_ ever touching
+  `users`. Verified with a real concurrency test: two simultaneous
+  `acceptInviteAction` calls against the same invite, asserting exactly one redirects
+  and the other gets "This invite has already been used," with exactly one user row
+  created.
+- _Fixed_ — `loginAction` had a timing side-channel: it returned immediately for a
+  nonexistent email but ran a real argon2 `verify()` (~20ms, confirmed by direct
+  measurement) for an existing user with the wrong password, before returning the
+  identical error either way — letting an attacker enumerate valid emails purely from
+  response latency. Fixed by always calling `verifyPassword` against a fixed dummy
+  hash (`lib/auth/password.ts`'s new `DUMMY_PASSWORD_HASH`) when there's no such user,
+  so both paths pay the same cost.
+- _Fixed_ — the login rate limiter's `getClientIp()` trusted the _first_ value in
+  `X-Forwarded-For` verbatim — client-suppliable, so an attacker could bypass the
+  5-attempts/15-minute lockout entirely by spoofing a new IP per attempt. Fixed to
+  trust the _last_ hop instead (what Vercel's own edge actually appended), verified
+  directly: a synthetic header with a spoofed first entry and a real last entry now
+  resolves to the real one.
+- _Fixed_ — `changePasswordAction` updated the password hash but never touched the
+  `sessions` table, so a stolen session cookie survived a password change — the
+  standard "lock out an intruder" remedy didn't work. Fixed to delete every other
+  session for that user (keeping the current one alive). Verified live with a
+  two-browser-context E2E test: device A changes the password, device B's very next
+  navigation bounces to `/login`, and the old password no longer works there while the
+  new one does.
+- _Fixed_ — `changePasswordAction` was fully implemented and unit-tested but had _zero
+  UI wiring_ — unreachable in the running app despite being listed as shipped. Added
+  `/settings/account` (a form using the existing action) and an "Account" link in the
+  sidebar, visible to every role (unlike "Members," which stays owner-only).
+- _Fixed_ — `acceptInviteAction` never checked whether the submitting browser already
+  had a session before creating a new one, leaving the old session row orphaned (but
+  still valid) until its own 30-day expiry. Fixed to revoke any existing session
+  first; covered by a dedicated integration test.
+- _Fixed_ — `getSessionUser()` had no try/catch around its DB query, unlike `proxy.ts`'s
+  identical query, which explicitly fails closed — the two "is this session valid?"
+  checks disagreed specifically when the DB was unhealthy (one 500s, one gracefully
+  redirects). Added the same fail-closed guard; added a test that makes the DB query
+  reject and asserts `getSessionUser` still resolves to `null`, not a throw.
+- _Fixed_ — `changeMemberRoleAction`/`removeMemberAction` never called
+  `revalidatePath`, so the Members page showed stale data after a successful mutation
+  (confirmed against Next's own docs: every canonical Server Action example includes
+  cache revalidation as an explicit, non-automatic step). Added
+  `revalidatePath('/settings/members')` to both.
+- _Fixed_ — the "can this user manage members" rule was hardcoded independently in two
+  places (`members/page.tsx`'s `user.role !== 'owner'`, and the sidebar nav in
+  `(app)/layout.tsx`) instead of calling the shared `can(user.role, 'manage_members')`
+  that `requireRole` already uses as the source of truth. Replaced both.
+- _Fixed_ — `requireRole`'s `ForbiddenError` was thrown uncaught with no error
+  boundary anywhere in the app, falling through to Next's bare default error UI
+  instead of anything on-brand. Added `app/error.tsx` (using Next 16's `unstable_retry`
+  prop, not the older `reset` — confirmed against the current docs before using it).
+- _Fixed_ — `createInviteAction`/`acceptInviteAction` had zero test coverage; the
+  existing E2E invite tests bypassed both functions entirely by inserting invitation
+  rows directly via `testDb`. This is the direct reason the idempotency and TOCTOU
+  bugs above shipped undetected. Added
+  `app/actions/invites.integration.test.ts` — 10 tests against the real `dev` branch,
+  including the concurrency race test and a session-revocation test.
+- _Fixed_ — `proxy.ts`'s redirects used the default HTTP 307, which preserves method
+  and body — an unauthenticated Server Action POST got redirected (not gated) to
+  `/login` carrying its original `Next-Action` payload, a known Next.js "Failed to
+  find Server Action" failure mode. Changed both redirects to an explicit 303 (See
+  Other), confirmed against `NextResponse.redirect`'s actual type signature
+  (`init?: number | ResponseInit`) before using it.
+- _Fixed_ — `users` had no index on `household_id` despite it being the exact column
+  every household-scoped query filters by. Added `users_household_id_idx` via a new,
+  purely additive migration, applied to the `dev` branch.
+- _Fixed_ — `lib/auth/guards.ts`'s comment claimed proxy.ts's check was merely
+  "optimistic," directly contradicting proxy.ts's own comment describing it as "the
+  REAL session check." Corrected to describe both as independent real checks
+  (defense-in-depth), not a strong one backing up a weak one.
+
+Re-verified end to end: lint/typecheck/build clean, 92/92 unit tests (100% coverage,
+up from 91 — one new test for `getSessionUser`'s DB-error path), 31/31 integration
+tests against the live `dev` branch (up from 21 — 10 new tests directly exercising
+`createInviteAction`/`acceptInviteAction`, including the concurrency race), 11/11 E2E
+tests (up from 10 — the new two-browser-context change-password/session-revocation
+test), local Semgrep 0 findings, `npm audit` unchanged (0 high/critical). Live-measured
+the timing-side-channel fix (dummy-hash verify: ~20ms, a real argon2 cost, not
+near-instant). Live-verified the X-Forwarded-For fix's last-hop extraction against a
+synthetic spoofed header. All fixes verified against the real `dev` branch, not mocks;
+DB confirmed clean (1 household, the seeded owner, 0 orphaned test rows) after the full
+run.
+
+Three findings from the same review round were deliberately **not** fixed (documented
+reasoning, not silently dropped): a subtle race in `proxy.ts`'s renewal write under
+concurrent requests for the same session (redundant writes, not a security issue — the
+DB row is the source of truth, not the cookie); an unnecessary `innerJoin` in
+`proxy.ts`'s session query (the FK already guarantees referential integrity, so it's
+pure waste, not incorrect); and a pre-existing test-hygiene gap in
+`members.integration.test.ts` (two of its tests leak an orphaned household row per
+run) — real, but out of the 15 items actually triaged as fix-now for this round; the
+leaked rows were cleaned up manually rather than left to accumulate.
+
 ---
 
 <!--

@@ -15,6 +15,11 @@ import { newExpiry } from '../../lib/auth/session-rules';
 // pattern Phase 0's lib/observability.test.ts already uses for Next-adjacent modules.
 let mockToken: string | undefined;
 vi.mock('server-only', () => ({}));
+// revalidatePath needs Next's request-scoped static-generation store, which doesn't
+// exist outside a real request — mocked to a no-op so the actions' real cache-
+// invalidation call doesn't crash the test run; the call itself (that it fires with
+// the right path) isn't what these tests are verifying.
+vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/headers', () => ({
   cookies: async () => ({
     get: (name: string) =>

@@ -2,14 +2,15 @@
 
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
-import { eq } from 'drizzle-orm';
+import { cookies } from 'next/headers';
+import { eq, and, isNull, gt } from 'drizzle-orm';
 import { db } from '../../lib/db';
-import { householdInvitations, users } from '../../lib/db/schema';
+import { householdInvitations, users, sessions } from '../../lib/db/schema';
 import { requireRole } from '../../lib/auth/guards';
 import { generateToken } from '../../lib/auth/token';
 import { inviteExpiry, validateInvite } from '../../lib/auth/invite-rules';
 import { hashPassword, validatePassword } from '../../lib/auth/password';
-import { createSession } from '../../lib/auth/session';
+import { createSession, SESSION_COOKIE_NAME } from '../../lib/auth/session';
 import { sendInviteEmail } from '../../lib/email/invite';
 import { env } from '../../lib/env';
 
@@ -38,6 +39,26 @@ export async function createInviteAction(
   const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (existing[0]) {
     return { error: 'That email is already a member of a household.' };
+  }
+
+  // Idempotency: a resubmit (double-click, retry after a slow/failed email send) must
+  // not create a second live invitation for the same email. An invite whose own
+  // expiry has already passed doesn't count — the owner should be able to send a
+  // fresh one without waiting for cleanup.
+  const existingInvite = await db
+    .select({ id: householdInvitations.id })
+    .from(householdInvitations)
+    .where(
+      and(
+        eq(householdInvitations.email, email),
+        eq(householdInvitations.householdId, actingUser.householdId),
+        isNull(householdInvitations.acceptedAt),
+        gt(householdInvitations.expiresAt, new Date()),
+      ),
+    )
+    .limit(1);
+  if (existingInvite[0]) {
+    return { error: 'An invite is already pending for that email.' };
   }
 
   const token = generateToken();
@@ -110,7 +131,26 @@ export async function acceptInviteAction(
 
   const passwordHash = await hashPassword(password);
 
+  // The UPDATE below (`WHERE accepted_at IS NULL`) is the real concurrency guard, not
+  // the validateInvite() check above — that check ran against a row read before this
+  // transaction started, so two concurrent submissions of the same link could both
+  // pass it. Only one concurrent UPDATE with this WHERE clause can ever affect a row
+  // (Postgres serializes the two via row-level locking), so "did the update affect a
+  // row" is what actually decides which request wins the race, before either one ever
+  // touches `users`.
   const newUser = await db.transaction(async (tx) => {
+    const claimed = await tx
+      .update(householdInvitations)
+      .set({ acceptedAt: new Date() })
+      .where(
+        and(eq(householdInvitations.id, invitation.id), isNull(householdInvitations.acceptedAt)),
+      )
+      .returning({ id: householdInvitations.id });
+
+    if (!claimed[0]) {
+      return null;
+    }
+
     const [user] = await tx
       .insert(users)
       .values({
@@ -121,12 +161,21 @@ export async function acceptInviteAction(
         role: invitation.role,
       })
       .returning();
-    await tx
-      .update(householdInvitations)
-      .set({ acceptedAt: new Date() })
-      .where(eq(householdInvitations.id, invitation.id));
     return user;
   });
+
+  if (!newUser) {
+    return { error: 'This invite has already been used.' };
+  }
+
+  // If the submitting browser already has a session (e.g. an already-logged-in owner
+  // opened their own invite link, or a stale tab), revoke it before creating the new
+  // one — otherwise it's an orphaned-but-valid row until its own 30-day expiry.
+  const cookieStore = await cookies();
+  const existingToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  if (existingToken) {
+    await db.delete(sessions).where(eq(sessions.id, existingToken));
+  }
 
   await createSession(newUser.id);
   redirect('/');

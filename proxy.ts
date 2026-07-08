@@ -54,12 +54,20 @@ export async function proxy(request: NextRequest) {
 
   const authenticated = validSession !== null;
 
+  // Explicit 303 (See Other), not the default 307 (Temporary Redirect). 307 preserves
+  // the original method AND body — for an unauthenticated Server Action POST (which
+  // carries a Next-Action header/encoded action reference targeting a specific action
+  // on the CURRENT route), a 307 would make the browser replay that exact POST against
+  // /login, which doesn't have that action registered, producing a Next.js "Failed to
+  // find Server Action" error instead of a clean logged-out redirect. 303 always
+  // converts the follow-up request to a plain GET, which is what a redirect-to-a-
+  // different-page should do here regardless of what triggered it.
   if (!authenticated && !isPublicRoute(pathname)) {
-    return NextResponse.redirect(new URL('/login', request.url));
+    return NextResponse.redirect(new URL('/login', request.url), 303);
   }
 
   if (authenticated && pathname === '/login') {
-    return NextResponse.redirect(new URL('/', request.url));
+    return NextResponse.redirect(new URL('/', request.url), 303);
   }
 
   const response = NextResponse.next();

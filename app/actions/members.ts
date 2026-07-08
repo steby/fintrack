@@ -1,6 +1,7 @@
 'use server';
 
 import { z } from 'zod';
+import { revalidatePath } from 'next/cache';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { users } from '../../lib/db/schema';
@@ -42,6 +43,7 @@ export async function changeMemberRoleAction(
   if (!result[0]) {
     return { error: 'Member not found.' };
   }
+  revalidatePath('/settings/members');
   return { success: true };
 }
 
@@ -72,5 +74,6 @@ export async function removeMemberAction(
   if (!result[0]) {
     return { error: 'Member not found.' };
   }
+  revalidatePath('/settings/members');
   return { success: true };
 }

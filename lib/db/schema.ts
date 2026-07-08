@@ -44,7 +44,14 @@ export const users = pgTable(
     role: roleEnum('role').notNull().default('member'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [uniqueIndex('users_email_unique').on(table.email)],
+  (table) => [
+    uniqueIndex('users_email_unique').on(table.email),
+    // household_id is the exact column every household-scoped query filters by (member
+    // lists, role-change/removal WHERE clauses) — without this, those queries degrade
+    // to a full table scan as users accumulate across every household, not just the
+    // one being viewed.
+    index('users_household_id_idx').on(table.householdId),
+  ],
 );
 
 // Session id IS the opaque bearer token (32 random bytes, base64url-encoded) — not a

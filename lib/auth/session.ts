@@ -7,6 +7,7 @@ import { sessions, users, type roleEnum } from '../db/schema';
 import { generateToken } from './token';
 import { newExpiry, isExpired } from './session-rules';
 import { env } from '../env';
+import { logger } from '../log';
 
 export const SESSION_COOKIE_NAME = 'session';
 
@@ -53,30 +54,38 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   if (!token) return null;
 
-  const rows = await db
-    .select({
-      expiresAt: sessions.expiresAt,
-      userId: users.id,
-      householdId: users.householdId,
-      email: users.email,
-      name: users.name,
-      role: users.role,
-    })
-    .from(sessions)
-    .innerJoin(users, eq(sessions.userId, users.id))
-    .where(eq(sessions.id, token))
-    .limit(1);
+  // Fails closed on a DB error, matching proxy.ts's identical query — a transient
+  // outage must never crash the calling render/action, and must never be treated as
+  // "authenticated" either.
+  try {
+    const rows = await db
+      .select({
+        expiresAt: sessions.expiresAt,
+        userId: users.id,
+        householdId: users.householdId,
+        email: users.email,
+        name: users.name,
+        role: users.role,
+      })
+      .from(sessions)
+      .innerJoin(users, eq(sessions.userId, users.id))
+      .where(eq(sessions.id, token))
+      .limit(1);
 
-  const row = rows[0];
-  if (!row || isExpired(row.expiresAt)) return null;
+    const row = rows[0];
+    if (!row || isExpired(row.expiresAt)) return null;
 
-  return {
-    id: row.userId,
-    householdId: row.householdId,
-    email: row.email,
-    name: row.name,
-    role: row.role,
-  };
+    return {
+      id: row.userId,
+      householdId: row.householdId,
+      email: row.email,
+      name: row.name,
+      role: row.role,
+    };
+  } catch (err) {
+    logger.error({ err }, 'getSessionUser: session lookup failed, treating as unauthenticated');
+    return null;
+  }
 });
 
 // Server Action only (same cookie-write restriction as createSession).

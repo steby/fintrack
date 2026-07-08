@@ -130,3 +130,80 @@ test.describe('auth', () => {
     await expect(page).toHaveURL(/\/login$/);
   });
 });
+
+test.describe('change password', () => {
+  const CHANGE_PW_EMAIL = 'e2e-change-password@example.com';
+  const OLD_PASSWORD = 'original-password-123';
+  const NEW_PASSWORD = 'updated-password-456';
+
+  const { db: testDb, close: closeTestDb } = createTestDb();
+
+  test.beforeEach(async () => {
+    const [owner] = await testDb
+      .select({ householdId: users.householdId })
+      .from(users)
+      .where(eq(users.email, OWNER_EMAIL))
+      .limit(1);
+    await testDb.delete(users).where(eq(users.email, CHANGE_PW_EMAIL));
+    await testDb.insert(users).values({
+      householdId: owner.householdId,
+      email: CHANGE_PW_EMAIL,
+      passwordHash: await hashPassword(OLD_PASSWORD),
+      name: 'E2E Change Password',
+      role: 'viewer',
+    });
+  });
+
+  test.afterAll(async () => {
+    await testDb.delete(users).where(eq(users.email, CHANGE_PW_EMAIL));
+    await closeTestDb();
+  });
+
+  test('changing password updates credentials and revokes every other active session', async ({
+    browser,
+  }) => {
+    // Two independent browser contexts simulate two devices logged into the same
+    // account at once.
+    const contextA = await browser.newContext();
+    const contextB = await browser.newContext();
+    const pageA = await contextA.newPage();
+    const pageB = await contextB.newPage();
+
+    for (const page of [pageA, pageB]) {
+      await page.goto('/login');
+      await page.getByLabel('Email').fill(CHANGE_PW_EMAIL);
+      await page.getByLabel('Password').fill(OLD_PASSWORD);
+      await page.getByRole('button', { name: 'Sign in' }).click();
+      await expect(page).toHaveURL('/');
+    }
+
+    await pageA.goto('/settings/account');
+    await pageA.getByLabel('Current password').fill(OLD_PASSWORD);
+    await pageA.getByLabel('New password').fill(NEW_PASSWORD);
+    await pageA.getByRole('button', { name: 'Update password' }).click();
+    await expect(pageA.getByText('Password updated.')).toBeVisible();
+
+    // The session that MADE the change survives...
+    await pageA.goto('/');
+    await expect(pageA).toHaveURL('/');
+
+    // ...but the OTHER device's session is revoked, bouncing it to /login on its next
+    // navigation — the whole point of this fix.
+    await pageB.goto('/');
+    await expect(pageB).toHaveURL(/\/login$/);
+
+    // The old password no longer works; the new one does.
+    await pageB.getByLabel('Email').fill(CHANGE_PW_EMAIL);
+    await pageB.getByLabel('Password').fill(OLD_PASSWORD);
+    await pageB.getByRole('button', { name: 'Sign in' }).click();
+    await expect(pageB.getByText('Invalid email or password.')).toBeVisible();
+
+    await pageB.getByLabel('Email').fill(CHANGE_PW_EMAIL);
+    await pageB.getByLabel('Password').fill(NEW_PASSWORD);
+    await pageB.getByRole('button', { name: 'Sign in' }).click();
+    await expect(pageB).toHaveURL('/');
+
+    await contextA.close();
+    await contextB.close();
+  });
+});

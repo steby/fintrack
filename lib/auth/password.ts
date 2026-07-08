@@ -28,3 +28,14 @@ export async function verifyPassword(passwordHash: string, password: string): Pr
     return false;
   }
 }
+
+// A fixed, valid argon2 hash of an arbitrary password that no real account has — used
+// as the comparison target when a login is attempted against an email that doesn't
+// exist, so that path takes the same time (a real argon2 verify) as the "email exists,
+// wrong password" path. Without this, a nonexistent email returns near-instantly while
+// an existing one pays argon2's real cost, letting an attacker enumerate valid emails
+// purely from response latency even though both paths return an identical error
+// message. The hash itself has no significance beyond being a valid, unguessable
+// target — it doesn't correspond to any account's real password.
+export const DUMMY_PASSWORD_HASH =
+  '$argon2id$v=19$m=19456,t=2,p=1$8RDkbXjmGGhurt5QtwzrxQ$4C/kgRjYEUfTK5qLyRHZ84rP8h2sbyT9patxLhDoOjY';

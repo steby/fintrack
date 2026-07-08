@@ -2,12 +2,17 @@
 
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
-import { headers } from 'next/headers';
-import { eq, and, gte } from 'drizzle-orm';
+import { headers, cookies } from 'next/headers';
+import { eq, and, ne, gte } from 'drizzle-orm';
 import { db } from '../../lib/db';
-import { users, loginAttempts } from '../../lib/db/schema';
-import { verifyPassword, hashPassword, validatePassword } from '../../lib/auth/password';
-import { createSession, deleteSession } from '../../lib/auth/session';
+import { users, loginAttempts, sessions } from '../../lib/db/schema';
+import {
+  verifyPassword,
+  hashPassword,
+  validatePassword,
+  DUMMY_PASSWORD_HASH,
+} from '../../lib/auth/password';
+import { createSession, deleteSession, SESSION_COOKIE_NAME } from '../../lib/auth/session';
 import { isRateLimited, LOGIN_RATE_LIMIT_WINDOW_MS } from '../../lib/auth/rate-limit';
 import { requireUser } from '../../lib/auth/guards';
 
@@ -20,9 +25,21 @@ export type LoginState = { error?: string } | undefined;
 
 async function getClientIp(): Promise<string> {
   const hdrs = await headers();
-  // Vercel sets x-forwarded-for; local dev has no proxy in front, so it's absent there
-  // — rate-limiting still works locally, just keyed on one shared bucket.
-  return hdrs.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
+  const forwardedFor = hdrs.get('x-forwarded-for');
+  if (!forwardedFor) {
+    // Local dev has no proxy in front, so this header is absent there — rate-limiting
+    // still works locally, just keyed on one shared bucket.
+    return 'unknown';
+  }
+  // Trust only the LAST hop, not the client-suppliable first value. Each proxy in a
+  // forwarding chain appends the IP it received the request from, so the last entry is
+  // what our own edge (Vercel) actually observed — a client can put anything it wants
+  // in the entries before that. Trusting the first (naive) value would let an attacker
+  // defeat the login rate limiter below entirely by sending a fresh fake IP on every
+  // attempt. This assumes exactly one trusted proxy hop (Vercel's edge); a deployment
+  // behind additional proxies would need to trust further back in the list.
+  const hops = forwardedFor.split(',').map((hop) => hop.trim());
+  return hops[hops.length - 1] || 'unknown';
 }
 
 export async function loginAction(_prevState: LoginState, formData: FormData): Promise<LoginState> {
@@ -58,15 +75,14 @@ export async function loginAction(_prevState: LoginState, formData: FormData): P
   // threat notes call out takeover/enumeration risk on the auth surface generally).
   const genericError: LoginState = { error: 'Invalid email or password.' };
 
-  if (!user) {
-    await db.insert(loginAttempts).values({ email, ip, success: false });
-    return genericError;
-  }
+  // verifyPassword always runs, even when there's no such user — against a fixed dummy
+  // hash in that case — so both branches pay the same argon2 cost. Returning
+  // immediately for a nonexistent email (skipping the slow hash) would let an attacker
+  // enumerate valid emails purely from response latency, despite the identical message.
+  const validPassword = await verifyPassword(user?.passwordHash ?? DUMMY_PASSWORD_HASH, password);
+  await db.insert(loginAttempts).values({ email, ip, success: Boolean(user) && validPassword });
 
-  const validPassword = await verifyPassword(user.passwordHash, password);
-  await db.insert(loginAttempts).values({ email, ip, success: validPassword });
-
-  if (!validPassword) {
+  if (!user || !validPassword) {
     return genericError;
   }
 
@@ -118,6 +134,21 @@ export async function changePasswordAction(
 
   const newHash = await hashPassword(parsed.data.newPassword);
   await db.update(users).set({ passwordHash: newHash }).where(eq(users.id, user.id));
+
+  // Revoke every OTHER active session for this user — a stolen session cookie must not
+  // survive the victim changing their password, which is otherwise the standard remedy
+  // for "someone else might have my session." The current session (the one making this
+  // request) is deliberately kept alive so the user isn't logged out by changing their
+  // own password.
+  const cookieStore = await cookies();
+  const currentToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  await db
+    .delete(sessions)
+    .where(
+      currentToken
+        ? and(eq(sessions.userId, user.id), ne(sessions.id, currentToken))
+        : eq(sessions.userId, user.id),
+    );
 
   return { success: true };
 }

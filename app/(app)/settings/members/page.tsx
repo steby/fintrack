@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { requireUser } from '../../../../lib/auth/guards';
+import { can } from '../../../../lib/auth/rbac';
 import { db } from '../../../../lib/db';
 import { users } from '../../../../lib/db/schema';
 import { InviteForm } from './invite-form';
@@ -8,7 +9,7 @@ import { MemberRow } from './member-row';
 export default async function MembersPage() {
   const user = await requireUser();
 
-  if (user.role !== 'owner') {
+  if (!can(user.role, 'manage_members')) {
     return (
       <p className="text-sm text-muted-foreground">Only the household owner can manage members.</p>
     );

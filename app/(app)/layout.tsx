@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { requireUser } from '../../lib/auth/guards';
+import { can } from '../../lib/auth/rbac';
 import { logoutAction } from '../actions/auth';
 import { Button } from '@/components/ui/button';
 
@@ -14,11 +15,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/" className="rounded-md px-2 py-1.5 hover:bg-muted">
             Dashboard
           </Link>
-          {user.role === 'owner' && (
+          {can(user.role, 'manage_members') && (
             <Link href="/settings/members" className="rounded-md px-2 py-1.5 hover:bg-muted">
               Members
             </Link>
           )}
+          <Link href="/settings/account" className="rounded-md px-2 py-1.5 hover:bg-muted">
+            Account
+          </Link>
         </nav>
         <div className="mt-auto flex flex-col gap-2 text-sm">
           <div className="text-muted-foreground">
