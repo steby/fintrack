@@ -11,6 +11,11 @@ describe('captureException', () => {
   beforeEach(() => {
     vi.resetModules();
     clearObservabilityGlobal();
+    // vi.resetModules() does NOT clear vi.doMock registrations — they persist for the
+    // whole file regardless of reset. Without this, the "package is missing" test below
+    // would silently start depending on no earlier test having mocked '@sentry/nextjs',
+    // rather than genuinely exercising a failed real import.
+    vi.doUnmock('@sentry/nextjs');
   });
 
   it('logs the error and resolves without throwing when SENTRY_DSN is not set', async () => {
@@ -111,6 +116,68 @@ describe('captureException', () => {
     });
     expect(sentryCaptureSpy).toHaveBeenCalledWith(error, { extra: { foo: 'bar' } });
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not throw even if the real Sentry client itself throws while forwarding', async () => {
+    vi.doMock('./env', () => ({
+      env: { SENTRY_DSN: 'https://example.ingest.sentry.io/1', NODE_ENV: 'test' },
+    }));
+    const errorSpy = vi.fn();
+    const warnSpy = vi.fn();
+    vi.doMock('./log', () => ({ logger: { error: errorSpy, warn: warnSpy } }));
+    vi.doMock('@sentry/nextjs', () => ({
+      init: vi.fn(),
+      captureException: () => {
+        throw new Error('sentry SDK internal error');
+      },
+    }));
+
+    const { captureException } = await import('./observability');
+    await expect(captureException(new Error('boom'))).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.anything() }),
+      expect.stringContaining('Failed to forward exception to Sentry'),
+    );
+  });
+
+  it('resets the cache and allows a later retry if initSentry() throws somewhere outside its own guarded paths', async () => {
+    // Simulates a failure that isn't one of initSentry()'s two anticipated try/catch
+    // cases (import failing, init() throwing) — e.g. some unexpected error reading env
+    // itself — by making the very first property access on `env` throw. This exercises
+    // getSentry()'s outer .catch(), which resets the globalThis cache so a later call
+    // gets a fresh attempt instead of replaying the same rejection forever.
+    let shouldThrow = true;
+    vi.doMock('./env', () => ({
+      env: {
+        get SENTRY_DSN() {
+          if (shouldThrow) throw new Error('unexpected failure reading env');
+          return 'https://example.ingest.sentry.io/1';
+        },
+        NODE_ENV: 'test',
+      },
+    }));
+    const errorSpy = vi.fn();
+    const warnSpy = vi.fn();
+    vi.doMock('./log', () => ({ logger: { error: errorSpy, warn: warnSpy } }));
+
+    const { captureException } = await import('./observability');
+    await expect(captureException(new Error('first'))).resolves.toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.anything() }),
+      expect.stringContaining('threw unexpectedly during initialization'),
+    );
+
+    // The cache should have been reset (not permanently poisoned) — a later call with
+    // the underlying problem "resolved" should succeed rather than replaying the stale
+    // rejection forever.
+    shouldThrow = false;
+    warnSpy.mockClear();
+    await expect(captureException(new Error('second'))).resolves.toBeUndefined();
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining('threw unexpectedly'),
+    );
   });
 
   it('only initializes the Sentry client once across repeated sequential calls', async () => {

@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+import { Pool, type PoolConfig } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { env } from '../env';
 import { logger } from '../log';
@@ -8,35 +8,52 @@ import * as schema from './schema';
 // globalThis we'd open new pg Pools (and leak connections) on every hot reload.
 const globalForDb = globalThis as unknown as { pgPool?: Pool; pgHealthPool?: Pool };
 
-// Idle clients can have their connection dropped by the server (e.g. Neon closing an
-// idle backend) — without a listener, pg's Pool treats that as an unhandled
-// EventEmitter 'error' and crashes the process. Log and let the pool recover instead.
-function handlePoolError(err: unknown) {
-  logger.error({ err }, 'Unexpected error on idle Postgres client');
+function handlePoolError(poolName: string) {
+  return (err: unknown) => {
+    // Idle clients can have their connection dropped by the server (e.g. Neon closing
+    // an idle backend) — without a listener, pg's Pool treats that as an unhandled
+    // EventEmitter 'error' and crashes the process. Log (tagged by pool, so a main-pool
+    // error — potentially customer-impacting — isn't confused with a health-check-pool
+    // one) and let the pool recover instead.
+    logger.error({ err, pool: poolName }, `Unexpected error on idle Postgres client (${poolName})`);
+  };
+}
+
+// Attaches the error listener only when actually constructing a new Pool (called from
+// the right-hand side of `??`, which short-circuits on a globalThis cache hit) — so an
+// HMR reload that reuses a cached pool never re-attaches a duplicate listener onto the
+// same long-lived EventEmitter.
+function createPool(poolName: string, overrides: Partial<PoolConfig>): Pool {
+  const pool = new Pool({ connectionString: env.DATABASE_URL, ...overrides });
+  pool.on('error', handlePoolError(poolName));
+  return pool;
 }
 
 const pool =
   globalForDb.pgPool ??
-  new Pool({
-    connectionString: env.DATABASE_URL,
+  createPool('main', {
     max: env.NODE_ENV === 'production' ? 10 : 5,
+    connectionTimeoutMillis: 10000,
+    // statement_timeout is enforced by Postgres itself (a real server-side cancel, sent
+    // as `SET statement_timeout = ...` on connect) — unlike query_timeout below, which
+    // is purely a client-side timer. Every real query through this pool gets both: the
+    // server-side cancel handles the common "query ran too long" case, and the
+    // client-side backstop covers the rarer case where the connection itself is wedged
+    // and can't even deliver the server's cancellation back to the client.
+    statement_timeout: 30000,
+    query_timeout: 35000,
   });
-pool.on('error', handlePoolError);
 
 // Dedicated pool for health checks, isolated from the main query pool, so a hung DB
-// can never exhaust the connections real request handlers need. query_timeout aborts
-// the query at the pg protocol level — a hard backstop that guarantees the connection
-// is freed even on a fully hung query, unlike a bare Promise.race (which only stops
-// *waiting* on a query, not the query itself).
+// can never exhaust the connections real request handlers need.
 const healthCheckPool =
   globalForDb.pgHealthPool ??
-  new Pool({
-    connectionString: env.DATABASE_URL,
-    max: 1,
+  createPool('health-check', {
+    max: 2,
     connectionTimeoutMillis: 5000,
+    statement_timeout: 8000,
     query_timeout: 10000,
   });
-healthCheckPool.on('error', handlePoolError);
 
 if (env.NODE_ENV !== 'production') {
   globalForDb.pgPool = pool;
@@ -48,8 +65,8 @@ export { pool, healthCheckPool };
 
 /** Used by /api/health. Never throws — returns false on any failure or timeout.
  *  `timeoutMs` bounds how long the caller waits for a response; the health pool's own
- *  `query_timeout` (10s) is a hard backstop that frees the connection even if the query
- *  never returns at all. */
+ *  `statement_timeout`/`query_timeout` are a hard backstop that frees the connection
+ *  even if the query runs far longer than the caller is willing to wait. */
 export async function pingDb(timeoutMs = 2000): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

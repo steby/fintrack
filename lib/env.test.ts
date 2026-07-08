@@ -108,15 +108,48 @@ describe('loadEnv', () => {
     expect(() => loadEnv({ ...validBase, CRON_SECRET: 'short' })).toThrowError(/CRON_SECRET/);
   });
 
-  it('leaves SEED_OWNER_EMAIL/PASSWORD undefined when absent — the app itself never requires them', () => {
-    const result = loadEnv(validBase);
-    expect(result.SEED_OWNER_EMAIL).toBeUndefined();
-    expect(result.SEED_OWNER_PASSWORD).toBeUndefined();
+  it('does not know about SEED_OWNER_EMAIL/PASSWORD at all — those are validated separately by lib/db/seed.ts, never by the shared app schema', () => {
+    const result = loadEnv({ ...validBase, SEED_OWNER_EMAIL: 'not-an-email' });
+    expect(result).not.toHaveProperty('SEED_OWNER_EMAIL');
   });
 
-  it('rejects a malformed SEED_OWNER_EMAIL when one is actually provided', () => {
-    expect(() =>
-      loadEnv({ ...validBase, SEED_OWNER_EMAIL: 'not-an-email', SEED_OWNER_PASSWORD: 'x' }),
-    ).toThrowError(/SEED_OWNER_EMAIL/);
+  it('gives a specific "is required" message for a missing DATABASE_URL, not zod\'s generic type error', () => {
+    const rest = { SESSION_SECRET: validBase.SESSION_SECRET };
+    expect(() => loadEnv(rest)).toThrowError(/DATABASE_URL is required/);
+  });
+
+  it('gives the same specific "is required" message when DATABASE_URL is blank, not just when it is absent', () => {
+    expect(() => loadEnv({ ...validBase, DATABASE_URL: '' })).toThrowError(
+      /DATABASE_URL is required/,
+    );
+  });
+
+  it('gives a specific "is required" message for a missing SESSION_SECRET, not zod\'s generic type error', () => {
+    const rest = { DATABASE_URL: validBase.DATABASE_URL };
+    expect(() => loadEnv(rest)).toThrowError(/SESSION_SECRET is required/);
+  });
+
+  it('gives the same specific "is required" message when SESSION_SECRET is blank, not just when it is absent', () => {
+    expect(() => loadEnv({ ...validBase, SESSION_SECRET: '' })).toThrowError(
+      /SESSION_SECRET is required/,
+    );
+  });
+
+  it('still gives the length-specific message for a present-but-too-short SESSION_SECRET (not the "required" message)', () => {
+    expect(() => loadEnv({ ...validBase, SESSION_SECRET: 'too-short' })).toThrowError(
+      /SESSION_SECRET must be at least 32 characters/,
+    );
+  });
+
+  it('falls through to zod\'s own message for a wrong-type (not merely absent) required value', () => {
+    // loadEnv's declared type is Record<string, string | undefined>, so this can only
+    // happen via a caller bypassing that type — exercises the `required()` helper's
+    // "input is present but not undefined" branch, distinct from the missing/blank cases
+    // above.
+    const withWrongType = { ...validBase, DATABASE_URL: 12345 } as unknown as Record<
+      string,
+      string | undefined
+    >;
+    expect(() => loadEnv(withWrongType)).not.toThrowError(/DATABASE_URL is required/);
   });
 });

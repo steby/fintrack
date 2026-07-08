@@ -6,17 +6,29 @@ const boolString = (defaultValue: 'true' | 'false') =>
     .default(defaultValue)
     .transform((v) => v === 'true');
 
+// The schema-wide blank-to-undefined normalization in loadEnv() means a required field's
+// `undefined` case can come from either a genuinely missing key OR a blank `KEY=` line —
+// either way, zod's default "invalid_type" message ("received undefined") is generic.
+// This gives required fields their own specific "is required" message for that case,
+// while leaving their other validators (`.min()`, `.url()`, ...) untouched for the
+// present-but-invalid case.
+const required = (message: string) => ({
+  error: (issue: { input: unknown }) => (issue.input === undefined ? message : undefined),
+});
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
   DATABASE_URL: z
-    .string()
+    .string(required('DATABASE_URL is required'))
     .url('DATABASE_URL must be a valid postgresql:// connection string')
     .refine(
       (val) => val.startsWith('postgresql://') || val.startsWith('postgres://'),
       'DATABASE_URL must use the postgresql:// or postgres:// scheme',
     ),
-  SESSION_SECRET: z.string().min(32, 'SESSION_SECRET must be at least 32 characters'),
+  SESSION_SECRET: z
+    .string(required('SESSION_SECRET is required'))
+    .min(32, 'SESSION_SECRET must be at least 32 characters'),
   APP_URL: z.string().url().default('http://localhost:3000'),
 
   // Required starting Phase 6 (cron endpoints); validated there, not here, so Phase 0-5
@@ -44,13 +56,19 @@ const envSchema = z.object({
   FEATURE_EMAIL_REMINDERS_DEFAULT: boolString('false'),
   FEATURE_MONTHLY_RECAP_DEFAULT: boolString('false'),
 
-  // Seed-only vars (used by `npm run db:seed`, never read at runtime by the app itself).
-  // Validated here rather than in a separate schema so lib/db/seed.ts's `import { pool }
-  // from './index'` can't trigger a confusing, unrelated env error before these are ever
-  // checked — main() checks these two are actually present with its own clear message.
-  SEED_OWNER_EMAIL: z.string().email('SEED_OWNER_EMAIL must be a valid email address').optional(),
-  SEED_OWNER_PASSWORD: z.string().min(1).optional(),
+  // SEED_OWNER_EMAIL/PASSWORD deliberately do NOT live here — see lib/db/seed.ts. They're
+  // validated by their own schema, straight from process.env, before that script ever
+  // imports this module. Putting them in the app's shared, eagerly-validated schema would
+  // mean a malformed value crashes `next dev`/`next build`/`drizzle-kit`, not just
+  // `npm run db:seed` — a real regression a previous version of this file had.
 });
+
+/** Formats a ZodError as the multi-line, human-readable list every error in this app
+ *  uses. Exported so other one-off validation (e.g. lib/db/seed.ts's own schema) doesn't
+ *  need to re-derive the same formatting. */
+export function formatZodIssues(error: z.ZodError): string {
+  return error.issues.map((issue) => `  - ${issue.path.join('.')}: ${issue.message}`).join('\n');
+}
 
 /** Exported (not just used internally) so unit tests can validate arbitrary env shapes
  *  without mutating the real process.env. Loosely typed (not NodeJS.ProcessEnv) since
@@ -67,11 +85,8 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
 
   const parsed = envSchema.safeParse(normalized);
   if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((issue) => `  - ${issue.path.join('.')}: ${issue.message}`)
-      .join('\n');
     throw new Error(
-      `Invalid environment configuration. Fix the following and restart:\n${issues}\n\n` +
+      `Invalid environment configuration. Fix the following and restart:\n${formatZodIssues(parsed.error)}\n\n` +
         'See .env.example for the full variable contract.',
     );
   }

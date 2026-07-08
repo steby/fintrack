@@ -16,16 +16,17 @@ interface SentryModule {
   captureException: (error: unknown, hint?: { extra?: Record<string, unknown> }) => void;
 }
 
-// Cached on globalThis, like lib/db/index.ts's pg Pool, so Next.js dev-mode HMR
-// re-evaluating this module doesn't re-run Sentry.init() on every edit. Caches the
-// in-flight *promise* (not just the resolved client) so concurrent callers awaiting
-// getSentry() before the first one resolves all share that one import()+init() call
-// instead of each independently double-initializing the SDK — the assignment below is
-// synchronous, so there's no window between "check" and "set" for a second caller to
-// slip through.
-const globalForObservability = globalThis as unknown as {
-  sentryClientPromise?: Promise<SentryModule | null>;
-};
+/** Never throws: logs a warning and returns null. Used from initSentry()'s catch blocks
+ *  so a broken/misconfigured logger can't itself become an unhandled rejection that
+ *  permanently poisons the globalThis-cached promise below (see getSentry()). */
+function warnFallback(reason: string, err: unknown): null {
+  try {
+    logger.warn({ err }, `@sentry/nextjs ${reason}; falling back to log-only error tracking`);
+  } catch {
+    // Logging the failure failed too — nothing more we can safely do here.
+  }
+  return null;
+}
 
 async function initSentry(): Promise<SentryModule | null> {
   if (!env.SENTRY_DSN) {
@@ -37,28 +38,39 @@ async function initSentry(): Promise<SentryModule | null> {
   try {
     sentry = (await import(specifier)) as SentryModule;
   } catch (err) {
-    logger.warn(
-      { err },
-      '@sentry/nextjs is not installed; falling back to log-only error tracking',
-    );
-    return null;
+    return warnFallback('is not installed', err);
   }
 
   try {
     sentry.init({ dsn: env.SENTRY_DSN, environment: env.NODE_ENV });
   } catch (err) {
-    logger.warn(
-      { err },
-      '@sentry/nextjs failed to initialize; falling back to log-only error tracking',
-    );
-    return null;
+    return warnFallback('failed to initialize', err);
   }
 
   return sentry;
 }
 
+// Cached on globalThis, like lib/db/index.ts's pg Pools, so Next.js dev-mode HMR
+// re-evaluating this module doesn't re-run Sentry.init() on every edit. Caches the
+// in-flight *promise* (not just the resolved client) so concurrent callers awaiting
+// getSentry() before the first one resolves all share that one import()+init() call
+// instead of each independently double-initializing the SDK — the assignment below is
+// synchronous, so there's no window between "check" and "set" for a second caller to
+// slip through.
+const globalForObservability = globalThis as unknown as {
+  sentryClientPromise?: Promise<SentryModule | null>;
+};
+
 function getSentry(): Promise<SentryModule | null> {
-  globalForObservability.sentryClientPromise ??= initSentry();
+  globalForObservability.sentryClientPromise ??= initSentry().catch((err) => {
+    // initSentry() itself always resolves (never rejects) on every failure path above —
+    // this only fires if something outside those paths unexpectedly throws. Reset the
+    // cache so a later call gets a fresh attempt instead of replaying the same
+    // rejection forever (a plain `promise ??= ...` would otherwise cache a rejected
+    // promise permanently, since a rejected Promise is still a non-nullish value).
+    globalForObservability.sentryClientPromise = undefined;
+    return warnFallback('threw unexpectedly during initialization', err);
+  });
   return globalForObservability.sentryClientPromise;
 }
 
@@ -66,6 +78,14 @@ export async function captureException(error: unknown, context?: Record<string, 
   // context spread comes first so a context key literally named `err` can never shadow
   // the actual exception being logged.
   logger.error({ ...context, err: error }, 'captured exception');
-  const sentry = await getSentry();
-  sentry?.captureException(error, context ? { extra: context } : undefined);
+
+  // This whole seam exists to be safe to call from any error-handling path, so it must
+  // never itself throw — even if getSentry() or the real Sentry client's own
+  // captureException somehow does.
+  try {
+    const sentry = await getSentry();
+    sentry?.captureException(error, context ? { extra: context } : undefined);
+  } catch (err) {
+    logger.warn({ err }, 'Failed to forward exception to Sentry (already logged locally above)');
+  }
 }
