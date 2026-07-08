@@ -11,6 +11,13 @@ export default defineConfig({
     baseURL: 'http://localhost:3000',
     trace: 'on-first-retry',
   },
+  // Default per-assertion timeout is 5000ms — tight for a real login POST + Server
+  // Action + redirect + full page load under CI resource contention (observed as an
+  // occasional flake on auth.spec.ts's post-login toHaveURL check, recovered by CI's
+  // own retries but worth tightening the margin rather than relying on retries alone).
+  expect: {
+    timeout: 10000,
+  },
   projects: [
     {
       name: 'chromium',

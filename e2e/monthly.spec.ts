@@ -146,9 +146,23 @@ test.describe('monthly entries', () => {
 
     await adhocRow.getByRole('button', { name: 'Delete' }).click();
     await expect(page.getByTestId('entry-row').filter({ hasText: adhocName })).toHaveCount(0);
+  });
 
-    // Calendar and agenda views render without crashing (they're read-only displays —
-    // the interactive coverage above already exercises list view).
+  // Split out from the mega-test above (previously tacked onto its tail) — this is a
+  // genuinely independent, read-only check (calendar/agenda views render without
+  // crashing) that doesn't need any of the preceding test's mutation state, and
+  // sharing that test's cumulative 30s timeout budget after 7+ prior UI interactions
+  // made it a recurring source of CI flakiness (calendar-cell/agenda-URL timeouts).
+  // Standalone, it gets its own full timeout instead of inheriting timing pressure
+  // from everything that ran before it.
+  test('calendar and agenda views render without crashing', async ({ page }) => {
+    await page.goto('/login');
+    await page.getByLabel('Email').fill(OWNER_EMAIL);
+    await page.getByLabel('Password').fill(OWNER_PASSWORD);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL('/');
+
+    await page.goto(currentMonthUrl());
     await page.getByTestId('view-toggle-calendar').click();
     await expect(page.getByTestId('calendar-cell').first()).toBeVisible();
     await page.getByTestId('view-toggle-agenda').click();
