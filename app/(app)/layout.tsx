@@ -15,6 +15,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/" className="rounded-md px-2 py-1.5 hover:bg-muted">
             Dashboard
           </Link>
+          <Link href="/recurring" className="rounded-md px-2 py-1.5 hover:bg-muted">
+            Recurring
+          </Link>
+          <Link href="/monthly" className="rounded-md px-2 py-1.5 hover:bg-muted">
+            Monthly
+          </Link>
+          <Link href="/settings/categories" className="rounded-md px-2 py-1.5 hover:bg-muted">
+            Categories &amp; Accounts
+          </Link>
           {can(user.role, 'manage_members') && (
             <Link href="/settings/members" className="rounded-md px-2 py-1.5 hover:bg-muted">
               Members
