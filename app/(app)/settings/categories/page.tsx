@@ -3,6 +3,8 @@ import { requireUser } from '../../../../lib/auth/guards';
 import { can } from '../../../../lib/auth/rbac';
 import { db } from '../../../../lib/db';
 import { categories, bankAccounts } from '../../../../lib/db/schema';
+import { env } from '../../../../lib/env';
+import { getCurrentMonthCategoryBudgets } from '../../../../lib/db/queries';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CategoryRow } from './category-row';
 import { CategoryAddForm } from './category-add-form';
@@ -12,8 +14,9 @@ import { AccountAddForm } from './account-add-form';
 export default async function CategoriesPage() {
   const user = await requireUser();
   const canManage = can(user.role, 'write');
+  const showBudget = env.FEATURE_CATEGORY_BUDGETS;
 
-  const [allCategories, allAccounts] = await Promise.all([
+  const [allCategories, allAccounts, budgetRows] = await Promise.all([
     db
       .select()
       .from(categories)
@@ -24,7 +27,9 @@ export default async function CategoriesPage() {
       .from(bankAccounts)
       .where(eq(bankAccounts.householdId, user.householdId))
       .orderBy(bankAccounts.sortOrder),
+    showBudget ? getCurrentMonthCategoryBudgets(user.householdId) : Promise.resolve([]),
   ]);
+  const spentByCategory = new Map(budgetRows.map((b) => [b.categoryId, b.spentCents]));
 
   const incomeCategories = allCategories.filter((c) => c.direction === 'income');
   const expenseCategories = allCategories.filter((c) => c.direction === 'expense');
@@ -57,7 +62,7 @@ export default async function CategoriesPage() {
                   <p className="text-xs text-muted-foreground">No income categories yet.</p>
                 )}
                 {incomeCategories.map((c) => (
-                  <CategoryRow key={c.id} category={c} canManage={canManage} />
+                  <CategoryRow key={c.id} category={c} canManage={canManage} showBudget={false} />
                 ))}
               </div>
             </div>
@@ -70,11 +75,17 @@ export default async function CategoriesPage() {
                   <p className="text-xs text-muted-foreground">No expense categories yet.</p>
                 )}
                 {expenseCategories.map((c) => (
-                  <CategoryRow key={c.id} category={c} canManage={canManage} />
+                  <CategoryRow
+                    key={c.id}
+                    category={c}
+                    canManage={canManage}
+                    showBudget={showBudget}
+                    currentMonthSpentCents={spentByCategory.get(c.id)}
+                  />
                 ))}
               </div>
             </div>
-            {canManage && <CategoryAddForm />}
+            {canManage && <CategoryAddForm showBudget={showBudget} />}
           </CardContent>
         </Card>
 
@@ -93,10 +104,16 @@ export default async function CategoriesPage() {
                   account={a}
                   bankOnlyAccounts={bankOnlyAccounts}
                   canManage={canManage}
+                  showOpeningBalance={env.FEATURE_NET_WORTH}
                 />
               ))}
             </div>
-            {canManage && <AccountAddForm bankOnlyAccounts={bankOnlyAccounts} />}
+            {canManage && (
+              <AccountAddForm
+                bankOnlyAccounts={bankOnlyAccounts}
+                showOpeningBalance={env.FEATURE_NET_WORTH}
+              />
+            )}
           </CardContent>
         </Card>
       </div>

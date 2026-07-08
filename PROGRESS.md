@@ -1212,7 +1212,251 @@ full-suite re-run — transient, not a regression.
 
 ---
 
-<!--
-Copy the block above for each new phase. Keep sections in phase order. Convert relative
-dates to absolute (e.g. "today" -> the actual date) so the log stays readable later.
--->
+## Phase 4: Budgeting additions — category budgets, goals, net worth — status: complete 2026-07-09
+
+**What shipped:**
+
+- **Pure logic (`lib/domain/budgeting.ts`):** `computeBudgetProgress(spentCents,
+capCents)` — distinguishes `capCents === null` ("never budgeted," no progress bar)
+  from `capCents === 0` ("explicitly budgeted to zero," so any spend at all is an
+  immediate 100%+ overspend), matching spec.md's Ready criterion verbatim.
+  `computeGoalProgress(savedCents, targetCents, createdAt, targetDate, now)` — percentage/
+  remaining/complete/overdue, plus a naive linear projected-completion date extrapolated
+  from the goal's own average daily savings rate since `createdAt` (there's no history
+  table behind `saved_amount`, per the user's explicit "manual edit, not derived" design
+  decision, so this is the simplest defensible projection available, not a real
+  regression). 13 unit tests cover null-vs-zero cap, >100% overspend, a past `targetDate`,
+  a zero-target goal (no NaN), and both projection-null cases.
+- **Pure logic (`lib/domain/net-worth.ts`):** `buildAccountBalances(accounts, entries)` —
+  a running-balance walk per bank account, with credit-account spend redirected to its
+  `linkedBankAccountId`'s series (and excluded entirely if unlinked — nowhere to
+  attribute it), per the user's explicit "exclude credit accounts entirely" design
+  decision. `buildNetWorthSeries(accountBalances)` sums bank-type balances per month. 10
+  unit tests, including a `fast-check` property test asserting the running balance is
+  order-independent within a month (entries can arrive in any order from the DB).
+- **Data layer:** `monthlyBudget`/`openingBalance` gated server-side by
+  `env.FEATURE_CATEGORY_BUDGETS`/`env.FEATURE_NET_WORTH` in `app/actions/categories.ts`/
+  `accounts.ts` (rejects the write outright if the flag is off, not just hidden in the
+  UI); a new signed `openingBalanceSchema` in `accounts.ts` (distinct from the existing
+  non-negative `moneyInputSchema`, since spec.md names a negative opening/running balance
+  as a valid case); `app/actions/goals.ts` (new) — full CRUD, household-scoped,
+  `requireGoalsEnabled()` gate, `targetAmount` required `> 0` via a zod `.refine`.
+  `lib/db/queries.ts` gained `getAccountsForNetWorth`/`getCurrentMonthCategoryBudgets`
+  (the budget query is scoped to the real current month regardless of which year the
+  dashboard is browsing — a monthly cap is about "right now," not the browsed year).
+- **UI (behind config flags, so a household that never enables them sees zero traces):**
+  budget-cap input + progress bar (`BudgetBar`, red over cap) in
+  `/settings/categories`; opening-balance input (bank accounts only — credit accounts
+  have no balance series of their own in this model) in the same page; a new `/goals`
+  page (cards, add/edit/delete, COMPLETE/OVERDUE badges, projected-completion date),
+  server-enforced even via direct URL visit when the flag is off; a dashboard
+  `BudgetHealthCard`, `NetWorthChart` (Recharts line), and `AccountBalancesTable`,
+  wired into `app/(app)/page.tsx` alongside the existing Phase 3 widgets.
+- **E2E (`e2e/phase4.spec.ts`, 5 tests):** set a category budget cap + overspend via a
+  real ad-hoc entry shows red both in Settings and on the dashboard's budget-health row;
+  create a goal renders correct progress, a zero/negative target is rejected with a
+  visible error; editing a goal's saved amount to reach target shows COMPLETE; setting
+  an account's opening balance updates the dashboard's net-worth account-balance row;
+  a viewer sees goals read-only (no add/edit/delete controls rendered at all).
+- **Adversarial:** every new Server Action rejects its write server-side when the
+  relevant flag is off (not just a hidden nav link) — covered by dedicated integration
+  tests using `vi.doMock('../../lib/env', ...)`, not just E2E's "the button isn't there."
+- Manually verified in a real browser via short-lived Playwright screenshot scripts
+  (written, used, deleted): dashboard net-worth chart + account balances correctly
+  excluding the Credit Card account, Settings budget-cap/opening-balance inputs, Goals
+  page empty state and add form, and a live create-goal/create-budget round trip.
+
+**Test/CI status (pre-review-pass baseline):** Unit 220/220 (up from 197 — 23 new:
+13 budgeting + 10 net-worth), coverage on the gated `lib/domain` scope 97.36%
+stmts/93.8% branches (down from the prior phase's 100% — see review pass below).
+Integration 126/126 (up from 103 — the goals/categories/accounts/queries additions).
+E2E 30/30 (up from 24 — the new `phase4.spec.ts`, 5 tests). `npm run
+typecheck`/`lint`/`format:check` all clean.
+
+**Key decisions and why:**
+
+1. **Goals `saved_amount` is manually edited, not derived/auto-accumulated** — per the
+   user's explicit choice this session. There's no ledger of "contributions" to a goal,
+   just a single mutable balance a person types in directly, same as the reference app.
+   This is also why the completion projection is a naive single-rate extrapolation
+   rather than a real regression — there's no multi-point history to fit against.
+2. **Net worth excludes credit accounts entirely** — per the user's explicit choice.
+   A credit account has no balance series of its own; its spend is redirected to
+   whichever bank account it's linked to (`linkedBankAccountId`, a link Phase 2 already
+   built and validated); an unlinked credit account's spend has nowhere correct to go
+   and is simply excluded, rather than guessed at.
+3. **The current-month category-budget query is independent of the dashboard's browsed
+   `?year=`** — a monthly cap describes "are we overspending _right now_," which
+   shouldn't change because someone is looking at 2019's dashboard. `getDashboardRows`
+   itself was deliberately left untouched (not widened to carry `monthlyBudget`/
+   `openingBalance`) rather than pre-fetching fields the dashboard's own historical
+   view has no use for.
+4. **`openingBalanceSchema` is a new, separate schema from `moneyInputSchema`**, not a
+   parameter added to the existing one — the existing schema's non-negative constraint
+   is still correct for every other money field in the app (recurring/ad-hoc amounts,
+   budget caps); only an account's opening/running balance can legitimately be negative.
+
+**Real bugs found and fixed (during initial build, before the review pass below):**
+
+- **E2E ad-hoc-entry step initially navigated to bare `/monthly`**, which defaults to
+  calendar view — ad-hoc entries render there as small chip cards with no
+  `data-testid="entry-row"`, so the assertion that should have proven "overspend shows
+  red" silently found nothing to click. Fixed by navigating to the explicit
+  `?view=list` URL, matching the convention `e2e/monthly.spec.ts` already established
+  for the same reason.
+
+**Deferred / blocked:** none new from the initial build — see the review pass
+immediately below for what the hardening round found and deferred.
+
+**Hardening pass (`/code-review` on the full Phase 4 diff, extra-high effort,
+2026-07-09):** 10 parallel finder angles against the complete working-tree diff (25
+changed/new files), 1-vote verification, a gap sweep. Strong cross-angle convergence:
+the two most severe findings were independently surfaced by 5-6 of the 10 angles each.
+9 findings fixed, 5 deferred with reasoning. A second, focused verification pass on the
+fix diff itself (not a full 10-angle re-run — diminishing returns from re-litigating
+already-reviewed baseline code) found zero new regressions.
+
+- _Fixed, most severe_ — **`app/actions/accounts.ts` had no `env.FEATURE_NET_WORTH`
+  gate at all** — `createAccountAction`/`updateAccountAction` never imported `env`,
+  unlike `categories.ts` (checks `FEATURE_CATEGORY_BUDGETS`) and `goals.ts`
+  (`requireGoalsEnabled()`). A forged submission with an `openingBalance` field
+  succeeded regardless of the flag, directly contradicting spec.md's Phase 4
+  adversarial rule ("flag off ⇒ ... actions rejected ... server-side too, not just
+  hidden UI") and this file's own now-corrected PROGRESS.md claim. Fixed by adding the
+  same gate pattern as `categories.ts`, checked against whether the field was actually
+  submitted with a non-default value (see next finding for why "submitted" has to be
+  checked explicitly rather than inferred from the parsed value).
+- _Fixed_ — **editing an account while its opening-balance input is hidden (flag off,
+  or `accountType` isn't `'bank'`) silently zeroed the stored balance.**
+  `account-row.tsx`/`account-add-form.tsx` only render the `openingBalance` input
+  conditionally, so an edit submitted without it had `formData.get('openingBalance')`
+  come back `null` → `openingBalanceSchema` defaulted that to `'0.00'` →
+  `updateAccountAction` wrote it unconditionally, wiping a real stored balance on a
+  save that only meant to rename the account. Root-caused to the same shape of bug as
+  the next finding: the code couldn't distinguish "field omitted from this submission"
+  from "field present and blank." Fixed by checking `formData.has('openingBalance')`
+  before parsing, and only including `openingBalance` in the `UPDATE`'s `.set()` at all
+  when the field was genuinely present — an omitted field now leaves the column
+  untouched instead of resetting it.
+- _Fixed_ — **the identical bug on `app/actions/categories.ts`'s `monthlyBudget`** —
+  `updateCategoryAction`'s flag-off guard only blocked a forged _non-null_ submission;
+  it didn't protect an _existing_ cap from being cleared when the field was merely
+  absent (flag off, or an income category, where `category-row.tsx` never renders the
+  input). A household could lose a real budget cap just by renaming a category while
+  the feature was temporarily disabled. Same fix shape: `formData.has('monthlyBudget')`
+  gates whether `monthlyBudget` is included in the `.set()` at all. This also required
+  correcting an existing integration test whose second assertion
+  (`categories.integration.test.ts`, "sets an explicit zero cap distinctly from
+  clearing it back to null") had been submitting the clear-case with the field
+  _omitted_ — i.e. it was asserting the exact bug's behavior as correct. Fixed the test
+  to submit an explicit empty string (the real shape a rendered-but-emptied `<input>`
+  produces), which is genuinely distinct from omission and still correctly clears the
+  cap.
+- _Fixed_ — **a budget cap could be attached to an income category through ordinary
+  UI use**, not just a forged request: `category-add-form.tsx`'s budget-cap input
+  wasn't conditioned on the `direction` select's value (an uncontrolled field with no
+  state to condition on), and neither create nor update action rejected the
+  combination server-side. `getCurrentMonthCategoryBudgets` already only ever looks at
+  expense categories, so the value was silently inert and — per the finding above —
+  vulnerable to being wiped on the next edit regardless. Fixed by converting
+  `direction` to controlled state (matching `account-add-form.tsx`'s existing
+  `accountType` pattern) so the field only renders for `direction === 'expense'`, and
+  adding a matching server-side rejection in both `createCategoryAction` and
+  `updateCategoryAction`.
+- _Fixed, architectural_ — **net worth reset to each account's static
+  `opening_balance` every time a different year was viewed**, instead of carrying
+  forward what actually accumulated in prior years. `buildAccountBalances` always
+  seeded its running total from `account.openingBalanceCents` alone, and
+  `app/(app)/page.tsx` only ever fed it the currently-browsed year's entries — so
+  Year Picker (which spans 2000-2100) landed on a materially wrong net-worth figure
+  for any year after an account's first year of real activity, silently. Fixed at the
+  architecture level rather than patched: `lib/domain/net-worth.ts` gained
+  `sumNetCentsByAccount` (a flat, non-month-bucketed version of the same credit-
+  redirect logic, extracted into a shared `resolveEffectiveAccountId` helper so both
+  functions apply the identical rule) and `buildAccountBalances` gained a third,
+  optional `carryForwardCents` parameter that seeds the running balance on top of
+  `openingBalanceCents`. `lib/db/queries.ts` gained `getAccountEntriesBeforeYear`
+  (every entry from every year strictly before the one being viewed — a lifetime
+  running total needs everything before it, not a bounded window), and
+  `app/(app)/page.tsx` now sums that into a carry-forward map before calling
+  `buildAccountBalances` for the selected year. Verified the new query and the old
+  `getDashboardRows` are mutually exclusive by construction (`lt(year, year)` vs.
+  `eq(year, year)`) — no entry can be double-counted or dropped at the year boundary.
+  9 new unit tests (carry-forward seeding, `sumNetCentsByAccount`'s own credit-redirect
+  and exclusion rules, orphaned/dangling-link edge cases) plus 3 new integration tests
+  for the new query.
+- _Fixed_ — `category-row.tsx`'s `BudgetBar` computed `capCents` via
+  `Math.round(parseFloat(category.monthlyBudget) * 100)` instead of the codebase's own
+  `parseAmountToCents` — every other money field in the app, including the sibling
+  `account-row.tsx`, routes through it specifically to avoid float precision drift and
+  to fail loudly (not `NaN`) on a malformed value. Replaced with `parseAmountToCents`.
+- _Fixed_ — `getCurrentMonthCategoryBudgets` re-implemented the "actual overrides
+  budgeted" coalesce inline instead of reusing `lib/domain/dashboard.ts`'s
+  `bestEstimateCents` (exported earlier this same phase specifically so it could be
+  reused, and correctly reused by `app/(app)/page.tsx` a few lines away) — a second,
+  independently-maintained copy of the same business rule. Also ran its two
+  independent queries as sequential `await`s instead of `Promise.all`, serializing an
+  avoidable round trip on the dashboard/settings hot path. Fixed both in the same
+  change.
+- _Fixed_ — `app/(app)/page.tsx` computed the full net-worth CPU work (row mapping,
+  `buildAccountBalances`, `buildNetWorthSeries`) unconditionally even when
+  `env.FEATURE_NET_WORTH` is off, and `latestBalances` carried a dead fallback branch
+  (`latest ? latest.balanceCents : a.openingBalanceCents`) that could never execute,
+  since `buildAccountBalances` always returns a full 12-point series for every bank
+  account it's given. Wrapped the whole computation in `if (env.FEATURE_NET_WORTH)` and
+  removed the unreachable branch.
+- _Fixed_ — `goal-card.tsx` re-derived `parseAmountToCents(goal.savedAmount)`/
+  `parseAmountToCents(goal.targetAmount)` a second time for display, duplicating work
+  `computeGoalProgress` had already done and echoed back as `progress.savedCents`/
+  `progress.targetCents` — fields that, until this fix, had zero readers anywhere.
+  Switched the display line to reuse them directly.
+
+Deferred, documented rather than fixed:
+
+- **Goal `isOverdue`/`projectedCompletionDate` compares a target date parsed at UTC
+  midnight (`new Date(\`${targetDate}T00:00:00Z\`)`) against the real current instant**,
+so the OVERDUE badge can flip up to ~16 hours before or after the household's actual
+local midnight (SGT is UTC+8). Real, but this app has no existing app-wide timezone
+convention to extend consistently (every other date in the app is either a bare
+`numeric`/integer month or already-formatted display text) — fixing this one call
+  site without a broader decision about how the app handles "today" in a specific
+  timezone would be a narrower, inconsistent patch rather than a real fix. Tracked for
+  a dedicated pass if it proves to matter in practice.
+- **`deleteGoalAction` is gated by the same `requireGoalsEnabled()` as create/update**,
+  so once `FEATURE_SAVINGS_GOALS` is turned off, an owner can no longer delete an
+  old goal — only re-enabling the flag first. spec.md's adversarial rule doesn't
+  explicitly carve out delete as an exception, and the alternative (asymmetric
+  gating — allow delete, block create/update) is a real design question, not a bug fix
+  a review pass should decide unilaterally. Left as the stricter, more predictable
+  behavior; revisit if it proves to be a real workflow problem.
+- **`accounts.ts`'s new `openingBalanceSchema` regex hand-duplicates the shape of
+  `lib/money.ts`'s private `NUMERIC_PATTERN`** (with an added leading `-?`) instead of
+  importing it. Real DRY gap, but it continues an existing pattern already in the
+  codebase — `lib/money.ts`'s own exported `moneyInputSchema` does the identical
+  hand-duplication rather than deriving from `NUMERIC_PATTERN`. Fixing it properly
+  means touching pre-existing Phase 2 code outside this diff's scope, not a Phase-4
+  review-fixup.
+- **Three near-identical hand-rolled progress-bar implementations** (`category-row.tsx`'s
+  `BudgetBar`, `budget-health-card.tsx`, `goal-card.tsx`) and **a third copy of the
+  `reactedTo`-during-render `useActionState` pattern** (`goal-card.tsx`, joining
+  `category-row.tsx` and `account-row.tsx`) are real duplication, flagged by the
+  review's simplification angle. Not extracted: this project's own CLAUDE.md is
+  explicit — "Three similar lines is better than a premature abstraction... don't
+  design for hypothetical future requirements." Three call sites is the threshold the
+  review would extract at, not clearly past it; deferred rather than guessed at under
+  review-fixup pressure.
+- **`getCurrentMonthCategoryBudgets` fetches every current-month entry for the
+  household, not just entries in categories that have a cap set**, filtering to capped
+  categories only after the fact in JS. A single join would avoid the over-fetch, but
+  at this app's household scale (tens of entries/month) the extra bytes are
+  negligible; not worth the added query complexity in a review-fixup pass.
+
+Re-verified end to end: unit 228/228 (up from 220 — 9 net-worth carry-forward/edge-case
+tests, incl. 2 closing coverage gaps the fixes' own review surfaced), integration
+133/133 (up from 126 — 7 new: 2 accounts.ts flag-gate/preserve-on-omit, 3
+categories.ts preserve-on-omit/income-rejection, 3 queries.ts
+`getAccountEntriesBeforeYear`, with one pre-existing test corrected rather than just
+left passing-for-the-wrong-reason), E2E 30/30 unchanged, lint/typecheck/format/build
+all clean.
+
+---

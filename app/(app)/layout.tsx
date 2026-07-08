@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { requireUser } from '../../lib/auth/guards';
 import { can } from '../../lib/auth/rbac';
 import { logoutAction } from '../actions/auth';
+import { env } from '../../lib/env';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { YearNav } from './year-nav';
@@ -26,6 +27,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/monthly" className="rounded-md px-2 py-1.5 hover:bg-muted">
             Monthly
           </Link>
+          {env.FEATURE_SAVINGS_GOALS && (
+            <Link href="/goals" className="rounded-md px-2 py-1.5 hover:bg-muted">
+              Goals
+            </Link>
+          )}
           <Link href="/settings/categories" className="rounded-md px-2 py-1.5 hover:bg-muted">
             Categories &amp; Accounts
           </Link>

@@ -5,12 +5,15 @@ import { updateAccountAction, deleteAccountAction } from '../../../actions/accou
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { formatSGD } from '../../../../lib/format';
+import { parseAmountToCents } from '../../../../lib/money';
 
 interface Account {
   id: string;
   name: string;
   accountType: 'bank' | 'credit';
   linkedBankAccountId: string | null;
+  openingBalance: string;
 }
 
 interface BankOnlyAccount {
@@ -22,10 +25,12 @@ export function AccountRow({
   account,
   bankOnlyAccounts,
   canManage,
+  showOpeningBalance,
 }: {
   account: Account;
   bankOnlyAccounts: BankOnlyAccount[];
   canManage: boolean;
+  showOpeningBalance: boolean;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [accountType, setAccountType] = useState(account.accountType);
@@ -53,7 +58,7 @@ export function AccountRow({
       >
         <input type="hidden" name="id" value={account.id} />
         <Input name="name" defaultValue={account.name} required className="h-8" />
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <select
             name="accountType"
             value={accountType}
@@ -79,6 +84,15 @@ export function AccountRow({
                 </option>
               ))}
             </select>
+          )}
+          {showOpeningBalance && accountType === 'bank' && (
+            <Input
+              name="openingBalance"
+              placeholder="Opening balance"
+              defaultValue={account.openingBalance}
+              inputMode="decimal"
+              className="h-8 w-32"
+            />
           )}
         </div>
         <div className="flex justify-end gap-1">
@@ -111,6 +125,11 @@ export function AccountRow({
             {account.accountType}
           </Badge>
           {linkedName && <span className="text-xs text-muted-foreground">-&gt; {linkedName}</span>}
+          {showOpeningBalance && account.accountType === 'bank' && (
+            <span className="text-xs text-muted-foreground">
+              Opening: {formatSGD(parseAmountToCents(account.openingBalance))}
+            </span>
+          )}
         </div>
         {canManage && (
           <div className="flex gap-1">

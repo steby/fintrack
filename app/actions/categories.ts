@@ -6,6 +6,8 @@ import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { categories, directionEnum } from '../../lib/db/schema';
 import { requireRole } from '../../lib/auth/guards';
+import { env } from '../../lib/env';
+import { optionalMoneyInputSchema, centsToAmount } from '../../lib/money';
 
 export type CategoryActionState = { error?: string; success?: boolean } | undefined;
 
@@ -14,10 +16,16 @@ const colorSchema = z
   .regex(/^#[0-9a-fA-F]{6}$/, 'Color must be a hex value like #6B7280')
   .default('#6B7280');
 
+// Empty string means "no cap set" (null) — distinct from a cap explicitly set to 0
+// (spec.md Phase 4: "budget of 0 vs null, unset ≠ zero cap"). optionalMoneyInputSchema
+// already treats '' as null and rejects negative amounts.
+const monthlyBudgetSchema = optionalMoneyInputSchema;
+
 const createCategorySchema = z.object({
   name: z.string().trim().min(1, 'Category name is required').max(100),
   direction: z.enum(directionEnum.enumValues),
   color: colorSchema,
+  monthlyBudget: monthlyBudgetSchema,
 });
 
 export async function createCategoryAction(
@@ -30,9 +38,23 @@ export async function createCategoryAction(
     name: formData.get('name'),
     direction: formData.get('direction'),
     color: formData.get('color') || undefined,
+    monthlyBudget: formData.get('monthlyBudget') ?? '',
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? 'Invalid category.' };
+  }
+  // Rejected server-side regardless of whether the UI hides the field when the flag is
+  // off (spec.md Phase 4 adversarial: "flags enforced server-side too, not just hidden
+  // UI") — a forged form submission can't set a budget cap the household hasn't
+  // enabled.
+  if (parsed.data.monthlyBudget !== null && !env.FEATURE_CATEGORY_BUDGETS) {
+    return { error: 'Category budgets are not enabled.' };
+  }
+  // A budget cap only means anything against expense entries (getCurrentMonthCategoryBudgets
+  // only ever looks at direction: 'expense' categories) — reject rather than silently
+  // store an inert value on an income category.
+  if (parsed.data.monthlyBudget !== null && parsed.data.direction !== 'expense') {
+    return { error: 'Only expense categories can have a budget cap.' };
   }
 
   // Next sort position within this household only — matches the reference app's
@@ -50,6 +72,8 @@ export async function createCategoryAction(
     direction: parsed.data.direction,
     color: parsed.data.color,
     sortOrder: nextOrder,
+    monthlyBudget:
+      parsed.data.monthlyBudget === null ? null : centsToAmount(parsed.data.monthlyBudget),
   });
 
   revalidatePath('/settings/categories');
@@ -61,6 +85,7 @@ const updateCategorySchema = z.object({
   name: z.string().trim().min(1, 'Category name is required').max(100),
   direction: z.enum(directionEnum.enumValues),
   color: colorSchema,
+  monthlyBudget: monthlyBudgetSchema,
 });
 
 export async function updateCategoryAction(
@@ -69,14 +94,28 @@ export async function updateCategoryAction(
 ): Promise<CategoryActionState> {
   const actingUser = await requireRole('write');
 
+  // Absent (not just empty) means the field wasn't rendered at all — flag off, or an
+  // income category, where category-row.tsx never shows the budget input — and the
+  // existing cap must be left alone, not silently cleared by a save that never touched
+  // it. Distinct from the field being present-but-blank (flag on, an expense category,
+  // user deliberately clears it), which optionalMoneyInputSchema correctly treats as
+  // "clear the cap" — that case still needs to reach the database as monthlyBudget: null.
+  const monthlyBudgetProvided = formData.has('monthlyBudget');
   const parsed = updateCategorySchema.safeParse({
     id: formData.get('id'),
     name: formData.get('name'),
     direction: formData.get('direction'),
     color: formData.get('color') || undefined,
+    monthlyBudget: formData.get('monthlyBudget') ?? '',
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? 'Invalid category.' };
+  }
+  if (parsed.data.monthlyBudget !== null && !env.FEATURE_CATEGORY_BUDGETS) {
+    return { error: 'Category budgets are not enabled.' };
+  }
+  if (parsed.data.monthlyBudget !== null && parsed.data.direction !== 'expense') {
+    return { error: 'Only expense categories can have a budget cap.' };
   }
 
   // household_id in the WHERE clause, not just the id — without it, a member could
@@ -84,7 +123,17 @@ export async function updateCategoryAction(
   // note: missing household_id filter -> cross-tenant leak).
   const result = await db
     .update(categories)
-    .set({ name: parsed.data.name, direction: parsed.data.direction, color: parsed.data.color })
+    .set({
+      name: parsed.data.name,
+      direction: parsed.data.direction,
+      color: parsed.data.color,
+      ...(monthlyBudgetProvided
+        ? {
+            monthlyBudget:
+              parsed.data.monthlyBudget === null ? null : centsToAmount(parsed.data.monthlyBudget),
+          }
+        : {}),
+    })
     .where(
       and(eq(categories.id, parsed.data.id), eq(categories.householdId, actingUser.householdId)),
     )

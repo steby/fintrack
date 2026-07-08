@@ -72,6 +72,41 @@ describe('createAccountAction', () => {
       .where(eq(bankAccounts.householdId, member.household.id));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ name: 'DBS', accountType: 'bank', linkedBankAccountId: null });
+    expect(rows[0].openingBalance).toBe('0.00');
+
+    await cleanup(member.household.id);
+  });
+
+  it('accepts an explicit opening balance, including a negative one (e.g. an overdraft)', async () => {
+    const { createAccountAction } = await import('./accounts');
+    const member = await makeHouseholdWithUser('member', 'Acct create OB-1');
+    mockToken = member.token;
+
+    const result = await createAccountAction(
+      undefined,
+      formData({ name: 'Checking', accountType: 'bank', openingBalance: '-250.50' }),
+    );
+    expect(result).toEqual({ success: true });
+
+    const [row] = await db
+      .select()
+      .from(bankAccounts)
+      .where(eq(bankAccounts.householdId, member.household.id));
+    expect(row.openingBalance).toBe('-250.50');
+
+    await cleanup(member.household.id);
+  });
+
+  it('rejects a malformed opening balance', async () => {
+    const { createAccountAction } = await import('./accounts');
+    const member = await makeHouseholdWithUser('member', 'Acct create OB-2');
+    mockToken = member.token;
+
+    const result = await createAccountAction(
+      undefined,
+      formData({ name: 'Checking', accountType: 'bank', openingBalance: 'not-a-number' }),
+    );
+    expect(result?.error).toBeTruthy();
 
     await cleanup(member.household.id);
   });
@@ -194,6 +229,93 @@ describe('updateAccountAction', () => {
     expect(result).toEqual({ error: 'An account cannot link to itself.' });
 
     await cleanup(member.household.id);
+  });
+
+  it('updates the opening balance', async () => {
+    const { updateAccountAction } = await import('./accounts');
+    const member = await makeHouseholdWithUser('member', 'Acct update OB');
+    const [acct] = await db
+      .insert(bankAccounts)
+      .values({ householdId: member.household.id, name: 'Checking', accountType: 'bank' })
+      .returning();
+
+    mockToken = member.token;
+    const result = await updateAccountAction(
+      undefined,
+      formData({ id: acct.id, name: 'Checking', accountType: 'bank', openingBalance: '1234.56' }),
+    );
+    expect(result).toEqual({ success: true });
+
+    const [updated] = await db.select().from(bankAccounts).where(eq(bankAccounts.id, acct.id));
+    expect(updated.openingBalance).toBe('1234.56');
+
+    await cleanup(member.household.id);
+  });
+
+  it('preserves an existing opening balance when the field is entirely absent from the submission (flag off, or accountType isn\'t "bank", hides the field)', async () => {
+    const { updateAccountAction } = await import('./accounts');
+    const member = await makeHouseholdWithUser('member', 'Acct update OB2');
+    const [acct] = await db
+      .insert(bankAccounts)
+      .values({
+        householdId: member.household.id,
+        name: 'Checking',
+        accountType: 'bank',
+        openingBalance: '10000.00',
+      })
+      .returning();
+
+    mockToken = member.token;
+    // Simulates account-row.tsx's edit form when showOpeningBalance is false, or the
+    // account isn't (or is being switched away from) 'bank' — the openingBalance
+    // <Input> is never rendered, so it's never in the FormData at all.
+    const result = await updateAccountAction(
+      undefined,
+      formData({ id: acct.id, name: 'Everyday Checking', accountType: 'bank' }),
+    );
+    expect(result).toEqual({ success: true });
+
+    const [updated] = await db.select().from(bankAccounts).where(eq(bankAccounts.id, acct.id));
+    expect(updated.name).toBe('Everyday Checking');
+    expect(updated.openingBalance).toBe('10000.00');
+
+    await cleanup(member.household.id);
+  });
+
+  it('rejects a nonzero opening balance when FEATURE_NET_WORTH is disabled (server-side, not just hidden UI)', async () => {
+    vi.doMock('../../lib/env', () => ({ env: { FEATURE_NET_WORTH: false } }));
+    vi.resetModules();
+    const { createAccountAction, updateAccountAction } = await import('./accounts');
+    const member = await makeHouseholdWithUser('member', 'Acct update OB3');
+
+    mockToken = member.token;
+    const createResult = await createAccountAction(
+      undefined,
+      formData({ name: 'Checking', accountType: 'bank', openingBalance: '500.00' }),
+    );
+    expect(createResult).toEqual({ error: 'Net worth tracking is not enabled.' });
+
+    const [acct] = await db
+      .insert(bankAccounts)
+      .values({
+        householdId: member.household.id,
+        name: 'Checking',
+        accountType: 'bank',
+        openingBalance: '10000.00',
+      })
+      .returning();
+    const updateResult = await updateAccountAction(
+      undefined,
+      formData({ id: acct.id, name: 'Checking', accountType: 'bank', openingBalance: '500.00' }),
+    );
+    expect(updateResult).toEqual({ error: 'Net worth tracking is not enabled.' });
+
+    const [unchanged] = await db.select().from(bankAccounts).where(eq(bankAccounts.id, acct.id));
+    expect(unchanged.openingBalance).toBe('10000.00');
+
+    await cleanup(member.household.id);
+    vi.doUnmock('../../lib/env');
+    vi.resetModules();
   });
 
   it('rejects setting a linkedBankAccountId while accountType is "bank"', async () => {

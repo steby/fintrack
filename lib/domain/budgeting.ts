@@ -1,0 +1,89 @@
+// Pure logic for Phase 4's category budgets and savings goals — spec.md's Ready
+// criteria calls out "budget of 0 vs null (unset ≠ zero cap)" and "goal with past
+// target_date" as edge cases; both are handled explicitly below rather than left to
+// fall out of generic arithmetic.
+
+export interface BudgetProgress {
+  spentCents: number;
+  capCents: number | null;
+  // 0-100+, uncapped so a widget can render an overflow state distinctly from "at
+  // capacity" — null only when there's no cap at all (capCents === null), meaning
+  // there's nothing to compute a percentage against.
+  percentage: number | null;
+  isOverCap: boolean;
+}
+
+// capCents === null means "no cap set" (unset) — never treated as capCents === 0
+// ("cap explicitly set to zero," i.e. "budget nothing here," where ANY spend at all
+// is an immediate overspend).
+export function computeBudgetProgress(spentCents: number, capCents: number | null): BudgetProgress {
+  if (capCents === null) {
+    return { spentCents, capCents: null, percentage: null, isOverCap: false };
+  }
+  if (capCents === 0) {
+    return {
+      spentCents,
+      capCents: 0,
+      percentage: spentCents > 0 ? 100 : 0,
+      isOverCap: spentCents > 0,
+    };
+  }
+  return {
+    spentCents,
+    capCents,
+    percentage: (spentCents / capCents) * 100,
+    isOverCap: spentCents > capCents,
+  };
+}
+
+export interface GoalProgress {
+  savedCents: number;
+  targetCents: number;
+  percentage: number; // 0-100+, uncapped
+  remainingCents: number; // can be negative if saved has overshot target
+  isComplete: boolean;
+  isOverdue: boolean;
+  // Naive linear projection: extrapolates from the goal's own average savings rate
+  // since creation (savedCents accumulated over the days since createdAt) — "linear
+  // from savings deltas" in the simplest sense available, since saved_amount is a
+  // single manually-edited value with no history table to fit a trend against. Null
+  // when there's no progress yet to extrapolate from, or the goal is already complete.
+  projectedCompletionDate: string | null;
+}
+
+export function computeGoalProgress(
+  savedCents: number,
+  targetCents: number,
+  createdAt: Date,
+  targetDate: Date | null,
+  now: Date = new Date(),
+): GoalProgress {
+  const isComplete = savedCents >= targetCents;
+  const percentage = targetCents > 0 ? (savedCents / targetCents) * 100 : savedCents > 0 ? 100 : 0;
+  const remainingCents = targetCents - savedCents;
+  const isOverdue = targetDate !== null && !isComplete && targetDate.getTime() < now.getTime();
+
+  let projectedCompletionDate: string | null = null;
+  if (!isComplete && savedCents > 0) {
+    const daysSinceCreated = Math.max(
+      1,
+      (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24),
+    );
+    const dailyRateCents = savedCents / daysSinceCreated;
+    if (dailyRateCents > 0) {
+      const daysRemaining = remainingCents / dailyRateCents;
+      const projected = new Date(now.getTime() + daysRemaining * 24 * 60 * 60 * 1000);
+      projectedCompletionDate = projected.toISOString().slice(0, 10);
+    }
+  }
+
+  return {
+    savedCents,
+    targetCents,
+    percentage,
+    remainingCents,
+    isComplete,
+    isOverdue,
+    projectedCompletionDate,
+  };
+}

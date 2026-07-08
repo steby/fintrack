@@ -25,7 +25,9 @@ export interface DashboardEntryRow {
 // reference app's `COALESCE(actual_amount, budgeted_amount)` pattern, used everywhere
 // here except the monthly series (which shows budgeted and actual side by side, not
 // coalesced, since that comparison is the whole point of that widget).
-function bestEstimateCents(row: Pick<DashboardEntryRow, 'budgetedCents' | 'actualCents'>): number {
+export function bestEstimateCents(
+  row: Pick<DashboardEntryRow, 'budgetedCents' | 'actualCents'>,
+): number {
   return row.actualCents ?? row.budgetedCents;
 }
 

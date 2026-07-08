@@ -10,7 +10,13 @@ interface BankOnlyAccount {
   name: string;
 }
 
-export function AccountAddForm({ bankOnlyAccounts }: { bankOnlyAccounts: BankOnlyAccount[] }) {
+export function AccountAddForm({
+  bankOnlyAccounts,
+  showOpeningBalance,
+}: {
+  bankOnlyAccounts: BankOnlyAccount[];
+  showOpeningBalance: boolean;
+}) {
   const [state, action, pending] = useActionState(createAccountAction, undefined);
   const [accountType, setAccountType] = useState<'bank' | 'credit'>('bank');
   const formRef = useRef<HTMLFormElement>(null);
@@ -30,7 +36,7 @@ export function AccountAddForm({ bankOnlyAccounts }: { bankOnlyAccounts: BankOnl
 
   return (
     <form ref={formRef} action={action} className="flex flex-col gap-2 border-t pt-3">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Input name="name" placeholder="Account name" required className="h-8" />
         <select
           name="accountType"
@@ -57,6 +63,17 @@ export function AccountAddForm({ bankOnlyAccounts }: { bankOnlyAccounts: BankOnl
               </option>
             ))}
           </select>
+        )}
+        {/* Credit accounts have no balance of their own in the net-worth model (spec.md
+            Phase 4: their spend rolls up into whichever bank account they're linked to
+            instead) — only shown for 'bank' accounts. */}
+        {showOpeningBalance && accountType === 'bank' && (
+          <Input
+            name="openingBalance"
+            placeholder="Opening balance"
+            inputMode="decimal"
+            className="h-8 w-32"
+          />
         )}
         <Button type="submit" size="sm" disabled={pending}>
           Add

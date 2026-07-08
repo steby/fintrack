@@ -2,7 +2,12 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db, pool } from './index';
 import { households, categories, bankAccounts, monthlyEntries } from './schema';
-import { getDashboardRows } from './queries';
+import {
+  getDashboardRows,
+  getAccountsForNetWorth,
+  getAccountEntriesBeforeYear,
+  getCurrentMonthCategoryBudgets,
+} from './queries';
 
 afterAll(async () => {
   await pool.end();
@@ -130,6 +135,237 @@ describe('getDashboardRows', () => {
       expect(rows).toEqual([]);
     } finally {
       await cleanup(household.id);
+    }
+  });
+});
+
+describe('getAccountsForNetWorth', () => {
+  it('converts opening balance to cents and preserves account type/link', async () => {
+    const household = await makeHousehold('Net worth accounts A');
+    try {
+      const [bank] = await db
+        .insert(bankAccounts)
+        .values({ householdId: household.id, name: 'Checking', openingBalance: '-150.25' })
+        .returning();
+      await db.insert(bankAccounts).values({
+        householdId: household.id,
+        name: 'Credit Card',
+        accountType: 'credit',
+        linkedBankAccountId: bank.id,
+      });
+
+      const accounts = await getAccountsForNetWorth(household.id);
+      expect(accounts).toHaveLength(2);
+      const bankRow = accounts.find((a) => a.id === bank.id)!;
+      expect(bankRow).toMatchObject({ accountType: 'bank', openingBalanceCents: -15025 });
+      const creditRow = accounts.find((a) => a.accountType === 'credit')!;
+      expect(creditRow.linkedBankAccountId).toBe(bank.id);
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  it('never returns rows from a different household (household scoping)', async () => {
+    const householdA = await makeHousehold('Net worth accounts B-A');
+    const householdB = await makeHousehold('Net worth accounts B-B');
+    try {
+      await db.insert(bankAccounts).values({ householdId: householdB.id, name: 'Other' });
+      const accounts = await getAccountsForNetWorth(householdA.id);
+      expect(accounts).toEqual([]);
+    } finally {
+      await cleanup(householdA.id);
+      await cleanup(householdB.id);
+    }
+  });
+});
+
+describe('getAccountEntriesBeforeYear', () => {
+  it('returns only entries from years strictly before the given year', async () => {
+    const household = await makeHousehold('Prior years entries A');
+    try {
+      const [category] = await db
+        .insert(categories)
+        .values({ householdId: household.id, name: 'Groceries', direction: 'expense' })
+        .returning();
+      const [bank] = await db
+        .insert(bankAccounts)
+        .values({ householdId: household.id, name: 'Checking' })
+        .returning();
+      await db.insert(monthlyEntries).values([
+        {
+          householdId: household.id,
+          year: 2024,
+          month: 6,
+          item: 'Old expense',
+          categoryId: category.id,
+          bankAccountId: bank.id,
+          budgetedAmount: '100.00',
+          actualAmount: '100.00',
+        },
+        {
+          householdId: household.id,
+          year: 2025,
+          month: 1,
+          item: 'This year expense',
+          categoryId: category.id,
+          bankAccountId: bank.id,
+          budgetedAmount: '50.00',
+        },
+      ]);
+
+      const rows = await getAccountEntriesBeforeYear(household.id, 2025);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        bankAccountId: bank.id,
+        direction: 'expense',
+        amountCents: 10000,
+      });
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  it('prefers actual over budgeted per entry, same as getDashboardRows', async () => {
+    const household = await makeHousehold('Prior years entries B');
+    try {
+      const [category] = await db
+        .insert(categories)
+        .values({ householdId: household.id, name: 'Salary', direction: 'income' })
+        .returning();
+      const [bank] = await db
+        .insert(bankAccounts)
+        .values({ householdId: household.id, name: 'Checking' })
+        .returning();
+      await db.insert(monthlyEntries).values({
+        householdId: household.id,
+        year: 2024,
+        month: 3,
+        item: 'Pay',
+        categoryId: category.id,
+        bankAccountId: bank.id,
+        budgetedAmount: '5000.00',
+        actualAmount: '5200.00',
+      });
+
+      const rows = await getAccountEntriesBeforeYear(household.id, 2025);
+      expect(rows[0].amountCents).toBe(520000);
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  it('never returns rows from a different household (household scoping)', async () => {
+    const householdA = await makeHousehold('Prior years entries C-A');
+    const householdB = await makeHousehold('Prior years entries C-B');
+    try {
+      const [bank] = await db
+        .insert(bankAccounts)
+        .values({ householdId: householdB.id, name: 'Other' })
+        .returning();
+      await db.insert(monthlyEntries).values({
+        householdId: householdB.id,
+        year: 2024,
+        month: 1,
+        item: 'Other',
+        bankAccountId: bank.id,
+        budgetedAmount: '10.00',
+      });
+      const rows = await getAccountEntriesBeforeYear(householdA.id, 2025);
+      expect(rows).toEqual([]);
+    } finally {
+      await cleanup(householdA.id);
+      await cleanup(householdB.id);
+    }
+  });
+});
+
+describe('getCurrentMonthCategoryBudgets', () => {
+  it('only returns expense categories with a monthly budget cap set', async () => {
+    const household = await makeHousehold('Budget rows A');
+    try {
+      await db.insert(categories).values([
+        {
+          householdId: household.id,
+          name: 'Groceries',
+          direction: 'expense',
+          monthlyBudget: '400.00',
+        },
+        { householdId: household.id, name: 'No cap', direction: 'expense' },
+        {
+          householdId: household.id,
+          name: 'Salary',
+          direction: 'income',
+          monthlyBudget: '5000.00',
+        },
+      ]);
+
+      const rows = await getCurrentMonthCategoryBudgets(household.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        name: 'Groceries',
+        monthlyBudgetCents: 40000,
+        spentCents: 0,
+      });
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  it('sums current-month spend, preferring actual over budgeted per entry', async () => {
+    const household = await makeHousehold('Budget rows B');
+    try {
+      const [category] = await db
+        .insert(categories)
+        .values({
+          householdId: household.id,
+          name: 'Groceries',
+          direction: 'expense',
+          monthlyBudget: '400.00',
+        })
+        .returning();
+      const now = new Date();
+      await db.insert(monthlyEntries).values([
+        {
+          householdId: household.id,
+          year: now.getFullYear(),
+          month: now.getMonth() + 1,
+          item: 'Actualized',
+          categoryId: category.id,
+          budgetedAmount: '100.00',
+          actualAmount: '120.00',
+        },
+        {
+          householdId: household.id,
+          year: now.getFullYear(),
+          month: now.getMonth() + 1,
+          item: 'Forecast only',
+          categoryId: category.id,
+          budgetedAmount: '50.00',
+        },
+      ]);
+
+      const rows = await getCurrentMonthCategoryBudgets(household.id);
+      expect(rows[0].spentCents).toBe(17000); // 120.00 (actual) + 50.00 (budgeted fallback)
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  it('never returns rows from a different household (household scoping)', async () => {
+    const householdA = await makeHousehold('Budget rows C-A');
+    const householdB = await makeHousehold('Budget rows C-B');
+    try {
+      await db.insert(categories).values({
+        householdId: householdB.id,
+        name: 'Other',
+        direction: 'expense',
+        monthlyBudget: '100.00',
+      });
+      const rows = await getCurrentMonthCategoryBudgets(householdA.id);
+      expect(rows).toEqual([]);
+    } finally {
+      await cleanup(householdA.id);
+      await cleanup(householdB.id);
     }
   });
 });
