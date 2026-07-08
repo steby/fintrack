@@ -201,6 +201,82 @@ Re-verified after fixes: lint/typecheck/build clean, 31/31 unit tests (100% cove
 the gated scope, up from 21), 3/3 integration tests against the live `dev` branch
 (including a new deterministic test for `pingDb`'s false/timeout path), 2/2 E2E.
 
+**Second hardening pass (`/code-review` on the pass above, extra-high effort,
+2026-07-08):** Reviewing a fix commit with the same rigor as the original code caught
+that the fix commit itself introduced real regressions, and — more importantly — that
+the `seed.ts` fix never actually worked. 15 findings, all fixed except one (correct
+behavior, not a bug):
+
+- _Fixed for real this time_ — the original `seed.ts` complaint (`SESSION_SECRET`
+  blocking a seed-only workflow with a confusing error) was still unresolved after the
+  first pass's fix: `SEED_OWNER_EMAIL`/`PASSWORD` had been folded into the shared
+  `envSchema`, but `seed.ts` still statically imported `env`/`pool` at module top level,
+  so the app's full env was still validated — `SESSION_SECRET` and all — before
+  `main()`'s own check ever ran. Root cause this time: moved `SEED_OWNER_EMAIL`/
+  `PASSWORD` back to a local schema checked directly against `process.env`, and made the
+  `./index`/`../log` imports **dynamic**, deferred until after that check passes.
+  Verified live: `DATABASE_URL` set, `SESSION_SECRET` **and** `SEED_OWNER_*` all
+  blank now correctly shows the seed-specific error, not `SESSION_SECRET`'s — the actual
+  original scenario, genuinely fixed. Caught my own near-miss while verifying: a
+  _static_ `import { formatZodIssues } from '../env'` for error formatting would have
+  silently defeated the whole fix (ES imports evaluate the entire target module,
+  including its `loadEnv()` side effect, even for a single named import) — inlined the
+  formatter instead of importing it.
+- _Fixed_ — that same schema move also fixes a regression the first pass introduced:
+  `SEED_OWNER_EMAIL`/`PASSWORD` being in the shared schema meant a malformed value could
+  crash `next dev`/`build`/`drizzle-kit`, not just `db:seed`. Verified live.
+- _Fixed_ — the main `pool` (every real app query, not just health checks) had zero
+  timeout; only the narrow `healthCheckPool` from the first pass was hardened. Added
+  `statement_timeout` (real Postgres-side cancellation) + `query_timeout` +
+  `connectionTimeoutMillis` to the main pool too.
+- _Fixed_ — `pool.on('error', ...)` was re-attached on every module evaluation even when
+  the pool itself was reused from the `globalThis` cache, leaking a listener per Next.js
+  HMR reload. Extracted `createPool()`, which only attaches the listener when a pool is
+  actually freshly constructed. Verified with 15 simulated reloads: listener count held
+  at 1 (previously grew 1:1 per reload).
+- _Fixed_ — the code comment claiming `query_timeout` "aborts the query at the pg
+  protocol level" was factually wrong (traced `node_modules/pg`: it's a client-side timer
+  only, no real `CancelRequest` is sent); corrected, and `statement_timeout` — which
+  genuinely is server-enforced — added alongside it.
+- _Fixed_ — `healthCheckPool`'s `max: 1` could false-report "DB down" under concurrent
+  health checks; bumped to `max: 2`. Error log now tagged with which pool (main vs.
+  health-check) emitted it.
+- _Fixed_ — blank-normalizing `DATABASE_URL`/`SESSION_SECRET` to `undefined` (the first
+  pass's own fix) lost their specific custom error messages to zod's generic "received
+  undefined". Used zod v4's `error` callback (verified against the installed version,
+  not assumed from v3 knowledge — `required_error` silently doesn't work in v4) to give
+  a specific "X is required" message for the blank/missing case while keeping `.min()`/
+  `.url()`'s own messages for the present-but-invalid case.
+- _Fixed_ — `getSentry()`'s `??=`-cached promise would cache a **rejected** promise
+  forever (a rejected Promise is still non-nullish, so `??=` never retries). Added a
+  `.catch()` that resets the cache so a later call can retry. Closed the only current
+  path to that rejection too (unguarded `logger.warn` inside two catch blocks) via a
+  `warnFallback()` helper that cannot itself throw.
+- _Fixed_ — `captureException`'s Sentry-forwarding call had no try/catch, so a throwing
+  real Sentry client could break its own "safe to call from any error path" contract.
+  Wrapped it. Added a real, reachable test (mocked Sentry client's `captureException`
+  throwing) plus a test that simulates an unexpected env-access failure to prove the
+  cache genuinely resets and a retry succeeds, not just that the first call is handled.
+- _Fixed_ — `vi.resetModules()` does not clear `vi.doMock` registrations (confirmed
+  against Vitest's own source) — the "package is missing" test's correctness was
+  silently depending on no earlier test in the file having mocked `@sentry/nextjs`.
+  Added `vi.doUnmock('@sentry/nextjs')` to `beforeEach`.
+- _Fixed_ — the new tight-timeout `pingDb` test intentionally leaves an orphaned query
+  running against the health pool; `afterAll`'s cleanup wait for it was within a hair of
+  Vitest's 10s default `hookTimeout`. Bumped to 20000ms for the integration project.
+- _Accepted as correct, not fixed_ — blank `NODE_ENV` falling back to its zod default
+  instead of erroring. This is the general blank-to-absent rule (introduced by the first
+  pass) working exactly as designed, applied consistently — not a bug to special-case
+  back out for one field.
+
+Re-verified end to end, not just re-run: lint/typecheck/build clean, 38/38 unit tests
+(100% coverage, up from 31), 3/3 integration tests against the live `dev` branch, 2/2
+E2E, Semgrep 0 findings. Manually reproduced the exact original bug scenario and
+confirmed the fix; confirmed the malformed-`SEED_OWNER_EMAIL` regression no longer
+crashes env loading; confirmed 15 simulated HMR reloads hold `listenerCount` at 1;
+re-ran the seed script twice for idempotency; confirmed `migrate.ts` still runs cleanly
+against the new pool config.
+
 ---
 
 <!--

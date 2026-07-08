@@ -141,7 +141,7 @@ describe('loadEnv', () => {
     );
   });
 
-  it('falls through to zod\'s own message for a wrong-type (not merely absent) required value', () => {
+  it("falls through to zod's own message for a wrong-type (not merely absent) required value", () => {
     // loadEnv's declared type is Record<string, string | undefined>, so this can only
     // happen via a caller bypassing that type — exercises the `required()` helper's
     // "input is present but not undefined" branch, distinct from the missing/blank cases
