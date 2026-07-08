@@ -41,6 +41,17 @@ jobs:
           docker run --rm -v "$GITHUB_WORKSPACE:/repo" zricethezav/gitleaks:latest \
             detect --source /repo -v --exit-code 1
 
+      - name: Static analysis (Semgrep)
+        # JS/TS-specific packs only (not p/security-audit, which pulls in Python/Go/Java/
+        # Ruby/PHP rules irrelevant to this repo and is dramatically slower to no benefit).
+        # Runs entirely in-container via CLI — no GitHub Code Scanning/Advanced Security
+        # dependency, so it works the same on private repos with no billing implications.
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src semgrep/semgrep \
+            semgrep scan --config=p/javascript --config=p/typescript --error --metrics=off \
+            lib app e2e drizzle.config.ts vitest.config.ts vitest.setup.integration.ts \
+            playwright.config.ts next.config.ts eslint.config.mjs
+
       - name: Dependency audit (fails on high/critical)
         run: npm audit --audit-level=high
 

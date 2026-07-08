@@ -11,7 +11,11 @@ toolchain for an already-superseded major has no upside. Next.js itself warns (s
 `node_modules/next/dist/docs/` before assuming App Router API shape. Auth: confirmed **custom
 session-table auth** over Neon Auth (Stack Auth) — our household/role/invite model was already
 designed around it; Neon Auth's Teams model would require adapting our design to theirs, not
-saving work, and avoids a third-party identity dependency on top of Neon itself.
+saving work, and avoids a third-party identity dependency on top of Neon itself. SAST: swapped
+**CodeQL for Semgrep** — CodeQL's SARIF upload requires GitHub Code Scanning, which on a
+private repo needs GitHub Advanced Security (a paid feature, potential billing impact).
+Semgrep runs entirely in the CI job via Docker (`p/javascript` + `p/typescript` packs), needs
+no GitHub feature/account, and is free regardless of repo visibility or plan.
 
 ## Context
 
@@ -42,7 +46,7 @@ Vercel Cron · Tailwind v4 + shadcn/ui (light+dark) · Recharts · lucide-react 
 
 ESLint (next + security plugin) + Prettier · tsc strict · zod at every edge · Vitest
 (+ fast-check on money math) · Playwright E2E · coverage gate **80% on `lib/**` pure logic** ·
-npm audit + Dependabot (SCA) · gitleaks (secrets) · CodeQL (SAST) · pino structured logging ·
+npm audit + Dependabot (SCA) · gitleaks (secrets) · Semgrep (SAST) · pino structured logging ·
 Sentry adapter behind `SENTRY_DSN` (keys-optional) · `/api/health` · GitHub Actions:
 `lint → typecheck → unit → integration → build → E2E` + scans; high-sev blocks. Toolchain
 pinned (`.nvmrc` + `engines`), lockfile committed.
@@ -148,7 +152,7 @@ CI secrets.
    Playwright (chromium; one smoke spec: `/api/health` 200 + login page renders). Coverage
    gate 80% on `lib/**`.
 8. CI (`.github/workflows/ci.yml`): lint → typecheck → unit → integration → build → E2E;
-   plus gitleaks, npm audit (high-sev fails), CodeQL, Dependabot config, coverage gate.
+   plus gitleaks, Semgrep, npm audit (high-sev fails), Dependabot config, coverage gate.
 9. Seed: `lib/db/seed.ts` — deterministic, **idempotent via natural-key upserts**; npm script
    `db:seed`. Prove: run twice → second run 0 errors 0 duplicates (assert row counts equal).
 10. Adversarial pass: break CI on purpose once (failing test, planted fake secret) to prove
