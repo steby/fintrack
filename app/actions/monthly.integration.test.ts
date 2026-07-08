@@ -207,6 +207,37 @@ describe('overrideBudgetAction', () => {
 
     await cleanup(member.household.id);
   });
+
+  it('cannot override the budget of an entry in a DIFFERENT household (cross-tenant probe)', async () => {
+    const { overrideBudgetAction } = await import('./monthly');
+    const memberA = await makeHouseholdWithUser('member', 'Monthly override C-A');
+    const memberB = await makeHouseholdWithUser('member', 'Monthly override C-B');
+    const [entryInB] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: memberB.household.id,
+        year: 2026,
+        month: 1,
+        item: 'B Entry',
+        budgetedAmount: '100.00',
+      })
+      .returning();
+
+    mockToken = memberA.token;
+    const result = await overrideBudgetAction(
+      undefined,
+      formData({ id: entryInB.id, budgetedAmount: '999.00' }),
+    );
+
+    expect(result).toEqual({ error: 'Entry not found.' });
+    const [unchanged] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entryInB.id));
+    expect(unchanged).toMatchObject({ budgetedAmount: '100.00', isOverridden: false });
+
+    await cleanup(memberA.household.id, memberB.household.id);
+  });
 });
 
 describe('addAdhocAction', () => {
@@ -251,6 +282,34 @@ describe('addAdhocAction', () => {
     expect(result).toEqual({ error: 'Category not found.' });
 
     await cleanup(memberA.household.id, memberB.household.id);
+  });
+
+  it('rejects a negative budgeted amount (adversarial)', async () => {
+    const { addAdhocAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Monthly adhoc E');
+    mockToken = member.token;
+
+    const result = await addAdhocAction(
+      undefined,
+      formData({ year: '2026', month: '3', item: 'Car Repair', budgetedAmount: '-1' }),
+    );
+    expect(result).toEqual({ error: 'Enter a valid, non-negative budgeted amount.' });
+
+    await cleanup(member.household.id);
+  });
+
+  it('rejects a NaN actual amount (adversarial)', async () => {
+    const { addAdhocAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Monthly adhoc F');
+    mockToken = member.token;
+
+    const result = await addAdhocAction(
+      undefined,
+      formData({ year: '2026', month: '3', item: 'Car Repair', actualAmount: 'NaN' }),
+    );
+    expect(result).toEqual({ error: 'Enter a valid, non-negative actual amount.' });
+
+    await cleanup(member.household.id);
   });
 
   it('rejects a blank item name', async () => {
@@ -351,5 +410,27 @@ describe('deleteEntryAction', () => {
     );
 
     await cleanup(viewer.household.id);
+  });
+
+  it('cannot delete an ad-hoc entry in a DIFFERENT household (cross-tenant probe)', async () => {
+    const { deleteEntryAction } = await import('./monthly');
+    const memberA = await makeHouseholdWithUser('member', 'Monthly delete D-A');
+    const memberB = await makeHouseholdWithUser('member', 'Monthly delete D-B');
+    const [entryInB] = await db
+      .insert(monthlyEntries)
+      .values({ householdId: memberB.household.id, year: 2026, month: 1, item: 'B Ad-hoc' })
+      .returning();
+
+    mockToken = memberA.token;
+    const result = await deleteEntryAction(undefined, formData({ id: entryInB.id }));
+
+    expect(result).toEqual({ error: 'Entry not found.' });
+    const [stillThere] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entryInB.id));
+    expect(stillThere).toBeDefined();
+
+    await cleanup(memberA.household.id, memberB.household.id);
   });
 });

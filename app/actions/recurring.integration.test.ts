@@ -193,6 +193,33 @@ describe('toggleRecurringAction', () => {
 
     await cleanup(member.household.id);
   });
+
+  it('cannot toggle a recurring item in a DIFFERENT household (cross-tenant probe)', async () => {
+    const { toggleRecurringAction } = await import('./recurring');
+    const memberA = await makeHouseholdWithUser('member', 'Recur toggle B-A');
+    const memberB = await makeHouseholdWithUser('member', 'Recur toggle B-B');
+    const [itemInB] = await db
+      .insert(recurringSchedule)
+      .values({
+        householdId: memberB.household.id,
+        item: 'B Item',
+        frequency: 'Monthly',
+        isActive: true,
+      })
+      .returning();
+
+    mockToken = memberA.token;
+    const result = await toggleRecurringAction(undefined, formData({ id: itemInB.id }));
+
+    expect(result).toEqual({ error: 'Recurring item not found.' });
+    const [unchanged] = await db
+      .select()
+      .from(recurringSchedule)
+      .where(eq(recurringSchedule.id, itemInB.id));
+    expect(unchanged.isActive).toBe(true);
+
+    await cleanup(memberA.household.id, memberB.household.id);
+  });
 });
 
 describe('generateAction', () => {
@@ -543,5 +570,30 @@ describe('deleteRecurringAction', () => {
     expect(surviving.recurringScheduleId).toBeNull();
 
     await cleanup(member.household.id);
+  });
+
+  it('cannot delete a recurring item in a DIFFERENT household (cross-tenant probe)', async () => {
+    const { deleteRecurringAction } = await import('./recurring');
+    const memberA = await makeHouseholdWithUser('member', 'Recur delete C-A');
+    const memberB = await makeHouseholdWithUser('member', 'Recur delete C-B');
+    const [itemInB] = await db
+      .insert(recurringSchedule)
+      .values({ householdId: memberB.household.id, item: 'B Item', frequency: 'Monthly' })
+      .returning();
+
+    mockToken = memberA.token;
+    const result = await deleteRecurringAction(
+      undefined,
+      formData({ id: itemInB.id, removeForecast: 'yes' }),
+    );
+
+    expect(result).toEqual({ error: 'Recurring item not found.' });
+    const [stillThere] = await db
+      .select()
+      .from(recurringSchedule)
+      .where(eq(recurringSchedule.id, itemInB.id));
+    expect(stillThere).toBeDefined();
+
+    await cleanup(memberA.household.id, memberB.household.id);
   });
 });

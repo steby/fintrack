@@ -250,4 +250,26 @@ describe('deleteAccountAction', () => {
 
     await cleanup(member.household.id);
   });
+
+  it('cannot delete an account in a DIFFERENT household (cross-tenant probe)', async () => {
+    const { deleteAccountAction } = await import('./accounts');
+    const memberA = await makeHouseholdWithUser('member', 'Acct delete C-A');
+    const memberB = await makeHouseholdWithUser('member', 'Acct delete C-B');
+    const [acctInB] = await db
+      .insert(bankAccounts)
+      .values({ householdId: memberB.household.id, name: 'B Acct', accountType: 'bank' })
+      .returning();
+
+    mockToken = memberA.token;
+    const result = await deleteAccountAction(undefined, formData({ id: acctInB.id }));
+
+    expect(result).toEqual({ error: 'Account not found.' });
+    const [stillThere] = await db
+      .select()
+      .from(bankAccounts)
+      .where(eq(bankAccounts.id, acctInB.id));
+    expect(stillThere).toBeDefined();
+
+    await cleanup(memberA.household.id, memberB.household.id);
+  });
 });

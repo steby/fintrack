@@ -32,6 +32,21 @@ package (used to guard `lib/auth/session.ts`/`guards.ts` against accidental clie
 import) needed to be explicitly installed — Next's bundler resolves it internally without
 installation, but plain Node/Vitest cannot, which only surfaced when writing unit tests.
 
+**Phase 2 deviations:** category/account delete uses the schema's existing `ON DELETE SET
+NULL` foreign keys (`lib/db/schema.ts`) instead of an application-level transaction that
+manually nullifies `recurring_schedule`/`monthly_entries` references — this phase plan
+originally said "delete nullifies refs in a transaction." Same observable behavior (delete
+the row, every reference goes null), but enforced by Postgres itself as part of the single
+`DELETE` statement, which is stronger than an app-level transaction (it holds even for a
+future delete path that forgets to wrap itself in one). Added `overrideBudgetAction`
+(`app/actions/monthly.ts`) beyond the plan's literal `updateActual`/`addAdhoc`/`deleteEntry`
+action list — the plan already specifies `is_overridden` and its propagation-skip edge case,
+but the reference app has no mechanism that ever sets that column; this is the minimal
+capability that makes it reachable (override one forecast month's budgeted amount in place).
+`deleteEntryAction` restricts deletion to ad-hoc entries (`recurring_schedule_id IS NULL`)
+server-side — the reference app only hid the delete control in the UI for recurring-generated
+rows but never enforced it in the handler itself.
+
 ## Context
 
 `FinanceTracker/` (sibling project, not in this repo) is a single-user finance planner

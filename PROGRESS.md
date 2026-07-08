@@ -702,6 +702,132 @@ a Tier-2 app rather than adding machinery to keep them in sync).
 
 ---
 
+## Phase 2: Core domain — categories, accounts, recurring, monthly — status: complete 2026-07-08
+
+**What shipped** (three sub-slice commits, per-slice CI-green checkpoints, matching how
+Phase 0/1 shipped — Phase 2 as a whole is too broad for one atomic commit):
+
+- **lib/money.ts / lib/format.ts** — integer-cents conversion at the `numeric(12,2)` DB
+  boundary (parse/format only, never mid-calculation) plus zod trust-boundary schemas
+  (`moneyInputSchema`/`optionalMoneyInputSchema`) reused by every money form field across
+  the phase. `lib/format.ts` is the only place a `$`/SGD symbol gets rendered — no
+  hardcoded currency literals anywhere else (the original app's USD/SGD bug class).
+- **lib/domain/recurring.ts, month-status.ts, entries.ts, month-params.ts** — pure,
+  100%-covered logic: `shouldGenerate`/`parseScheduleMonths`/`walkMonths`/`addMonths`
+  (recurring generation, ported from FinanceTracker's `generate` action),
+  `deriveMonthStatus`, `shouldPropagate`/`getDifference`, and URL-param
+  parsing/clamping for `?year=`/`?month=`/`?view=`. Property-tested (fast-check) per
+  spec.md's Tier-2 money-math hardening: date-walk never skips/duplicates a month,
+  `addMonths` round-trips, `getDifference` never produces NaN.
+- **Categories + accounts** — household-scoped CRUD Server Actions; delete relies on the
+  schema's existing `ON DELETE SET NULL` FKs (simpler and more atomic than the
+  reference app's manual nullify-then-delete). New `/settings/categories` page.
+- **Recurring schedule** — CRUD + toggle (atomic `SET is_active = NOT is_active`, no
+  read-then-write race) + generate (`lib/generate-entries.ts`: walks the range, bulk
+  `INSERT ... ON CONFLICT DO NOTHING` against the existing
+  `(household_id, year, month, recurring_schedule_id)` unique index — idempotent,
+  bounded to 120 months per call against a forged huge range) + edit-with-propagate
+  (fetches candidate `monthly_entries` rows and filters them through the actual tested
+  `shouldPropagate()` function, not a hand-translated SQL WHERE clause that could
+  drift). New `/recurring` page.
+- **Monthly entries** — `updateActualAction` (amount+date, matches the reference app),
+  `overrideBudgetAction` (a Phase 2 addition: lets one forecast month's budgeted amount
+  be corrected in place, setting `is_overridden` — the capability that actually gives
+  that column and `shouldPropagate`'s guard something to protect), `addAdhocAction`
+  (+`paid_by` tagging), `deleteEntryAction` (server-enforced ad-hoc-only — the reference
+  app only hid the delete button in the UI for recurring-generated rows but never
+  rejected the request itself). New `/monthly` page: calendar/agenda/list views behind
+  a clamped `?view=` param, month tabs with status dots, summary bar, inline actual
+  entry, ad-hoc add.
+- **lib/flags.ts** — `household_settings`-backed kill-switch reader (spec.md's chosen
+  runtime source) with a 30s in-memory cache; `auto_generate` wired up as the Monthly
+  page's on-load hook, materializing the next 3 months every page load (idempotent, so
+  repeat loads are cheap no-ops) unless the owner flips it off.
+- **lib/db/seed.ts** — extended with the reference app's real categories/accounts/
+  recurring items (ported from `FinanceTracker/src/lib/server/db.ts`), idempotent via
+  natural-key checks, runs regardless of whether the owner/household was newly created
+  or already existed.
+
+**Test/CI status:** Unit 177/177 (100% coverage on the gated `lib/**` scope — DB-bound
+modules `lib/flags.ts` and `lib/generate-entries.ts` excluded from the gate, same
+precedent as `lib/db/index.ts`, exercised by integration tests instead). Integration
+90/90 against the live `dev` branch. E2E 18/18 (chromium) including three new full
+browser-driven specs (`categories.spec.ts`, `recurring.spec.ts`, `monthly.spec.ts`) that
+each cover a real login → mutate → verify → viewer-read-only flow, not just the happy
+path. `npm run build` green. All three sub-slices individually confirmed CI-green before
+the next one started (`890a926`, `2564f49`, `e4e01fe`, `14dcc28`).
+
+**Failure modes handled:** every money form field rejects negative/NaN/malformed input
+at the zod trust boundary before it reaches a query; `schedule_months` is validated AND
+normalized through the same parser `shouldGenerate` reads back later, so stored data and
+validation can never drift apart; a forged huge generate range is capped at 120 months
+instead of attempting an unbounded insert; every mutation scopes its `WHERE` by
+`household_id`, not just by row id (cross-tenant probes return a generic "not found,"
+never revealing whether the id exists in another household).
+
+**Key decisions and why (deviations/additions beyond the original plan):**
+
+1. **`overrideBudgetAction` — a genuine addition beyond the reference app.** spec.md's
+   Phase 2 task list only names `updateActual`/`addAdhoc`/`deleteEntry`, but it also
+   explicitly calls out `is_overridden` and the edge case "is_overridden set then
+   recurring edit propagates" as in-scope. The reference app has no mechanism that ever
+   sets that column, which would leave it dead. Added a scoped, minimal capability
+   (override one forecast month's budgeted amount) instead of leaving the column and
+   its propagation guard untested and unreachable.
+2. **`deleteEntryAction` restricted to ad-hoc entries, server-side.** The reference app
+   only hides the delete button in the UI for recurring-generated rows; the server
+   action itself deletes anything by id. Closed this — an attacker forging the request
+   directly could otherwise delete a generated forecast month without going through the
+   recurring item's own `removeForecast` path.
+3. **Generate logic factored into `lib/generate-entries.ts`**, not left inline in the
+   Server Action, once the Monthly page's auto-generate hook needed the exact same
+   walk-and-bulk-insert behavior — one implementation, not two copies that could drift.
+4. **List view adds an "Uncategorized" section** the reference app doesn't have. Its
+   table view filters entries into income/expense groups by category direction; an
+   entry with no category matches neither filter and silently never renders. Caught
+   during E2E testing (a real recurring item with no category selected simply
+   vanished from list view). Calendar/agenda views were never affected — they group by
+   scheduled day, not category, so every entry was already visible there.
+
+**Real bugs found and fixed (root cause, not just "fixed a bug"):**
+
+- **List view silently dropped uncategorized entries** — see decision #4 above. Root
+  cause: two mutually-exclusive filters (`direction === 'income'` /
+  `direction === 'expense'`) with no fallback bucket for `direction === null`. Fixed by
+  adding a third "Uncategorized" group.
+- **`e2e/monthly.spec.ts`'s cleanup leaked a row on every run.** The test renames its
+  recurring item mid-run (the propagate step) but `afterAll` only deleted by the
+  _original_ name, so the renamed row was never matched and never deleted. Found
+  indirectly: `npm run db:seed`'s idempotency check reported 20 recurring items in the
+  household when only 17 were defined, in a database no test should have been able to
+  leave dirty. Traced to 3 orphaned `"E2E Monthly Item ... propagated"` rows from prior
+  test runs; fixed the cleanup query to match both names and manually removed the
+  existing orphans from the `dev` branch.
+- **`accounts.integration.test.ts` queried `bank_accounts` by name only, no household
+  scope.** Harmless in isolation, but once `lib/db/seed.ts` started creating its own
+  "Credit Card" account in a different household, the unscoped query could
+  nondeterministically return the wrong row — the test started failing intermittently
+  the moment seed data existed. Scoped the query by `household_id`.
+- **Toggle-recurring-active used a naive read-then-write initially, reconsidered before
+  shipping**: implemented directly as an atomic `SET is_active = NOT is_active` instead,
+  so two concurrent toggle clicks always net out to "flipped twice" rather than a
+  lost-update race where both requests read the same starting value.
+
+**Deferred / blocked:** one known, accepted gap — the Monthly page's summary bar totals
+(budgeted/actual income and expense) only sum entries with a category direction, so an
+uncategorized entry's amount doesn't appear in either total (list view still shows the
+entry itself, per the fix above; only the aggregate is affected). Direction-less
+amounts genuinely can't be classified as income or expense, so there's no obviously
+correct number to add them to — left as-is rather than guessing, with no UI indicator
+that a total might be incomplete. Worth a visual cue in a later pass. Everything else:
+categories/accounts/recurring/monthly-entries business logic is now fully live (the
+tables existed since Phase 1's migration, per the phase plan's "Phase 2 adds no new
+tables"). Dashboard aggregation, category budget caps, goals, net worth, CSV
+import/export, email/cron, and PWA remain later phases per `spec.md`'s numbered plan —
+nothing from this phase's own scope was skipped or shortcut.
+
+---
+
 <!--
 Copy the block above for each new phase. Keep sections in phase order. Convert relative
 dates to absolute (e.g. "today" -> the actual date) so the log stays readable later.
