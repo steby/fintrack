@@ -42,42 +42,52 @@ async function main() {
   // first — same reasoning as lib/db/seed.ts's dynamic import of ./index/../log.
   const [{ pool, db }, { logger }] = await Promise.all([import('./index'), import('../log')]);
 
-  const result = await db.transaction(async (tx) => {
-    const e2eEntries = await tx
-      .delete(monthlyEntries)
-      .where(like(monthlyEntries.item, 'E2E %'))
-      .returning({ id: monthlyEntries.id });
-    const e2eItems = await tx
-      .delete(recurringSchedule)
-      .where(like(recurringSchedule.item, 'E2E %'))
-      .returning({ id: recurringSchedule.id });
-    const e2eCategories = await tx
-      .delete(categories)
-      .where(like(categories.name, 'E2E %'))
-      .returning({ id: categories.id });
-    const e2eAccounts = await tx
-      .delete(bankAccounts)
-      .where(like(bankAccounts.name, 'E2E %'))
-      .returning({ id: bankAccounts.id });
-    const e2eUsers = await tx
-      .delete(users)
-      .where(like(users.email, 'e2e-%@example.com'))
-      .returning({ id: users.id });
+  try {
+    const result = await db.transaction(async (tx) => {
+      const e2eEntries = await tx
+        .delete(monthlyEntries)
+        .where(like(monthlyEntries.item, 'E2E %'))
+        .returning({ id: monthlyEntries.id });
+      const e2eItems = await tx
+        .delete(recurringSchedule)
+        .where(like(recurringSchedule.item, 'E2E %'))
+        .returning({ id: recurringSchedule.id });
+      const e2eCategories = await tx
+        .delete(categories)
+        .where(like(categories.name, 'E2E %'))
+        .returning({ id: categories.id });
+      const e2eAccounts = await tx
+        .delete(bankAccounts)
+        .where(like(bankAccounts.name, 'E2E %'))
+        .returning({ id: bankAccounts.id });
+      const e2eUsers = await tx
+        .delete(users)
+        .where(like(users.email, 'e2e-%@example.com'))
+        .returning({ id: users.id });
 
-    return {
-      e2eEntries: e2eEntries.length,
-      e2eItems: e2eItems.length,
-      e2eCategories: e2eCategories.length,
-      e2eAccounts: e2eAccounts.length,
-      e2eUsers: e2eUsers.length,
-    };
-  });
+      return {
+        e2eEntries: e2eEntries.length,
+        e2eItems: e2eItems.length,
+        e2eCategories: e2eCategories.length,
+        e2eAccounts: e2eAccounts.length,
+        e2eUsers: e2eUsers.length,
+      };
+    });
 
-  logger.info(result, 'Cleaned stale E2E debris (idempotent).');
-  await pool.end();
+    logger.info(result, 'Cleaned stale E2E debris (idempotent).');
+    await pool.end();
+  } catch (err) {
+    // The real logger is available here (the dynamic import above already succeeded), so
+    // failures after that point — DB unreachable, transaction failure, etc. — get proper
+    // structured logging with a stack trace, not just the outer catch's bare message.
+    logger.error({ err }, 'E2E debris cleanup failed');
+    process.exit(1);
+  }
 }
 
 main().catch((err) => {
+  // Only reachable for failures *before* the dynamic imports above succeed — i.e. the
+  // CI-only guard throw — since the real logger isn't available yet at that point.
   console.error('E2E debris cleanup failed:', err instanceof Error ? err.message : err);
   process.exit(1);
 });

@@ -971,8 +971,9 @@ public (unlimited Actions minutes on standard runners) rather than throttle deve
 - CI is now fully green end to end (all steps, including E2E) on the public repo, confirming
   the Actions-minutes block is resolved.
 
-**`/code-review` pass on the above (before starting Phase 3), 14 findings, 7 fixed, 1 critical
-item found unresolved and escalated (see below), 3 deferred:**
+**`/code-review` pass on the above (before starting Phase 3), 14 findings — 11 fixed or
+resolved (several findings shared one underlying code change, hence fewer bullets below than
+findings), 3 deferred:**
 
 The first version of the CI cleanup script (`lib/db/clean-legacy-data.ts` at the time) had a
 critical bug: its legacy-name list included 7 names that are _also_ current, active names in
@@ -1020,8 +1021,8 @@ exist at all, not just get its colliding entries trimmed.
   violation of `AGENTS.md`'s "update spec.md immediately" rule — caught by the review's
   conventions angle, not spotted proactively).
 
-**⚠ UNRESOLVED — found by a re-review pass on this fix, requires the owner's explicit
-decision, deliberately NOT acted on:**
+**⚠ UNRESOLVED — found by a separate re-review pass on this fix (not one of the 14 findings
+above), requires the owner's explicit decision, deliberately NOT acted on:**
 
 - **The original, real-named `LEGACY_SEED_ITEM_NAMES`/`LEGACY_SEED_BANK_NAMES` content is
   still reachable in this repo's git history, on the public remote, right now.** Removing the
@@ -1047,11 +1048,10 @@ origin/main` returns true, and `git show 8ebf134:lib/db/clean-legacy-data.ts` (o
   full-history grep to confirm. Low risk to execute (same repo, no other collaborators, a
   backup bundle from the earlier rewrite already exists locally), just outside standing
   overnight authorization.
-- Also worth a look while addressing this: `app/actions/accounts.integration.test.ts` uses the
-  real bank brand names "DBS"/"OCBC" as arbitrary test-fixture values (pre-existing, not
-  introduced tonight, already reasoned about once this session as low-risk generic fixture
-  data) — not urgent on its own, but corroborates the leaked data above once cross-referenced,
-  so worth a second look in the same pass if convenient.
+- Also worth a look while addressing this: a pre-existing integration test file uses a couple
+  of real-world bank brand names as arbitrary fixture values (not introduced tonight, already
+  reasoned about once this session as low-risk generic fixture data on their own) — not urgent
+  by itself, but worth a second look in the same pass for consistency.
 
 Deferred, documented rather than fixed:
 
