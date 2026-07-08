@@ -369,6 +369,139 @@ after every test in this pass.
 
 ---
 
+## Phase 1 — Data model + auth + household sharing (2026-07-08)
+
+**What shipped:**
+
+- Full domain schema in `lib/db/schema.ts` (11 tables: `households`, `users`, `sessions`,
+  `household_invitations`, `household_settings`, `login_attempts`, `categories`,
+  `bank_accounts`, `recurring_schedule`, `monthly_entries`, `goals`) — every later phase
+  adds business logic on top, not new tables. Migration generated and applied to the
+  `dev` branch.
+- Pure logic (`lib/auth/*`): `token.ts` (opaque 32-byte bearer tokens), `password.ts`
+  (policy + argon2 hash/verify), `rbac.ts` (`can(role, action)` matrix), `session-rules.ts`
+  (sliding 30-day expiry + a "only renew past the halfway point" rule to avoid a DB write
+  on every request), `invite-rules.ts` (expiry/replay/token-mismatch validation),
+  `rate-limit.ts` (5 failed attempts / 15-minute window per email+IP).
+- Data layer: `lib/auth/session.ts` (create/read/revoke, cookie handling),
+  `lib/auth/guards.ts` (`requireUser`/`requireRole` — the real, DB-backed authorization
+  check used by every Server Action and page, independent of `proxy.ts`'s optimistic
+  check), Server Actions for login/logout/change-password
+  (`app/actions/auth.ts`), invite create/accept (`app/actions/invites.ts`), and member
+  role-change/removal (`app/actions/members.ts`) — all zod-validated, all requiring the
+  right role server-side.
+- `proxy.ts` — Next 16's replacement for `middleware.ts` (see deviation log in
+  `spec.md`). Does real (not just optimistic) session validation against Postgres and
+  owns sliding-expiry cookie renewal.
+- Keys-optional invite email (`lib/email/invite.ts`) — logs the accept URL when
+  `RESEND_API_KEY` is unset, sends via Resend with a 5s timeout + fallback-to-log
+  otherwise (full retry-with-backoff is Phase 6's job, alongside the dedup ledger).
+- UI: `app/login`, `app/invite/[token]`, an authenticated shell
+  (`app/(app)/layout.tsx` — sidebar, sign-out) and owner-only member management
+  (`app/(app)/settings/members`), built on shadcn/ui (initialized this phase).
+- `lib/db/seed.ts` now seeds a real household + owner user (idempotent via an
+  email-existence check) instead of Phase 0's "prove the mechanism" placeholder.
+
+**Test/CI status:** 91/91 unit tests (100% coverage on the gated scope), 21/21
+integration tests against the live `dev` branch, 10/10 E2E tests, lint/typecheck/build
+clean, local Semgrep (`p/javascript`+`p/typescript`) 0 findings.
+
+**Failure modes handled:**
+
+- DB unreachable during a `proxy.ts` session check → fails closed (treated as
+  unauthenticated, not silently authenticated), logged.
+- Malformed/tampered session cookie → no matching row, treated as unauthenticated, not
+  a crash (adversarial E2E test).
+- Resend down/timeout while sending an invite → invite row already exists regardless;
+  logged and the owner can share the link manually.
+- Argon2 verify against a corrupt/foreign hash string → returns `false`, not a throw.
+
+**Key decisions and why:**
+
+- Sessions are plain DB rows keyed by the opaque token itself (not JWT/encrypted) —
+  simplest correct option for household scale, real revocation (delete the row) instead
+  of waiting out a JWT's expiry, and no separate signing-key rotation story to build.
+- `proxy.ts` does a _real_ DB-backed check rather than the cookie-only "optimistic"
+  check Next's own docs suggest for Proxy — deliberate tradeoff: household-scale traffic
+  makes the extra query negligible, and it's the only place sliding-expiry renewal can
+  actually write a cookie (Server Components can't). Server Actions still independently
+  call `requireUser`/`requireRole` regardless, per Next's own explicit warning that a
+  matcher change or moved route can silently drop Proxy coverage.
+- Cross-household scoping on `changeMemberRoleAction`/`removeMemberAction` puts
+  `household_id` directly in the `WHERE` clause (not a separate ownership check after
+  fetching by id) and returns a generic "Member not found" for a cross-tenant target —
+  proven live via 21 real-DB integration tests, including two purpose-built
+  cross-household probes.
+- `formData`-based Server Actions throughout (not client-side `fetch`) — Next 16's
+  built-in CSRF/origin check for Server Actions (`Origin` compared to `Host`) covers
+  what `spec.md`'s "origin/CSRF checks" threat note asked for, with no custom code.
+
+**Real bugs found and fixed (all caught before this phase's final commit):**
+
+- A Playwright `beforeAll` fixture (a shared viewer test user) raced under the config's
+  `fullyParallel: true` — Playwright can shard one file's tests across workers, running
+  `beforeAll` more than once, causing a duplicate-key crash that cascaded into failing
+  every test in the file. Fixed with `test.describe.configure({ mode: 'serial' })`,
+  matching how the Vitest integration project already handles the same class of
+  shared-DB-state hazard.
+- `lib/db/index.integration.test.ts`'s pre-existing (Phase 0) tight-timeout test
+  (`pingDb(1)`) turned out to be genuinely flaky, not just theoretically fragile: it bet
+  a real network round-trip would always take longer than 1ms, which stopped holding as
+  the test process's connection to Neon warmed up over a long session, flipping the
+  assertion. Fixed by saturating the health pool's connection limit (`max: 2`) instead
+  of racing real network timing — deterministic regardless of latency, since a 3rd
+  concurrent request always has to wait for one of two held connections to free up.
+- `server-only` (used to guard `lib/auth/session.ts`/`guards.ts`) was never actually
+  installed as a dependency — `next build` succeeded anyway because Next's bundler
+  resolves it internally, but plain Vitest couldn't, which only surfaced once unit
+  tests tried to import those files. Installed explicitly (`npm install server-only`);
+  confirmed 0 new high/critical `npm audit` findings.
+- Self-inflicted: while investigating why `.rejects.toThrow(/unique/i)` wasn't matching
+  a real Postgres unique-constraint error (the real message is nested under
+  drizzle's wrapped error as `.cause`, not the top-level `.message` — fixed by
+  asserting on `err.cause.code === '23505'`, Postgres's unique_violation SQLSTATE,
+  instead of a message-text regex), a throwaway diagnostic script
+  (`lib/db/_tmp_check.ts`) ended with an unscoped `await db.delete(households)` — no
+  `.where()` clause. That deleted every household row (and, via cascade, every user,
+  including the seeded owner) from the live `dev` branch. Deleting the script file
+  afterward didn't undo the delete it had already run. Caught immediately when the next
+  E2E run failed with "Cannot read properties of undefined" on the owner lookup;
+  root-caused by checking table row counts directly. Fixed by re-running `npm run
+db:seed` (idempotent, built for exactly this recovery) and removing two orphaned test
+  households left over from crashed test runs. No production data was at risk (`dev`
+  branch only), but it's a genuine reminder to scope every ad-hoc script's writes, not
+  just the ones in committed code.
+- `e2e/test-db.ts` exported one module-level `Pool` singleton shared by every E2E spec
+  file, with each file's own `afterAll` independently calling `.end()` on it. Under
+  local `dev` runs (`workers: undefined`, parallel) this never surfaced; under CI's
+  config (`workers: 1`, `retries: 2`), Playwright runs spec files sequentially in one
+  process, so whichever file's `afterAll` ran first closed the pool out from under the
+  next file's tests — "Cannot use a pool after calling end on the pool," reported by
+  Playwright as a "flaky" test since the retry sometimes landed in a fresh worker.
+  Reproduced deterministically by running the full suite with `CI=true` locally, not
+  just inferred from the stack trace. Fixed by turning `test-db.ts` into a factory
+  (`createTestDb()`) that each spec file calls once for its own independent pool,
+  instead of a shared singleton — confirmed fixed with 4 consecutive full-suite
+  `CI=true` runs, all 10/10 green.
+- Separately, running the full E2E suite `CI=true` also exposed a real test-isolation
+  gap (not a flake): the "wrong password" test used the real seeded owner's email, and
+  the login rate limiter (5 failed attempts / 15-minute window, built this same phase)
+  correctly does its job — after enough repeated suite runs during development, the
+  owner's own login_attempts history crossed the threshold and started rejecting the
+  _legitimate_ login test too. The rate limiter wasn't the bug; sharing one identity
+  across a "wrong password" scenario and a "real login" scenario was. Fixed by giving
+  the wrong-password test its own dedicated, non-existent probe email (loginAction
+  returns the same generic error regardless of whether the email exists, so this loses
+  no coverage) and having the suite clear its own `login_attempts` rows in
+  `beforeAll`/`afterAll`, so a run's outcome never depends on how many times the suite
+  happened to run recently.
+
+**Deferred / blocked:** none. Categories/accounts/recurring/monthly-entries tables exist
+(created in this phase's migration per the phase plan) but have no business logic yet —
+that's Phase 2, which adds no new tables per the plan.
+
+---
+
 <!--
 Copy the block above for each new phase. Keep sections in phase order. Convert relative
 dates to absolute (e.g. "today" -> the actual date) so the log stays readable later.

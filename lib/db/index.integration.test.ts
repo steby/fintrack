@@ -20,9 +20,18 @@ describe('database connectivity', () => {
   });
 
   it('returns false (never throws) when the timeout is tighter than the round trip', async () => {
-    // An absurdly small timeout against a real, healthy DB deterministically exercises
-    // the "false" branch — proving pingDb reports failure cleanly rather than hanging
-    // or throwing, without needing to simulate an actually-hung database.
-    await expect(pingDb(1)).resolves.toBe(false);
+    // A bare 1ms timeout against a real query was flaky in practice: as the test
+    // process's connection to Neon warms up (TCP/TLS state reused across the many
+    // other queries this suite makes), a single 'SELECT 1' can legitimately complete
+    // in under 1ms, flipping this to true. Saturating the health pool's connection
+    // limit (max: 2) instead forces pingDb's query to wait in the pool's own queue —
+    // deterministic regardless of network speed, since a 3rd concurrent request always
+    // has to wait for one of the two held connections to free up.
+    const held = await Promise.all([healthCheckPool.connect(), healthCheckPool.connect()]);
+    try {
+      await expect(pingDb(1)).resolves.toBe(false);
+    } finally {
+      held.forEach((client) => client.release());
+    }
   });
 });

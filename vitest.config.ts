@@ -23,6 +23,9 @@ export default defineConfig({
         'lib/db/migrate.ts',
         'lib/db/schema.ts',
         'lib/db/seed.ts',
+        // shadcn/ui-generated helper (clsx + tailwind-merge one-liner) — vendor
+        // boilerplate, not application logic; clsx/tailwind-merge have their own tests.
+        'lib/utils.ts',
       ],
       thresholds: {
         lines: 80,

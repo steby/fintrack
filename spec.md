@@ -17,6 +17,21 @@ private repo needs GitHub Advanced Security (a paid feature, potential billing i
 Semgrep runs entirely in the CI job via Docker (`p/javascript` + `p/typescript` packs), needs
 no GitHub feature/account, and is free regardless of repo visibility or plan.
 
+**Phase 1 deviations:** `middleware.ts` → **`proxy.ts`** — Next.js 16 deprecated and renamed
+the `middleware` file convention to `proxy` (`export function proxy`, not `middleware`); the
+old name silently stops working. Runs on the Node.js runtime by default in v16 (previously
+Edge-only), which is what makes a real DB-backed session check inside it viable at all —
+`proxy.ts` does the actual (not just optimistic) session validation and owns sliding-expiry
+renewal, since Server Components can't write cookies (see `lib/auth/session.ts`). Added a
+**`login_attempts`** table (not in the original Data Model list) to back the "per-IP+username
+rate limit on login" requirement from the phase plan — 5 failed attempts per email+IP pair
+within a 15-minute trailing window (`lib/auth/rate-limit.ts`). Password policy: minimum 8
+characters, no forced complexity rules (NIST 800-63B guidance — prefer length over composition
+rules, no rotation requirement). Invite links expire after 7 days. The `server-only` npm
+package (used to guard `lib/auth/session.ts`/`guards.ts` against accidental client-component
+import) needed to be explicitly installed — Next's bundler resolves it internally without
+installation, but plain Node/Vitest cannot, which only surfaced when writing unit tests.
+
 ## Context
 
 `FinanceTracker/` (sibling project, not in this repo) is a single-user finance planner
