@@ -42,15 +42,14 @@ jobs:
         # already applied), so safe to run on every CI invocation.
         run: npm run db:migrate
 
-      - name: Clean stale test/legacy data
+      - name: Clean stale E2E test debris
         # The `ci` branch is long-lived, not reset per run, and this workflow's
         # concurrency.cancel-in-progress kills in-flight E2E runs on every superseding
         # push — normal during active development — before their own afterAll cleanup
         # executes. Left unchecked, orphaned "E2E "-prefixed rows accumulate run over
         # run and eventually bloat pages enough to blow E2E test timeouts. See
-        # lib/db/clean-legacy-data.ts for the full rationale (also handles one-time
-        # legacy-named rows from before seed.ts was genericized).
-        run: npm run db:clean-legacy
+        # lib/db/clean-e2e-debris.ts for the full rationale.
+        run: npm run db:clean-e2e-debris
 
       - name: Seed database
         # Idempotent (checks for an existing owner by email before inserting) — gives

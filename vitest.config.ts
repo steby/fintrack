@@ -23,6 +23,7 @@ export default defineConfig({
         'lib/db/migrate.ts',
         'lib/db/schema.ts',
         'lib/db/seed.ts',
+        'lib/db/clean-e2e-debris.ts',
         // Same reasoning as the DB plumbing above: every code path in here touches the
         // real household_settings table (even the cache-hit path needs a real DB read
         // to populate the cache first) — exercised by lib/flags.integration.test.ts.

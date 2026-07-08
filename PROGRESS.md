@@ -926,6 +926,122 @@ consecutive runs to rule out a test that only exercises one interleaving of the 
 
 ---
 
+## Post-Phase-2: repo made public, CI stabilized (2026-07-09)
+
+**What happened:** GitHub Actions started instant-failing every push with a billing message
+("recent account payments have failed or your spending limit needs to be increased"). Root
+cause: the private-repo free-tier Actions-minutes allowance was exhausted by heavy same-day CI
+iteration, and there's no payment method on file to raise it. Decision: flip the repo to
+public (unlimited Actions minutes on standard runners) rather than throttle development. See
+`spec.md`'s "Post-Phase-2 operational deviation" entry for the full record.
+
+**Before flipping, in order:**
+
+1. Genericized `lib/db/seed.ts` — it carried real personal/financial data ported verbatim from
+   the reference app: real salary/mortgage/rental-income figures, real Singapore bank names,
+   and real household-member first names embedded in several recurring-item labels. Replaced
+   with structurally equivalent fictional data (same category/account/frequency shapes,
+   including the Quarterly/Yearly `schedule_months` and `actual_date_day` edge cases the old
+   data exercised). Also scrubbed a stray name mention from `spec.md`. (Deliberately not
+   quoting the specific old values here — this file is committed to the now-public repo; see
+   the `/code-review` pass below for a case where that exact mistake almost shipped.)
+2. Rewrote git history (`git filter-repo --path lib/db/seed.ts --invert-paths`) to remove the
+   real data from _every_ prior commit, not just HEAD, then re-added the file fresh at the tip
+   and force-pushed. Verified with a full-history grep afterward that no trace of the real data
+   remains anywhere in the repo.
+3. Cleaned the real-data rows out of the dev Neon branch and reseeded from the new definitions;
+   proved idempotency (second `db:seed` run inserts 0 rows).
+4. Flipped `steby/fintrack` to public via `gh repo edit --visibility public`.
+
+**Fallout, found and fixed while confirming CI was actually green afterward:**
+
+- _Fixed_ — the history rewrite changed every commit SHA from the rewritten point forward,
+  which broke `.gitleaksignore`'s commit-SHA-pinned fingerprint for the Phase 0
+  planted-fake-secret allowlist entry. Updated to the new SHA; a transient checkout-cache lag
+  briefly had two different runs report two different SHAs for the same commit, so both are
+  now listed.
+- _Fixed_ — the `ci` Neon branch is long-lived and this workflow cancels in-flight runs on
+  every superseding push (`concurrency.cancel-in-progress`), which — combined with today's
+  rapid iteration and `seed.ts`'s by-name idempotency check leaving several old real-named rows
+  stuck instead of updated — had accumulated enough duplicate/orphaned rows to blow the
+  calendar view's E2E test timeout. Added a CI cleanup script (see the `/code-review` pass
+  below — its final form is `lib/db/clean-e2e-debris.ts`) as a permanent defense against
+  future `cancel-in-progress` debris, plus a one-time sweep of the specific old real-named
+  rows left over from the genericization above.
+- CI is now fully green end to end (all steps, including E2E) on the public repo, confirming
+  the Actions-minutes block is resolved.
+
+**`/code-review` pass on the above (before starting Phase 3), 14 findings, 9 fixed:**
+
+The first version of the CI cleanup script (`lib/db/clean-legacy-data.ts` at the time) had a
+critical bug: its legacy-name list included 7 names that are _also_ current, active names in
+the genericized `seed.ts` — so instead of a one-time cleanup, it deleted and force-recreated
+live seed data with new ids on every single CI run, permanently orphaning the bank-account
+link on 12 recurring items (the 6 directly-colliding ones, plus 6 more that merely linked to
+the one deleted-and-recreated bank account and were never re-linked, since `seed.ts`'s
+idempotency check skips existing rows). This had already run once in CI before being caught.
+
+Looking closer at why the list needed those specific old names at all — it existed to delete
+rows matching the exact real values genericization had just replaced, which meant the file
+itself had to spell those real values out in committed source. Checking whether that one-time
+cleanup had actually already succeeded (it had — confirmed via the prior CI run's own log
+output: 174 `monthly_entries`, 17 `recurring_schedule`, 5 `bank_accounts` rows swept in a
+single pass, immediately followed by a correct reseed) meant the list no longer needed to
+exist at all, not just get its colliding entries trimmed.
+
+- _Fixed_ — removed the legacy-name list entirely (not just its colliding entries) rather than
+  keep it as permanent dead weight — its one-time job was already done, confirmed against the
+  prior run's own logs, and it would otherwise leave the exact real values genericization
+  removed sitting in committed, now-public source code indefinitely, permanently undoing the
+  point of the genericization pass. Renamed the file `clean-legacy-data.ts` →
+  `clean-e2e-debris.ts` to match its narrowed, permanent scope.
+- **A second instance of the same class of mistake, caught right before it shipped:** the
+  first draft of _this very changelog entry_ quoted the real old values as illustrative
+  examples, which would have reintroduced them into the public repo through the documentation
+  meant to explain removing them. Caught by the same real-time safety check that blocks
+  destructive/sensitive actions generally, not by manual review — a reminder that "don't quote
+  the sensitive value, even to explain that it was removed" needs to be an active habit in a
+  now-public repo, not just a one-time cleanup task.
+- _Fixed_ — rewrote the script to use `lib/db/index.ts`'s validated pool/Drizzle (was a raw,
+  unvalidated `pg.Client` on bare `process.env.DATABASE_URL` — no timeout, no error listener,
+  bypassed `lib/env.ts`'s zod validation) and wrapped all deletes in one `db.transaction(...)`
+  (was 8 unwrapped sequential statements — a mid-failure left a partially-cleaned state).
+- _Fixed_ — added a `process.env.CI !== 'true'` guard: the script's DELETE patterns are broad
+  by name/prefix, not household-scoped (there's no single "right" household to scope to on a
+  shared branch with many ephemeral test households — the name/prefix list _is_ the scoping
+  mechanism), which makes it unsafe to run locally by accident against a real `DATABASE_URL`.
+- _Fixed_ — switched `console.log`/`console.error` to the codebase's structured pino logger,
+  matching every other script's convention.
+- _Fixed_ — added `lib/db/clean-e2e-debris.ts` to `vitest.config.ts`'s coverage-exclude list
+  (every structurally identical DB-plumbing sibling is excluded there; this one was missed).
+- _Fixed_ — updated `spec.md`/this file to actually document the public-repo flip and history
+  rewrite, which had gone undocumented in the very session that made them (a real process
+  violation of `AGENTS.md`'s "update spec.md immediately" rule — caught by the review's
+  conventions angle, not spotted proactively).
+
+Deferred, documented rather than fixed:
+
+- **`concurrency.group` is per-ref, but the shared `ci` branch is not.** Two concurrent runs
+  from different refs (two PRs, or a PR overlapping a `main` push) aren't mutually serialized,
+  so their DB steps could in principle interleave. Real but pre-existing (not introduced by
+  this diff), low-probability at this project's actual usage pattern (single maintainer), and
+  the proper fix (a global lock, or a per-run ephemeral branch) is a bigger infra change than a
+  review-fixup pass. Tracked for later.
+- **`household_invitations` rows are never cleaned by anything.** Accepting an invite only
+  `UPDATE`s `acceptedAt` (confirmed in `app/actions/invites.ts`) — the row is never deleted,
+  the E2E test's own cleanup doesn't remove it, and `clean-e2e-debris.ts` doesn't reference
+  that table. Pre-existing gap, unrelated to this diff, and low severity (row bloat, not a
+  correctness or security issue). Tracked for later.
+- **`.gitleaksignore`'s commit-SHA-pinned fingerprints will break again on any future history
+  rewrite** (as they did this session). A `.gitleaks.toml` with a path-based `[[allowlists]]`
+  entry would match by file path regardless of commit SHA and survive rewrites permanently.
+  Real improvement, not urgent (the current fix works), deferred rather than done under
+  review-fixup time pressure.
+
+Re-verified: typecheck/lint/unit/integration clean, CI green on the fix commit.
+
+---
+
 <!--
 Copy the block above for each new phase. Keep sections in phase order. Convert relative
 dates to absolute (e.g. "today" -> the actual date) so the log stays readable later.

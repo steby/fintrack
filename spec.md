@@ -47,6 +47,20 @@ capability that makes it reachable (override one forecast month's budgeted amoun
 server-side — the reference app only hid the delete control in the UI for recurring-generated
 rows but never enforced it in the handler itself.
 
+**Post-Phase-2 operational deviation (2026-07-09):** repo flipped from **private to public**
+(Phase 0 originally specified `gh repo create fintrack --private`) — the private-repo free-tier
+GitHub Actions minutes allowance was exhausted by heavy same-day CI iteration, and the owner has
+no payment method on file to raise it; public repos get unlimited Actions minutes on standard
+runners. Before flipping, `lib/db/seed.ts` was genericized (real salary/mortgage/rental figures,
+real Singapore bank names, and real household-member names embedded in recurring-item labels
+replaced with fictional placeholders) and git history was rewritten (`git filter-repo`) to
+remove the real data from every prior commit, not just HEAD, then force-pushed. This is a
+one-way operational change, not a scope change — the CodeQL-vs-Semgrep deviation above becomes
+moot once public (Advanced Security features are free on public repos), but Semgrep was kept
+rather than switching back, since it already works and switching has no benefit. Intent is to
+flip back to private later (tracked outside this repo); if that happens, re-confirm the Actions
+minutes constraint no longer blocks CI before relying on it again.
+
 ## Context
 
 `FinanceTracker/` (sibling project, not in this repo) is a single-user finance planner
