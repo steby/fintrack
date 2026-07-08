@@ -53,7 +53,7 @@ rows but never enforced it in the handler itself.
 (SvelteKit 5 + better-sqlite3 + Chart.js, GCP VM/PM2) with weak auth (plaintext username
 cookie, CSRF off, `secure:false`), a broken CSV export (non-existent `m.scheduled_day`
 column), USD/SGD mismatch, seed baked into the DB module, no migrations/tests. FinTrack
-rebuilds it as a **shared household budgeting tracker**. Primary usage: **owner (Steven) does
+rebuilds it as a **shared household budgeting tracker**. Primary usage: **owner does
 all data entry; family mostly views.**
 
 ## Rigor Tier — Tier 2 (Core + Hardened, pragmatic)
