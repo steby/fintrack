@@ -2,10 +2,11 @@ import 'dotenv/config';
 import { test, expect } from '@playwright/test';
 import { eq } from 'drizzle-orm';
 import { createTestDb } from './test-db';
+import { requireEnv } from './env';
 import { users, householdInvitations } from '../lib/db/schema';
 import { generateToken } from '../lib/auth/token';
 
-const OWNER_EMAIL = 'steven.kaichung@gmail.com';
+const OWNER_EMAIL = requireEnv('SEED_OWNER_EMAIL');
 
 const { db: testDb, close: closeTestDb } = createTestDb();
 

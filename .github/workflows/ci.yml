@@ -17,6 +17,8 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+      SEED_OWNER_EMAIL: ${{ secrets.SEED_OWNER_EMAIL }}
+      SEED_OWNER_PASSWORD: ${{ secrets.SEED_OWNER_PASSWORD }}
       CI: true
     steps:
       - name: Checkout
@@ -32,6 +34,19 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Run migrations
+        # Provisions the `ci` Neon branch's schema — a distinct step, not bundled into
+        # app boot or the build, per development-workflow.md's "run DB migrations as a
+        # distinct pre-deploy step" pattern. Idempotent (drizzle-kit tracks what's
+        # already applied), so safe to run on every CI invocation.
+        run: npm run db:migrate
+
+      - name: Seed database
+        # Idempotent (checks for an existing owner by email before inserting) — gives
+        # the E2E suite a real owner account to log in as, on the `ci` branch, using
+        # dedicated CI-only test credentials (not real user credentials).
+        run: npm run db:seed
 
       - name: Secret scan (gitleaks)
         # Git-aware mode (no --no-git): scans tracked git history/objects, not the raw

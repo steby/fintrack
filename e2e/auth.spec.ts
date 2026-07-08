@@ -2,11 +2,16 @@ import 'dotenv/config';
 import { test, expect } from '@playwright/test';
 import { eq, inArray } from 'drizzle-orm';
 import { createTestDb } from './test-db';
+import { requireEnv } from './env';
 import { users, loginAttempts } from '../lib/db/schema';
 import { hashPassword } from '../lib/auth/password';
 
-const OWNER_EMAIL = 'steven.kaichung@gmail.com';
-const OWNER_PASSWORD = 'pewpew';
+// Read from the same SEED_OWNER_EMAIL/PASSWORD that lib/db/seed.ts consumed to create
+// this account — not hardcoded — so this file runs unchanged against any environment
+// (local `dev` branch, CI's `ci` branch) regardless of which actual credentials each
+// one seeds.
+const OWNER_EMAIL = requireEnv('SEED_OWNER_EMAIL');
+const OWNER_PASSWORD = requireEnv('SEED_OWNER_PASSWORD');
 const VIEWER_EMAIL = 'e2e-viewer@example.com';
 const VIEWER_PASSWORD = 'viewer-password-123';
 // A dedicated, non-existent identity for the wrong-password test — deliberately NOT
