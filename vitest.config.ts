@@ -41,7 +41,10 @@ export default defineConfig({
           exclude: ['**/*.integration.test.ts', 'node_modules/**', '.next/**', 'e2e/**'],
           // Dummy-but-valid values so lib/env.ts's module-level validation passes without
           // real secrets. Unit tests must never depend on (or be able to reach) a real DB.
+          // NODE_ENV is pinned explicitly (not left to inherit the ambient shell) so an
+          // unusual pre-set value (e.g. "staging") can't fail every unit test at import.
           env: {
+            NODE_ENV: 'test',
             DATABASE_URL: 'postgresql://test:test@localhost:5432/testdb',
             SESSION_SECRET: 'unit-test-dummy-secret-value-1234567890',
           },

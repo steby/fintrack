@@ -11,7 +11,7 @@ plan live in [`spec.md`](./spec.md). Status is tracked in [`PROGRESS.md`](./PROG
 
 ## Stack
 
-Next.js 15 (App Router) · React 19 · TypeScript · Neon Postgres · Drizzle ORM · Tailwind v4 ·
+Next.js 16 (App Router) · React 19 · TypeScript · Neon Postgres · Drizzle ORM · Tailwind v4 ·
 shadcn/ui · Recharts · Resend · Vercel.
 
 ## Getting started

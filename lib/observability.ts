@@ -16,34 +16,56 @@ interface SentryModule {
   captureException: (error: unknown, hint?: { extra?: Record<string, unknown> }) => void;
 }
 
-let sentryClient: SentryModule | null | undefined;
+// Cached on globalThis, like lib/db/index.ts's pg Pool, so Next.js dev-mode HMR
+// re-evaluating this module doesn't re-run Sentry.init() on every edit. Caches the
+// in-flight *promise* (not just the resolved client) so concurrent callers awaiting
+// getSentry() before the first one resolves all share that one import()+init() call
+// instead of each independently double-initializing the SDK — the assignment below is
+// synchronous, so there's no window between "check" and "set" for a second caller to
+// slip through.
+const globalForObservability = globalThis as unknown as {
+  sentryClientPromise?: Promise<SentryModule | null>;
+};
 
-async function getSentry(): Promise<SentryModule | null> {
-  if (sentryClient !== undefined) return sentryClient;
-
+async function initSentry(): Promise<SentryModule | null> {
   if (!env.SENTRY_DSN) {
-    sentryClient = null;
+    return null;
+  }
+
+  const specifier = '@sentry/nextjs';
+  let sentry: SentryModule;
+  try {
+    sentry = (await import(specifier)) as SentryModule;
+  } catch (err) {
+    logger.warn(
+      { err },
+      '@sentry/nextjs is not installed; falling back to log-only error tracking',
+    );
     return null;
   }
 
   try {
-    const specifier = '@sentry/nextjs';
-    const sentry = (await import(specifier)) as SentryModule;
     sentry.init({ dsn: env.SENTRY_DSN, environment: env.NODE_ENV });
-    sentryClient = sentry;
   } catch (err) {
     logger.warn(
       { err },
-      'SENTRY_DSN is set but @sentry/nextjs is not installed; falling back to log-only error tracking',
+      '@sentry/nextjs failed to initialize; falling back to log-only error tracking',
     );
-    sentryClient = null;
+    return null;
   }
 
-  return sentryClient;
+  return sentry;
+}
+
+function getSentry(): Promise<SentryModule | null> {
+  globalForObservability.sentryClientPromise ??= initSentry();
+  return globalForObservability.sentryClientPromise;
 }
 
 export async function captureException(error: unknown, context?: Record<string, unknown>) {
-  logger.error({ err: error, ...context }, 'captured exception');
+  // context spread comes first so a context key literally named `err` can never shadow
+  // the actual exception being logged.
+  logger.error({ ...context, err: error }, 'captured exception');
   const sentry = await getSentry();
   sentry?.captureException(error, context ? { extra: context } : undefined);
 }

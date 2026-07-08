@@ -47,6 +47,21 @@ describe('loadEnv', () => {
     expect(() => loadEnv({ ...validBase, DATABASE_URL: 'not-a-url' })).toThrowError(/DATABASE_URL/);
   });
 
+  it('rejects a well-formed URL that is not a postgres connection string', () => {
+    expect(() =>
+      loadEnv({ ...validBase, DATABASE_URL: 'https://example.com/not-a-db' }),
+    ).toThrowError(/DATABASE_URL/);
+  });
+
+  it('accepts both postgresql:// and postgres:// schemes', () => {
+    expect(loadEnv(validBase).DATABASE_URL).toBe(validBase.DATABASE_URL);
+    const result = loadEnv({
+      ...validBase,
+      DATABASE_URL: 'postgres://user:pass@host/db?sslmode=require',
+    });
+    expect(result.DATABASE_URL).toBe('postgres://user:pass@host/db?sslmode=require');
+  });
+
   it('throws when SESSION_SECRET is shorter than 32 characters', () => {
     expect(() => loadEnv({ ...validBase, SESSION_SECRET: 'too-short' })).toThrowError(
       /SESSION_SECRET/,
@@ -64,6 +79,21 @@ describe('loadEnv', () => {
     expect(result.CRON_SECRET).toBeUndefined();
   });
 
+  it('treats a blank APP_URL as absent and falls back to its default, same as the optional vars', () => {
+    const result = loadEnv({ ...validBase, APP_URL: '' });
+    expect(result.APP_URL).toBe('http://localhost:3000');
+  });
+
+  it('treats a blank feature-flag value as absent and falls back to its default, same as the optional vars', () => {
+    const result = loadEnv({
+      ...validBase,
+      FEATURE_PWA: '',
+      FEATURE_CSV_IMPORT_DEFAULT: '',
+    });
+    expect(result.FEATURE_PWA).toBe(true);
+    expect(result.FEATURE_CSV_IMPORT_DEFAULT).toBe(false);
+  });
+
   it('accepts a real optional value when provided', () => {
     const result = loadEnv({
       ...validBase,
@@ -76,5 +106,17 @@ describe('loadEnv', () => {
 
   it('rejects a too-short CRON_SECRET when one is actually provided', () => {
     expect(() => loadEnv({ ...validBase, CRON_SECRET: 'short' })).toThrowError(/CRON_SECRET/);
+  });
+
+  it('leaves SEED_OWNER_EMAIL/PASSWORD undefined when absent — the app itself never requires them', () => {
+    const result = loadEnv(validBase);
+    expect(result.SEED_OWNER_EMAIL).toBeUndefined();
+    expect(result.SEED_OWNER_PASSWORD).toBeUndefined();
+  });
+
+  it('rejects a malformed SEED_OWNER_EMAIL when one is actually provided', () => {
+    expect(() =>
+      loadEnv({ ...validBase, SEED_OWNER_EMAIL: 'not-an-email', SEED_OWNER_PASSWORD: 'x' }),
+    ).toThrowError(/SEED_OWNER_EMAIL/);
   });
 });

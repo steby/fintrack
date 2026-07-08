@@ -140,8 +140,66 @@ planted a real high-entropy fake secret → confirmed CI failed at exactly the "
 above) → allowlisted by fingerprint → confirmed green. Both gates proven to actually block a
 red build, not just exist in config.
 
-**Deferred / blocked:** None. Resend/Sentry remain unconfigured (keys-optional by design — not
-a gap, the intended state until those integrations are actually needed in later phases).
+**Deferred / blocked:** None from the initial build. Resend/Sentry remain unconfigured
+(keys-optional by design — not a gap, the intended state until those integrations are
+actually needed in later phases).
+
+**Post-hoc hardening pass (`/code-review`, extra-high effort, 2026-07-08):** Ran a full
+adversarial review of the harness before starting Phase 1 — 10 parallel finder angles,
+1-vote verification per candidate, a gap sweep, 15 findings reported. Fixed 12 in one pass
+(all touching `lib/db/index.ts`, `lib/env.ts`, `lib/db/seed.ts`, `lib/observability.ts`,
+`vitest.config.ts`, `README.md`); 3 explicitly deferred:
+
+- _Fixed_ — `pingDb` didn't cancel a hung query on timeout (real pool-exhaustion risk):
+  replaced the hand-rolled `Promise.race` with a **dedicated, isolated health-check pool**
+  (`max: 1`) carrying its own `query_timeout`/`connectionTimeoutMillis`, so a truly hung
+  query is cancelled at the pg protocol level and can never starve the main app pool.
+- _Fixed_ — the exported `Pool` had no `.on('error', ...)` listener; an idle-client
+  connection drop (a documented Neon occurrence) would crash the whole process via
+  Node's default unhandled-EventEmitter-error behavior. Added listeners on both pools.
+- _Fixed_ — `DATABASE_URL` validation accepted any well-formed URL, not specifically a
+  postgres scheme; added a `.refine()` scheme check.
+- _Fixed_ — blank-`.env`-line handling (`KEY=` loading as `''`, not `undefined`) was only
+  applied per-field to the 3 vars that broke in manual testing, not schema-wide — a
+  structurally-identical future field would silently reintroduce the bug. Replaced the
+  three near-duplicate `optionalString`/`optionalUrl`/`optionalMinString` wrappers with
+  one schema-wide normalization in `loadEnv` (blank → `undefined` before parsing), so the
+  invariant holds automatically for every field, present and future.
+- _Fixed_ — `lib/db/seed.ts`'s `import { pool } from './index'` triggered full env
+  validation (including `SESSION_SECRET`) before seed.ts's own narrower schema ever ran,
+  surfacing a confusing, unrelated error. Folded `SEED_OWNER_EMAIL`/`PASSWORD` into the
+  shared `envSchema` as optional fields and dropped the duplicate schema/formatter —
+  `main()` now checks presence itself with a clear, seed-specific message.
+- _Fixed_ — `lib/observability.ts`'s `getSentry()` had a check-then-act race allowing
+  concurrent callers to double-initialize the Sentry SDK; a single catch block mislabeled
+  any `init()` failure as "package not installed"; `{ err: error, ...context }` let a
+  `context.err` key silently overwrite the real exception in logs; `sentryClient` wasn't
+  HMR-safe unlike the DB pool. Rewrote around a `globalThis`-cached **promise** (not just
+  the resolved client, closing the race), split the import/init try-catches so each gets
+  its own accurate warning, reordered the log spread so `err` always wins, and applied the
+  same HMR-safe caching pattern the DB pool already used. Added tests for all four,
+  including a real concurrent-call race test and a simulated-HMR-reload test.
+- _Fixed_ — `pingDb`'s `setTimeout` was never cleared on the success path (minor timer
+  leak); now cleared in a `finally`.
+- _Fixed_ — `vitest.config.ts`'s unit project didn't pin `NODE_ENV`, so an unusual ambient
+  shell value could fail every unit test at import; pinned to `'test'`.
+- _Fixed_ — `README.md` said "Next.js 15"; corrected to 16, matching what's actually
+  shipped (per `spec.md`'s own deviation log).
+- _Deferred to Phase 1_ — CI never runs `db:migrate` before Integration/Build/E2E against
+  the live `ci` branch. Harmless today (empty schema); adding the step now would only test
+  a no-op. Add it when Phase 1's first real migration lands.
+- _Deferred, not fixing_ — `migrate.ts`/`seed.ts` call `pool.end()` only on the success
+  path, not in a `finally`. Real gap, but the verifier's own assessment stands: both are
+  one-shot CLI scripts where `process.exit(1)` tears down the process regardless, so the
+  only actual cost is an abrupt TCP teardown instead of pg's graceful handshake. Not worth
+  the `try/finally` noise at this scale.
+- _Deferred, not fixing_ — `.nvmrc` pins an exact Node version (24.15.0) while
+  `package.json`'s `engines` only requires `>=20.9.0`, and no `.npmrc` enforces
+  engine-strict. Low-severity toolchain-rigor gap; left as-is.
+
+Re-verified after fixes: lint/typecheck/build clean, 31/31 unit tests (100% coverage on
+the gated scope, up from 21), 3/3 integration tests against the live `dev` branch
+(including a new deterministic test for `pingDb`'s false/timeout path), 2/2 E2E.
 
 ---
 
