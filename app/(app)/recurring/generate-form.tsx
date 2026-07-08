@@ -77,7 +77,7 @@ export function GenerateForm() {
       </div>
       {state?.error && <p className="w-full text-xs text-destructive">{state.error}</p>}
       {state?.success && (
-        <p className="w-full text-xs text-emerald-600">
+        <p className="w-full text-xs text-emerald-600 dark:text-emerald-400">
           Generated {state.generated} {state.generated === 1 ? 'entry' : 'entries'}.
         </p>
       )}

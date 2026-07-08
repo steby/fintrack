@@ -43,6 +43,10 @@ test.describe('dashboard', () => {
     // Stat tiles show $0.00, not NaN/undefined, for a completely empty year.
     await expect(page.getByText('$0.00').first()).toBeVisible();
     await expect(page.getByText('NaN')).toHaveCount(0);
+    // spec.md's "prev-year absent (YoY hides gracefully)" edge case — 2098 (this
+    // year's prior) has no data either, so the YoY card must show its no-baseline
+    // fallback text instead of a bogus 0%/NaN% delta.
+    await expect(page.getByText('no prior year').first()).toBeVisible();
   });
 
   test('an out-of-range year param is clamped instead of crashing', async ({ page }) => {

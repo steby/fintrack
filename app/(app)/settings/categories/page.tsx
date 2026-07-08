@@ -49,7 +49,7 @@ export default async function CategoriesPage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <div>
-              <h3 className="text-xs font-semibold tracking-wide text-emerald-600 uppercase">
+              <h3 className="text-xs font-semibold tracking-wide text-emerald-600 uppercase dark:text-emerald-400">
                 Income
               </h3>
               <div className="mt-2 flex flex-col gap-1.5">
@@ -62,7 +62,7 @@ export default async function CategoriesPage() {
               </div>
             </div>
             <div>
-              <h3 className="text-xs font-semibold tracking-wide text-red-600 uppercase">
+              <h3 className="text-xs font-semibold tracking-wide text-red-600 uppercase dark:text-red-400">
                 Expense
               </h3>
               <div className="mt-2 flex flex-col gap-1.5">

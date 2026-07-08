@@ -26,3 +26,21 @@ export function formatSGDCompact(cents: number): string {
   }
   return `${sign}$${Math.round(abs / 100)}`;
 }
+
+// Shared 1-12 -> short-name lookup (index 0 = January) — used by the Monthly page's
+// month tabs and the Dashboard's charts, so both stay in sync if this ever needs to
+// change (locale, full names, etc.) instead of drifting as two separate copies.
+export const MONTH_SHORT = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];

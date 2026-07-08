@@ -3,16 +3,26 @@ import { formatSGD } from '../../../lib/format';
 import type { YoyDelta } from '../../../lib/domain/dashboard';
 
 function DeltaBadge({ percent, invert }: { percent: number | null; invert: boolean }) {
-  if (percent === null) return <span className="text-xs text-muted-foreground">no prior year</span>;
+  if (percent === null) {
+    return <span className="text-xs text-muted-foreground">no prior year</span>;
+  }
+
+  // Round first, then branch on the rounded value — otherwise a tiny negative delta
+  // that rounds to "0.0" still reads as unfavorable/red with a stray "-0.0%" sign,
+  // which looks like a real move when the two years are effectively flat.
+  const rounded = Math.round(percent * 10) / 10;
+  if (rounded === 0) {
+    return <span className="text-xs font-semibold text-muted-foreground">0.0%</span>;
+  }
   // For expense, a smaller number is favorable — invert which sign renders green/red.
-  const favorable = invert ? percent <= 0 : percent >= 0;
+  const favorable = invert ? rounded <= 0 : rounded >= 0;
   const color = favorable
     ? 'text-emerald-600 dark:text-emerald-400'
     : 'text-red-600 dark:text-red-400';
   return (
     <span className={`text-xs font-semibold ${color}`}>
-      {percent > 0 ? '+' : ''}
-      {percent.toFixed(1)}%
+      {rounded > 0 ? '+' : ''}
+      {rounded.toFixed(1)}%
     </span>
   );
 }

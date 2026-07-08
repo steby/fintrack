@@ -86,7 +86,7 @@ export function CalendarView({
                   <span className="text-sm font-semibold">{day}</span>
                   {dailyNetCents !== 0 && (
                     <span
-                      className={`rounded bg-muted px-1 text-[0.65rem] font-bold ${dailyNetCents > 0 ? 'text-emerald-600' : 'text-red-600'}`}
+                      className={`rounded bg-muted px-1 text-[0.65rem] font-bold ${dailyNetCents > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}
                     >
                       {dailyNetCents > 0 ? '+' : ''}
                       {formatSGDCompact(dailyNetCents)}

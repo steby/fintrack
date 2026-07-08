@@ -11,14 +11,18 @@ import {
   YAxis,
 } from 'recharts';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { formatSGDCompact, formatSGD } from '../../../lib/format';
-import { MONTH_SHORT } from './month-labels';
+import { formatSGDCompact, formatSGD, MONTH_SHORT } from '../../../lib/format';
 import type { MonthlyPoint } from '../../../lib/domain/dashboard';
 
 export function CashFlowChart({ series }: { series: MonthlyPoint[] }) {
+  // Budgeted bars render in a lighter shade alongside actual — for a month with a
+  // budget but no actuals yet (spec.md Phase 3's "charts show budget-only" edge case),
+  // the actual bar is simply zero-height while the budgeted bar still shows the plan.
   const data = series.map((m) => ({
     month: MONTH_SHORT[m.month - 1],
+    'Budgeted income': m.budgetedIncomeCents / 100,
     'Actual income': m.actualIncomeCents / 100,
+    'Budgeted expense': m.budgetedExpenseCents / 100,
     'Actual expense': m.actualExpenseCents / 100,
   }));
 
@@ -43,7 +47,19 @@ export function CashFlowChart({ series }: { series: MonthlyPoint[] }) {
                 formatter={(value) => formatSGD(Math.round(Number(value) * 100))}
               />
               <Legend />
+              <Bar
+                dataKey="Budgeted income"
+                fill="#10b981"
+                fillOpacity={0.3}
+                radius={[3, 3, 0, 0]}
+              />
               <Bar dataKey="Actual income" fill="#10b981" radius={[3, 3, 0, 0]} />
+              <Bar
+                dataKey="Budgeted expense"
+                fill="#ef4444"
+                fillOpacity={0.3}
+                radius={[3, 3, 0, 0]}
+              />
               <Bar dataKey="Actual expense" fill="#ef4444" radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>

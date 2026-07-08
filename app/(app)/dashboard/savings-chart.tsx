@@ -10,8 +10,7 @@ import {
   YAxis,
 } from 'recharts';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { formatSGDCompact, formatSGD } from '../../../lib/format';
-import { MONTH_SHORT } from './month-labels';
+import { formatSGDCompact, formatSGD, MONTH_SHORT } from '../../../lib/format';
 import type { CumulativePoint } from '../../../lib/domain/dashboard';
 
 export function SavingsChart({ series }: { series: CumulativePoint[] }) {

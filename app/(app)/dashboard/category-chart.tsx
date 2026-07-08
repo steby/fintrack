@@ -7,6 +7,7 @@ import type { CategoryBreakdownPoint } from '../../../lib/domain/dashboard';
 
 export function CategoryChart({ breakdown }: { breakdown: CategoryBreakdownPoint[] }) {
   const data = breakdown.map((c) => ({
+    id: c.categoryId,
     name: c.name,
     value: c.totalBudgetedCents / 100,
     color: c.color,
@@ -35,7 +36,7 @@ export function CategoryChart({ breakdown }: { breakdown: CategoryBreakdownPoint
                   paddingAngle={2}
                 >
                   {data.map((entry) => (
-                    <Cell key={entry.name} fill={entry.color} />
+                    <Cell key={entry.id} fill={entry.color} />
                   ))}
                 </Pie>
                 <Tooltip

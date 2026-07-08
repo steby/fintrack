@@ -61,6 +61,17 @@ rather than switching back, since it already works and switching has no benefit.
 flip back to private later (tracked outside this repo); if that happens, re-confirm the Actions
 minutes constraint no longer blocks CI before relying on it again.
 
+**Phase 3 deviation:** `lib/db/queries.ts`'s Phase 3 task item says "scoped SQL aggregations
+(port the original's queries)" — implemented instead as one flat, entry-level `SELECT` (two
+`LEFT JOIN`s, no `GROUP BY`) with all aggregation (monthly series, category breakdown,
+cumulative savings, fixed-vs-variable, bank summary, YoY) done in TypeScript pure functions
+(`lib/domain/dashboard.ts`) over the returned row array. Deliberate, not a shortcut: this phase's
+own "Ready" criteria already frame it as "aggregation shaping ... as pure functions over row
+arrays," and doing the math in TypeScript instead of SQL is what makes every edge case (empty
+year, partial actuals, absent prior year) unit-testable without a live database — 17 unit tests
+cover exactly those cases. Caught by a `/code-review` pass finding this diverged from the
+literal phase-plan wording without being written back here.
+
 ## Context
 
 `FinanceTracker/` (sibling project, not in this repo) is a single-user finance planner

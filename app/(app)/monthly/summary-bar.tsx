@@ -14,20 +14,23 @@ export function SummaryBar({
   const netBudgeted = budgetedIncomeCents - budgetedExpenseCents;
   const netActual = actualIncomeCents - actualExpenseCents;
 
+  const emerald = 'text-emerald-600 dark:text-emerald-400';
+  const red = 'text-red-600 dark:text-red-400';
+
   const items: { label: string; cents: number; positiveClass?: string }[] = [
-    { label: 'Budgeted income', cents: budgetedIncomeCents, positiveClass: 'text-emerald-600' },
-    { label: 'Actual income', cents: actualIncomeCents, positiveClass: 'text-emerald-600' },
-    { label: 'Budgeted expense', cents: budgetedExpenseCents, positiveClass: 'text-red-600' },
-    { label: 'Actual expense', cents: actualExpenseCents, positiveClass: 'text-red-600' },
+    { label: 'Budgeted income', cents: budgetedIncomeCents, positiveClass: emerald },
+    { label: 'Actual income', cents: actualIncomeCents, positiveClass: emerald },
+    { label: 'Budgeted expense', cents: budgetedExpenseCents, positiveClass: red },
+    { label: 'Actual expense', cents: actualExpenseCents, positiveClass: red },
     {
       label: 'Net budgeted',
       cents: netBudgeted,
-      positiveClass: netBudgeted >= 0 ? 'text-emerald-600' : 'text-red-600',
+      positiveClass: netBudgeted >= 0 ? emerald : red,
     },
     {
       label: 'Net actual',
       cents: netActual,
-      positiveClass: netActual >= 0 ? 'text-emerald-600' : 'text-red-600',
+      positiveClass: netActual >= 0 ? emerald : red,
     },
   ];
 

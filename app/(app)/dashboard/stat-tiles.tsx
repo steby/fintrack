@@ -1,4 +1,4 @@
-import { Card } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { formatSGD } from '../../../lib/format';
 import type { YearTotals } from '../../../lib/domain/dashboard';
 
@@ -23,12 +23,14 @@ function Tile({
           : 'text-red-600 dark:text-red-400';
 
   return (
-    <Card className="px-4">
-      <div className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-        {label}
-      </div>
-      <div className={`text-xl font-bold tabular-nums ${actualColor}`}>{formatSGD(actual)}</div>
-      <div className="text-xs text-muted-foreground">Budgeted {formatSGD(budgeted)}</div>
+    <Card>
+      <CardContent>
+        <div className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          {label}
+        </div>
+        <div className={`text-xl font-bold tabular-nums ${actualColor}`}>{formatSGD(actual)}</div>
+        <div className="text-xs text-muted-foreground">Budgeted {formatSGD(budgeted)}</div>
+      </CardContent>
     </Card>
   );
 }
@@ -54,16 +56,18 @@ export function StatTiles({ totals }: { totals: YearTotals }) {
         actual={totals.netActualCents}
         tone="neutral"
       />
-      <Card className="px-4">
-        <div className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          Savings rate
-        </div>
-        <div className="text-xl font-bold tabular-nums">
-          {totals.actualIncomeCents > 0
-            ? `${Math.round((totals.netActualCents / totals.actualIncomeCents) * 100)}%`
-            : '—'}
-        </div>
-        <div className="text-xs text-muted-foreground">Actual net &divide; actual income</div>
+      <Card>
+        <CardContent>
+          <div className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            Savings rate
+          </div>
+          <div className="text-xl font-bold tabular-nums">
+            {totals.actualIncomeCents > 0
+              ? `${Math.round((totals.netActualCents / totals.actualIncomeCents) * 100)}%`
+              : '—'}
+          </div>
+          <div className="text-xs text-muted-foreground">Actual net &divide; actual income</div>
+        </CardContent>
       </Card>
     </div>
   );

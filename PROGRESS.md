@@ -1136,8 +1136,79 @@ Re-verified: typecheck/lint/unit/integration clean, CI green on the fix commit.
   quick-jump anchored to the real current year instead, with the dashboard's own
   prev/next controls handling fine-grained navigation once you're there.
 
-Re-verified: unit (17 new + 197 total), integration (5 new + 103 total), and E2E (5
-new + 24 total) all green; lint/typecheck/format/build clean.
+**`/code-review` pass (before starting Phase 4), 10 angles, 10 findings fixed:**
+
+- _Fixed_ — the cash-flow chart only ever plotted actual income/expense, never the
+  budgeted values `lib/domain/dashboard.ts` already computed — a direct miss of
+  spec.md's own Ready criterion "months with budget but no actuals (charts show
+  budget-only)." Added budgeted bars in a lighter shade alongside actual, so a
+  forecast-only month now shows its plan instead of a bare $0 bar.
+- _Fixed_ — `CategoryChart`'s Pie `Cell` was keyed by category display name, not the
+  guaranteed-unique `categoryId` already available on `CategoryBreakdownPoint`.
+  `categories.name` has no uniqueness constraint, so two same-named categories would
+  collide on React keys and risk a misattributed fill color. Independently caught by
+  4 of the 10 review angles.
+- _Fixed_ — `YearPicker`'s prev/next links weren't clamped at `MIN_YEAR`/`MAX_YEAR`
+  (2000/2100): clicking "previous" at year 2000 built a link to 1999, which
+  `parseYearParam` rejects and silently resets to the real current year — teleporting
+  the user decades forward instead of stopping. Exported `MIN_YEAR`/`MAX_YEAR` from
+  `lib/domain/month-params.ts` and disabled the link at each boundary.
+- _Fixed_ — setting `defaultTheme="dark"` made dark mode reachable/default for the
+  **first time** across the entire app, not just the new dashboard — every Phase 1/2
+  page had only ever been visually built and reviewed in light mode. Manually
+  spot-checked 5 existing pages (Monthly list/calendar, Recurring, Settings, plus the
+  dashboard) via real Chromium screenshots; found and fixed 6 files with hardcoded
+  `text-emerald-600`/`text-red-600` and no `dark:` variant (`calendar-view.tsx`'s
+  daily-net badge, `entry-row.tsx`'s difference column, `summary-bar.tsx`'s 6 stat
+  colors, `generate-form.tsx`'s success message, `recurring-row.tsx`'s Active badge,
+  `settings/categories/page.tsx`'s Income/Expense headers) — all now match the
+  `dark:text-emerald-400`/`dark:text-red-400` convention the new dashboard widgets
+  already established.
+- _Fixed_ — `lib/db/queries.ts` was missing from `vitest.config.ts`'s coverage-exclude
+  list, unlike every other DB-plumbing file with the same "needs a live connection"
+  profile — confirmed via `npm run test:coverage` that it was scoring 0% on all four
+  metrics.
+- _Fixed_ — `spec.md`'s Phase 3 task item still read "scoped SQL aggregations (port
+  the original's queries)" with no note that this shipped as one flat entry-level
+  query plus TypeScript aggregation instead — a real deviation from the literal
+  wording, even though it matches the same section's own "pure functions over row
+  arrays" framing. Added a deviation-log entry.
+- _Fixed_ — the "prev-year absent (YoY hides gracefully)" edge case named in spec.md's
+  Ready criteria was unit-tested but not E2E-tested. Added an assertion to the
+  existing empty-year test (2098/2099 both have no data, so the YoY card's "no prior
+  year" fallback is exercised for real).
+- _Fixed_ — `MONTH_SHORT` was copy-pasted verbatim into a new
+  `dashboard/month-labels.ts` instead of reusing `monthly/month-tabs.tsx`'s existing
+  array. Consolidated into `lib/format.ts` (the established display-formatting home)
+  and updated both call sites.
+- _Fixed_ — `StatTiles` was the only dashboard widget not using
+  `CardHeader`/`CardTitle`/`CardContent`, instead hardcoding `className="px-4"` on
+  `Card` directly — happened to render identically today only because Tailwind's
+  `px-4` matches `Card`'s current default `--card-spacing`, but would silently drift
+  if that default ever changed. Switched to the same composition every other widget
+  uses.
+- _Fixed_ — `YoyCard`'s percentage badge could show a stray "-0.0%" in the
+  unfavorable/red color for a near-zero delta (JS's negative-zero-adjacent
+  `toFixed(1)` behavior), reading as a real move when the two years are effectively
+  flat. Now rounds first and renders a neutral "0.0%" when the rounded value is
+  exactly zero.
+
+Deferred, documented rather than fixed: two computed-but-unrendered fields
+(`CategoryBreakdownPoint`'s actualized/total counts, `YoyDelta`'s absolute deltas) —
+real UI enhancements, not bugs, scoped out of a review-fixup pass; the sidebar
+year-selector's inability to reflect the dashboard's actual selection (documented
+above) — a `usePathname`/`useSearchParams` client-component rewrite is possible but
+adds a Suspense boundary for a working-fallback UX gap, not a correctness issue;
+`getDashboardRows` not yet carrying the `monthlyBudget`/`openingBalance` fields Phase
+4 will need — accepted per this project's own no-speculative-building discipline; the
+OLED-dark rewrite porting only flat color tokens, not the reference app's
+glassmorphism/gradient system — already scoped and documented as literal to spec.md's
+wording, not silent.
+
+Re-verified: unit (17 new + 197 total), integration (5 new + 103 total), and E2E (6
+new + 24 total) all green; lint/typecheck/format/build clean. One E2E flake
+(`auth.spec.ts`) during a full-suite run, passed cleanly both in isolation and on a
+full-suite re-run — transient, not a regression.
 
 ---
 

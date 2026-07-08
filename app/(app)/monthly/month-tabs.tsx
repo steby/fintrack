@@ -1,20 +1,6 @@
 import Link from 'next/link';
 import type { MonthStatus } from '../../../lib/domain/month-status';
-
-const MONTH_SHORT = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
+import { MONTH_SHORT } from '../../../lib/format';
 
 const STATUS_DOT: Record<MonthStatus, string> = {
   empty: 'bg-transparent',

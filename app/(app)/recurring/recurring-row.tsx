@@ -198,7 +198,7 @@ export function RecurringRow({
               disabled={togglePending}
               className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                 item.isActive
-                  ? 'bg-emerald-500/10 text-emerald-600'
+                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
                   : 'bg-muted text-muted-foreground'
               }`}
             >

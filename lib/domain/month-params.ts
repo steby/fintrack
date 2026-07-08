@@ -12,8 +12,8 @@ function firstValue(raw: RawParam): string | undefined {
   return Array.isArray(raw) ? raw[0] : raw;
 }
 
-const MIN_YEAR = 2000;
-const MAX_YEAR = 2100;
+export const MIN_YEAR = 2000;
+export const MAX_YEAR = 2100;
 
 export function parseYearParam(raw: RawParam): number {
   const n = Number.parseInt(firstValue(raw) ?? '', 10);

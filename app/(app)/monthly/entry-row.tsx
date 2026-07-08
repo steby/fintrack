@@ -138,7 +138,13 @@ export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canMana
       </td>
       <td className="p-2 text-right tabular-nums">
         {difference ? (
-          <span className={difference.favorable ? 'text-emerald-600' : 'text-red-600'}>
+          <span
+            className={
+              difference.favorable
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : 'text-red-600 dark:text-red-400'
+            }
+          >
             {difference.favorable ? '+' : ''}
             {formatSGD(difference.cents)}
           </span>
