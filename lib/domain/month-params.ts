@@ -37,3 +37,17 @@ export function parseViewParam(raw: RawParam): ViewMode {
   if (value === 'list') return 'list';
   return 'calendar';
 }
+
+// Shared by app/actions/monthly.ts's dateInputSchema and lib/domain/csv.ts's
+// coerceDate — both need to catch calendar-impossible dates (e.g. "2026-02-30") that
+// a shape-only YYYY-MM-DD regex would let through. Postgres's own date parsing
+// silently ROLLS OVER an out-of-range day instead of rejecting it (2026-02-30 becomes
+// 2026-03-02), so a regex-only check would let a malformed-but-shape-valid date land
+// as a different, unintended date rather than being rejected. Parsing via Date and
+// checking the ISO round-trip matches catches exactly that case. Callers are expected
+// to have already confirmed `iso` matches `/^\d{4}-\d{2}-\d{2}$/` — this only checks
+// calendar validity, not shape.
+export function isValidCalendarDate(iso: string): boolean {
+  const parsed = new Date(`${iso}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === iso;
+}

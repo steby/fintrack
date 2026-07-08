@@ -18,7 +18,13 @@ import { requireUser } from '../../lib/auth/guards';
 
 const loginSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(1),
+  // .max(200) is defense-in-depth, not a real password-length policy — this action is
+  // reachable pre-authentication, and next.config.ts's Server Actions bodySizeLimit
+  // was raised to 20MB for Phase 5's CSV upload (a GLOBAL setting, not scoped to that
+  // one action), so an unbounded password field would otherwise let an anonymous
+  // caller force this action to buffer/argon2-hash an arbitrarily large string per
+  // attempt. 200 chars comfortably covers any real passphrase.
+  password: z.string().min(1).max(200),
 });
 
 export type LoginState = { error?: string } | undefined;
@@ -96,8 +102,11 @@ export async function logoutAction(): Promise<void> {
 }
 
 const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1),
-  newPassword: z.string(),
+  currentPassword: z.string().min(1).max(200),
+  // No upper bound conflicts with validatePassword's own policy (min length only,
+  // "no complexity requirements" by design) — .max(200) is the same defense-in-depth
+  // bound as loginSchema's password field, not a new password-strength rule.
+  newPassword: z.string().max(200),
 });
 
 export type ChangePasswordState = { error?: string; success?: boolean } | undefined;

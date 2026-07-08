@@ -7,6 +7,7 @@ import { db } from '../../lib/db';
 import { monthlyEntries, categories, bankAccounts, users } from '../../lib/db/schema';
 import { requireRole } from '../../lib/auth/guards';
 import { moneyInputSchema, optionalMoneyInputSchema, centsToAmount } from '../../lib/money';
+import { isValidCalendarDate } from '../../lib/domain/month-params';
 
 export type MonthlyActionState = { error?: string; success?: boolean } | undefined;
 
@@ -16,14 +17,14 @@ const uuidOrEmpty = z.union([z.literal(''), z.string().uuid()]).optional();
 // date. The regex alone isn't enough — Postgres's own date parsing silently ROLLS OVER
 // an out-of-range day instead of rejecting it (e.g. "2026-02-30" becomes 2026-03-02),
 // so a shape-only check would let a malformed-but-regex-shaped date land as a
-// different, unintended date rather than being rejected. Parsing via Date and checking
-// the ISO round-trip matches catches both totally malformed strings ("not-a-date",
-// caught by the regex) and shape-valid-but-nonexistent dates (caught by the round-trip).
+// different, unintended date rather than being rejected. isValidCalendarDate (shared
+// with lib/domain/csv.ts's CSV-import date coercion) catches both totally malformed
+// strings ("not-a-date", caught by the regex here first) and shape-valid-but-
+// nonexistent dates (caught by its ISO round-trip check).
 const dateInputSchema = z.string().refine((v) => {
   if (v === '') return true;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
-  const parsed = new Date(`${v}T00:00:00Z`);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === v;
+  return isValidCalendarDate(v);
 }, 'Enter a valid date (YYYY-MM-DD)');
 
 async function resolveOptionalRef(

@@ -32,6 +32,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               Goals
             </Link>
           )}
+          {/* csv_import is a per-household runtime kill-switch (default off), not a
+              build-time env flag like FEATURE_SAVINGS_GOALS above — this link always
+              shows so a member can discover the feature and ask an owner to enable it;
+              /import itself checks the flag server-side and explains when it's off. */}
+          <Link href="/import" className="rounded-md px-2 py-1.5 hover:bg-muted">
+            Import
+          </Link>
           <Link href="/settings/categories" className="rounded-md px-2 py-1.5 hover:bg-muted">
             Categories &amp; Accounts
           </Link>
@@ -40,6 +47,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               Members
             </Link>
           )}
+          <Link href="/settings/data" className="rounded-md px-2 py-1.5 hover:bg-muted">
+            Data
+          </Link>
           <Link href="/settings/account" className="rounded-md px-2 py-1.5 hover:bg-muted">
             Account
           </Link>

@@ -1460,3 +1460,357 @@ left passing-for-the-wrong-reason), E2E 30/30 unchanged, lint/typecheck/format/b
 all clean.
 
 ---
+
+## Phase 5: CSV import/export — status: complete 2026-07-09
+
+**What shipped:**
+
+- **Pure logic (`lib/domain/csv.ts`):** a hand-rolled RFC4180-ish CSV text parser
+  (`parseCsvText`) — quoted fields, embedded commas/newlines, doubled-quote escaping,
+  CRLF/LF — deliberately not a dependency, since this is the one place in the app that
+  parses fully untrusted file content (spec.md's own Phase 5 trust-boundary note) and a
+  linear character scan with no regex is both auditable and immune to backtracking
+  blowup. Column mapping (`buildMappedRows`), amount coercion
+  (`coerceAmountToCents` — `$`/comma/parenthesized-negative handling, reusing
+  `lib/money.ts`'s numeric(12,2) shape) and date coercion (`coerceDate` — ISO and
+  US-slash formats only, deliberately not guessing at ambiguous DD/MM/YYYY), row
+  normalization (`normalizeRow`), Levenshtein-based fuzzy item-name matching
+  (`itemNameSimilarity`), file-internal dedup (`dedupWithinFile`), row classification
+  against existing household data (`classifyRow` — match/already-applied/new), and
+  injection-safe CSV serialization (`buildCsv`, escaping `=+-@`-leading cells with a
+  leading `'`, per spec.md's formula-injection edge case). 65 unit tests, including a
+  `fast-check` property test asserting the parser never throws on arbitrary input.
+- **Data layer (`lib/db/queries.ts`):** `getExportRows` (every entry, every year, with
+  `scheduledDay` correctly reached via `recurring_schedule.actual_date_day` — see the
+  reference-app bug note below), `getMatchCandidates` (household+year+month-scoped, for
+  the matching heuristic), `getNameLookup` (case-insensitive category/account name → id,
+  for resolving a CSV row's free-text columns). `lib/import-csv.ts` (an internal helper,
+  not itself a Server Action, same convention as `lib/generate-entries.ts`) —
+  `runImportPipeline` (parse → map → normalize → dedup → classify, shared by preview and
+  commit) and `commitImport` (applies matched/new rows in one `db.transaction()`).
+- **Server layer:** `app/api/export/route.ts` (GET, mandatory per spec.md's Feature
+  Matrix — not behind the kill-switch, since export is read-only and every role already
+  has read access to this data elsewhere). `app/actions/import.ts` —
+  `previewImportAction`/`commitImportAction` (both gated by `requireRole('write')` AND
+  the `csv_import` kill-switch; commit re-runs `runImportPipeline` against the
+  client-resubmitted csvText/mapping and live DB state rather than trusting anything
+  cached from the preview step — see the adversarial section) and
+  `toggleCsvImportAction` (owner-only, `manage_settings`, the only way to flip the
+  kill-switch on since it defaults off and Phase 5's task list has no dedicated
+  settings page for it).
+- **UI:** `/import` (column-mapping upload → preview table with per-row
+  match/new/already-applied/duplicate/error status and per-row exclude checkboxes →
+  confirm), gated server-side by the `csv_import` kill-switch (an inline "Enable CSV
+  import" button for owners when it's off, matching how the feature is actually
+  discovered and turned on) and by `can(user.role, 'write')` (viewers see a read-only
+  message, not the upload form). `/settings/data` (Export CSV link/button). Both linked
+  from the sidebar nav.
+- **E2E (`e2e/phase5.spec.ts`, 6 tests):** enabling the kill-switch inline; importing a
+  CSV that both reconciles an existing forecast and creates a new ad-hoc entry, verified
+  against the real DB (not just the UI summary), then re-importing the identical file
+  and confirming 0 rows apply; an oversized file rejected with a friendly error; a
+  garbage/unmappable file rejected with a friendly error; export downloading a CSV that
+  round-trips the imported data and escapes a formula-injection item created via the
+  import path itself; a viewer seeing no upload controls at all.
+- **Adversarial:** formula-injection (covered by the E2E export test above, and by
+  `buildCsv`'s own unit tests for every `=+-@` prefix); oversized/garbage files
+  (E2E, and unit tests for `checkCsvByteSize`/`checkCsvRowCount`); cross-household
+  forgery — `commitImportAction` never accepts a classification, entry id, or match
+  decision from the client, only which row _numbers_ to exclude; every actual DB write
+  is independently scoped by `householdId` in its own `WHERE`/query, proven directly by
+  an integration test that seeds a matching forecast in a **different** household and
+  confirms the import creates a new entry in the acting household instead of touching
+  the other one.
+
+**Key decisions and why:**
+
+1. **Reference app's export bug, fixed at the root.** The original app's export query
+   selected a non-existent `monthly_entries.scheduled_day` column directly (confirmed
+   by reading the reference app's own source: `FinanceTracker/src/routes/api/export/
++server.ts`); its own _working_ Monthly page query reveals the real source is
+   `recurring_schedule.actual_date_day`, reached via `monthly_entries.recurring_schedule_id`.
+   Fixed with a `LEFT JOIN recurring_schedule` (null for ad-hoc entries, which have no
+   schedule to join through — correct, not a bug).
+2. **Idempotent re-import via re-classification, not a stored content hash.** spec.md's
+   literal wording calls for "idempotent via content hash of (year,month,item,amount)."
+   Implemented instead as: `classifyRow` checks whether a candidate entry already has
+   this exact actual amount recorded (`already-applied`), which naturally makes a
+   second run of the identical file re-classify every previously-applied row as a
+   no-op — no schema change, no hash column, same practical guarantee. Logged as a
+   deviation in `spec.md`.
+3. **Column mapping requires a single "Date" field, not separate Year/Month fields.**
+   Generic external bank/Excel CSVs (the primary spec.md use case — "arbitrary
+   external CSVs") have one date column, not separate year/month columns. Re-importing
+   this app's own export (which does have distinct Year/Month/Actual_Date columns) maps
+   "Date" to Actual_Date; forecast-only rows in that export (blank Actual_Date, nothing
+   to reconcile) correctly surface as per-row errors rather than blocking the file —
+   spec.md's own task list names "preview payload (matched/unmatched/errors)," so a
+   per-row error for an intentionally-blank date is the designed-for outcome, not a gap.
+4. **Direction is inferred from amount sign when unmapped** (negative = expense, the
+   common bank-statement convention), with an explicit "Direction" column (this app's
+   own export includes one) overriding the inference when mapped. Two fallbacks, not
+   one, because a generic bank CSV and a re-imported export need different signals.
+5. **New (unmatched) rows get `budgetedAmount` set equal to `actualAmount`, not left at
+   the schema's `0` default.** A CSV row is a transaction that already happened — there
+   was no forecast for it, so "budgeted = what actually happened" reads more honestly
+   on the Monthly page than an artificial 0-vs-actual variance would.
+6. **`commitImportAction` re-derives the entire classification server-side from the
+   client-resubmitted csvText/mapping, rather than trusting a cached preview.** The
+   only client input trusted as a genuine decision (not a claim about server state) is
+   _which row numbers to exclude_ — meaningless without the server's own fresh
+   classification to apply it against. This is what closes spec.md's "cross-household
+   entry IDs in a forged commit payload" adversarial case structurally, not via a
+   spot-check.
+7. **`next.config.ts`'s Server Actions `bodySizeLimit` raised to 6MB.** Discovered via
+   a failing E2E test, not anticipated: Next's default 1MB Server Action body cap was
+   rejecting an oversized-file test upload with a hard 413 _before_ `lib/domain/csv.ts`'s
+   own graceful `checkCsvByteSize` (5MB) ever ran — the friendly error spec.md's edge
+   case calls for was unreachable. Raised past the 5MB app-level cap with headroom for
+   FormData/multipart overhead and the sibling mapping fields.
+8. **Export has no kill-switch; import does.** Matches spec.md's Feature Matrix exactly
+   (`csv_import` is the only kill-switch named for this phase) — export is read-only
+   and bounded (every household's own data, nothing external), so there's no incident
+   scenario a kill-switch would meaningfully guard against the way there is for a
+   bulk-write feature ingesting hostile file content.
+
+**Real bugs found and fixed (during initial build, before the review pass below):**
+
+- **`classifyRow`'s "already-applied" idempotency check required an exact `direction`
+  match, but an uncategorized entry (no category mapped on a prior import run) has
+  `direction: null`** — found by my own integration test for "re-importing the
+  identical file applies nothing," which failed with `applied: 1` instead of `0` on
+  the second run. Root cause: the `already-applied` check didn't allow
+  `c.direction === null`, unlike the sibling `forecastCandidates` filter a few lines
+  below it, which already did. An uncategorized ad-hoc entry created by import could
+  never be recognized as already-applied on a later re-import — every re-run of a
+  no-category-mapped file would have kept inserting duplicates forever. Fixed to match
+  the sibling filter's `(c.direction === null || c.direction === row.direction)`
+  condition; added a dedicated regression test.
+- **`/import/page.tsx` didn't gate the upload form by write-role.** Caught while
+  writing the E2E viewer test, before it ever ran: a viewer would have seen the full
+  file-upload/column-mapping/preview form (harmless — preview doesn't write), but
+  clicking "Confirm import" would hit `commitImportAction`'s `requireRole('write')`
+  and throw an uncaught `ForbiddenError` into Next's generic error boundary instead of
+  a friendly message — the same class of gap Phase 2's "hide the write form, not just
+  reject the write" convention (`goals/page.tsx`, `settings/categories/page.tsx`)
+  already exists to prevent. Fixed by gating the form render on
+  `can(user.role, 'write')`, matching that convention.
+- **My own E2E spec's `afterAll` cleanup had a real, near-shipped bug**: an early draft
+  deleted `monthlyEntries` scoped only by `householdId` — i.e., every entry in the real
+  seeded household, not just the ones this spec created. Caught before ever running it
+  by re-reading the query while writing the viewer test (not by a failure), and fixed
+  to scope by the specific E2E item names instead, matching every other spec's
+  established cleanup convention.
+- **Next's default 1MB Server Action body limit** — see Key Decision #7 above; found by
+  the oversized-file E2E test failing with a raw 413 instead of the app's own friendly
+  error.
+
+**Deferred / blocked:** none — see the review pass immediately below for what the
+hardening round found and deferred.
+
+**Hardening pass (`/code-review` on the full Phase 5 diff, extra-high effort,
+2026-07-09):** 10 parallel finder angles against the complete working-tree diff (16
+changed/new files), 1-vote verification, a gap sweep. The line-by-line angle alone
+surfaced 4 independently-verified (empirically executed, not just reasoned about)
+correctness bugs in the matching/parsing logic; three other angles independently
+re-derived the most severe one. 14 findings fixed across two passes (one during triage,
+one caught by a second, focused verification pass on the fixes themselves), 5 deferred
+with reasoning.
+
+- _Fixed, most severe (independently found by 4 of 10 angles)_ — **two different CSV
+  rows in the same file could both classify as `'match'` against the same single
+  existing forecast entry.** `classifyRow` picked the best-scoring candidate from the
+  full per-month candidate list independently for every row, with no bookkeeping of
+  which candidate an earlier row in the same file had already claimed. Two genuinely
+  distinct real transactions that both plausibly resembled one forecast (e.g. two
+  restaurant charges in the same week, both within the amount/name-similarity
+  tolerance) would both match it; `commitImport`'s two sequential `UPDATE`s to that one
+  row would then silently apply only the second, discarding the first — while
+  `applied` counted both, reporting success with no indication anything was lost.
+  Fixed by adding a third parameter to `classifyRow`, `claimedEntryIds: ReadonlySet<
+string>`, and threading a per-month `claimed` set through `runImportPipeline`'s
+  classification loop (a candidate's id is added to it the moment a row matches it,
+  before the next row in that month is classified) — a later row that would have
+  matched an already-claimed candidate now correctly falls through to `'new'` instead.
+  Verified with a real-DB integration test: two rows, one forecast, asserting exactly
+  one `'match'` + one `'new'`, both amounts preserved as two separate rows afterward.
+- _Fixed_ — **`parseCsvText` treated ANY `"` character as opening a quoted field, even
+  mid-field of an otherwise-unquoted field.** A single stray `"` in a normal item
+  description (e.g. `12" cable`, a completely ordinary hardware-store line item) would
+  silently swallow every subsequent comma and newline into one field until the next
+  `"` or EOF — merging and dropping an arbitrary number of real transaction rows with
+  zero error surfaced (the existing property test only asserted "never throws," not
+  "never eats unrelated rows"). Real-world CSV tools (Excel included) only treat a `"`
+  as field-opening when it's the first character of that field; fixed to match, via a
+  `field === ''` guard. Verified with a regression test asserting all three rows of a
+  file containing a mid-field quote parse correctly.
+- _Fixed_ — **`dedupWithinFile`'s dedup key used year+month, not the full date** — two
+  genuinely distinct transactions sharing an item/amount/direction within the same
+  month (e.g. two Netflix charges on different days) were incorrectly collapsed into
+  one, with the second silently dropped and no way to force-include it (only
+  `'match'`/`'new'` rows get a checkbox). Fixed to key on the full `actualDate`
+  instead — an exact same-day repeat is the only plausible accidental duplicate a
+  source file would contain.
+- _Fixed_ — **`itemNameSimilarity`'s substring bonus (0.9) applied uniformly regardless
+  of length disparity** — a short, generic CSV item name (`"Fee"`, `"Transfer"`,
+  common in real bank exports) would spuriously score 0.9 against any unrelated
+  existing entry whose longer name happened to contain it (e.g. a `$50` ATM-fee
+  transaction reconciling against an unrelated `"Late Fee"` budget line). Fixed to
+  only grant the bonus when the shorter string covers at least half the longer
+  string's length; a weak substring now falls through to plain Levenshtein scoring,
+  which correctly penalizes the mismatch (`itemNameSimilarity('Fee', 'Late Fee')` ≈
+  0.375, below the 0.6 match threshold).
+- _Fixed_ — **two spec.md-mandated Phase 5 edge cases had no implementation at all:
+  "wrong encoding" and "missing headers."** Caught by the conventions angle
+  cross-checking spec.md's Ready-criteria list line by line against what shipped.
+  Added `checkCsvEncoding` (rejects a file containing the U+FFFD replacement
+  character — the reliable signature of a file saved in a non-UTF-8 encoding like
+  Windows-1252, since `File.text()`/Node always decode as UTF-8 with no
+  detection step) and a `hasHeaderRow` checkbox end-to-end (client state → hidden
+  form field → `runImportPipeline`, which now conditionally treats row 0 as data
+  instead of unconditionally consuming it as a header).
+- _Fixed, same change closed a second, independently-found gap_ — implementing
+  `hasHeaderRow` required `ColumnMapping` to stop being header-NAME-based (there's no
+  header text at all when the file has none) — switched it to column-POSITION-based
+  (`buildMappedRows` now resolves by numeric index, not a name→index `Map`). This
+  also closed a real bug the cross-file-tracer angle found independently: a CSV with
+  two columns sharing an identical header name (e.g. two columns both literally named
+  `"Amount"`) previously had no way to distinguish them — the name→index lookup
+  silently resolved to whichever the `Map` happened to keep (last-write-wins), with
+  no way for the user to pick the other one. Position-based mapping has no such
+  ambiguity, by construction.
+- _Fixed_ — **`commitImportAction` never validated that the required Date/Item/Amount
+  fields were mapped**, unlike `previewImportAction`, which does. A request reaching
+  commit with an unmapped required field (a tampered/forged POST, or a future UI
+  regression failing to forward the preview's mapping) made every row fail
+  normalization and silently report `{success: true, applied: 0}` — a validation
+  failure misreported as an uneventful successful no-op. Added the identical check
+  `previewImportAction` already had.
+- _Fixed_ — **`coerceAmountToCents` re-implemented `lib/money.ts`'s numeric-shape regex
+  and cents arithmetic from scratch** instead of preprocessing (strip `$`/commas/
+  parens/sign) then delegating to `parseAmountToCents`, the one canonical
+  implementation every other money-entry path in the app already goes through. Fixed
+  to delegate — closes a real future-drift risk (a rounding/digit-cap fix made to
+  `parseAmountToCents` would otherwise silently NOT apply to CSV-imported amounts).
+- _Fixed, found by the SECOND (fix-verification) pass, not the first_ — the
+  delegation above introduced its own new bug: `coerceAmountToCents` strips at most
+  one leading sign character itself before calling `parseAmountToCents`, which
+  ALSO accepts an optional leading `-` — a doubly-signed cell (`"--500"`, surviving
+  as `"-500"` after this function's own strip) let `parseAmountToCents` parse the
+  residual `-` as genuinely negative, which this function's own `negative` flag then
+  negated a second time, silently cancelling back to **positive** `$500.00`
+  (misclassified as income) instead of being rejected as malformed. Fixed by
+  rejecting outright if a sign character survives this function's own stripping
+  (`s.startsWith('-') || s.startsWith('+')`) rather than handing it to
+  `parseAmountToCents` a second time. Verified `"--500"`/`"++5.00"` are now rejected,
+  while confirming `"(-500)"` (parens AND an inner `-`, both notations agreeing on
+  negative, not conflicting) is correctly still accepted as -$500.00 — a distinction
+  only caught by directly executing the function rather than reasoning about it by
+  hand, after an initial hand-trace got it wrong.
+- _Fixed_ — `coerceDate`'s calendar-round-trip validity check (catching
+  `2026-02-30`-style impossible dates Postgres would otherwise silently roll over)
+  duplicated `app/actions/monthly.ts`'s `dateInputSchema` logic line-for-line. Both
+  independently re-implemented the identical 3-line technique. Extracted a shared
+  `isValidCalendarDate` into `lib/domain/month-params.ts` (already the DRY home for
+  `MIN_YEAR`/`MAX_YEAR`) and pointed both call sites at it — a low-risk, mechanical,
+  behavior-preserving change (confirmed via `monthly.ts`'s own existing test suite).
+- _Fixed_ — `runImportPipeline`'s per-month `getMatchCandidates` calls ran as
+  sequential `await`s in a `for` loop instead of `Promise.all` — each query is
+  independent and read-only, so a file spanning many months (e.g. a full year's bank
+  history, 12 months) paid ~12 avoidable sequential round trips on an interactive
+  Server Action the user is sitting in front of. Parallelized (each month's fetch +
+  classification still runs its own sequential `claimed`-set logic internally, just
+  the cross-month fetches now run concurrently).
+- _Fixed_ — `commitImport` unconditionally fetched `getNameLookup` (category/account
+  name resolution) even when every included classification was `'match'` (a
+  pure-reconciliation import, nothing `'new'` to resolve a category for). Skipped
+  entirely when no included row needs it.
+- _Fixed_ — `toPreviewRow`'s `switch` repeated an identical six-field projection in 4
+  of 5 branches, varying only the status/message. Factored into a shared `projectRow`
+  helper.
+- _Fixed_ — **`next.config.ts`'s Server Actions `bodySizeLimit` (raised to accept
+  Phase 5's CSV uploads) is a GLOBAL Next.js setting, not scoped to the import
+  action** — it also widens the body-size ceiling for every OTHER Server Action in
+  the app, including `loginAction`, which is reachable pre-authentication. Two
+  angles independently flagged this. The deeper fix (moving CSV upload to a
+  dedicated Route Handler, like `app/api/export/route.ts` already is, so the limit
+  could be scoped to just that endpoint) is a real architectural change out of
+  proportion for a review-fixup pass — see Deferred below. As a proportionate
+  interim mitigation: added `.max(200)` bounds to `loginSchema`'s password field and
+  `changePasswordSchema`'s two password fields (defense-in-depth against the widened
+  ceiling being used to force excessive body-buffering/argon2-hashing on an
+  unauthenticated request; doesn't conflict with `validatePassword`'s existing
+  minimum-length-only policy). Also raised the limit itself from 6MB to 20MB, since a
+  second, separate angle correctly noted `MAX_CSV_BYTES`'s 5MB cap measures JS string
+  `.length` (UTF-16 code units), which can undercount real UTF-8 wire size by up to
+  ~3x for non-Latin content — 6MB of headroom wasn't actually enough to guarantee the
+  graceful error fires before Next's own hard platform limit does.
+- _Fixed_ — `import-form.tsx`'s "Start over" reset every piece of upload-step state
+  except the commit action's `useActionState` result, which can't be programmatically
+  cleared — a failed commit attempt's error message could bleed into a subsequent,
+  unrelated file's preview screen. Added a `suppressStaleCommitError` flag, cleared
+  the instant a genuinely new commit result arrives.
+
+Deferred, documented rather than fixed:
+
+- **CSV import staying a Server Action rather than becoming a dedicated Route
+  Handler** (see the `bodySizeLimit` finding above) — the deeper architectural fix,
+  not done: converting `previewImportAction`/`commitImportAction` to a Route Handler
+  would let the body-size limit be scoped to just that endpoint instead of raised
+  globally, but it means reworking the client submission flow away from
+  `useActionState`/`action={...}` (a fetch-based upload instead), and manually
+  replicating Next's built-in Server Action CSRF/origin protection that a Route
+  Handler doesn't get automatically. Real, but a substantially larger change than a
+  review-fixup pass; the `.max(200)` bounds + 20MB headroom above are the
+  proportionate interim mitigation.
+- **The kill-switch/flag-gating pattern now has a FOURTH independently-shaped
+  variant** (`requireCsvImportEnabled` in `app/actions/import.ts`, joining
+  `categories.ts`'s inline `env.FEATURE_X` check, `goals.ts`'s private
+  `requireGoalsEnabled()` helper, and `monthly/page.tsx`'s bare inline `isEnabled()`
+  call). This is the exact architectural gap Phase 4's hardening pass already
+  flagged and deferred (recommending a shared `requireFeatureEnabled`-style helper
+  in `lib/auth/guards.ts` alongside `requireRole`) — Phase 5 had the chance to close
+  it and instead added a fifth-ish bespoke shape. Still deferred: centralizing it
+  properly means touching all four existing call sites across three earlier phases,
+  a real refactor disproportionate to a review-fixup pass, not a one-line addition
+  scoped to this diff. Worth prioritizing as its own pass soon, now that the
+  pattern has recurred a fourth time.
+- **`classifyRow`'s per-row Levenshtein scoring is O(rows × candidates) per month,
+  synchronous** — at a pathological extreme (near `MAX_CSV_ROWS` concentrated in one
+  month, matched against a large pre-existing candidate set accumulated from many
+  prior imports) this could be hundreds of thousands of string comparisons blocking
+  one Server Action invocation. Not addressed: this app's realistic household scale
+  (a handful to dozens of entries per month) makes the actual cost negligible;
+  bounding it further would add real complexity for a scale this app doesn't operate
+  at, the same tradeoff already accepted for `getCurrentMonthCategoryBudgets` in the
+  Phase 4 hardening pass.
+- **`RowClassification`'s `'already-applied'` variant carries an `entryId` field, and
+  `PreviewRow`'s `direction` field, that nothing in the running app actually reads**
+  (only structural test assertions reference them). Real, minor API-surface
+  cleanliness gaps, not bugs — deferred rather than trimmed under review-fixup
+  pressure, since removing them has no behavioral benefit.
+- **The `reactedTo`/`setReactedTo` render-time `useActionState`-sync idiom now
+  appears in 9 places across the codebase** (`import-form.tsx` added 2 more in this
+  phase: `reactedToPreview`, `reactedToCommit`). Phase 4's hardening pass already
+  considered and deferred extracting this at 7 occurrences ("three call sites is the
+  threshold the review would extract at, not clearly past it"). Still deferred here
+  for the same reason, now with the additional consideration that the pattern is the
+  established codebase convention — introducing a different mechanism (e.g. a
+  key-based remount) in just this one file would trade verbosity for inconsistency,
+  not obviously a net improvement.
+
+Re-verified end to end across both fix rounds: unit 307/307 (up from 293 — new
+regression tests for every fix above: the mid-field-quote parser fix, the
+claimed-entry-set fix, the substring-similarity-scaling fix, the full-date dedup key,
+`checkCsvEncoding`, the index-based `buildMappedRows`, `isValidCalendarDate`, and the
+double-sign rejection), integration 156/156 (up from 152 — new tests for the
+two-rows-one-forecast fix, the missing-required-field-on-commit fix, wrong-encoding
+rejection, and `hasHeaderRow: false`), E2E 36/36 unchanged (all `selectOption` calls
+updated from matching by value to matching `{label: ...}`, since mapping values are
+now column positions, not header text), lint/typecheck/format/build all clean. The
+one observed E2E flake (`auth.spec.ts`'s change-password test) during a full-suite
+run passed cleanly both in isolation and on a full-suite re-run immediately after —
+the same pre-existing transient flake pattern documented in Phase 3, not a
+regression from touching `auth.ts`'s schemas.
+
+---

@@ -1,0 +1,35 @@
+import { requireUser } from '../../../../lib/auth/guards';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { buttonVariants } from '@/components/ui/button';
+
+// Export is mandatory (spec.md Feature Matrix), not behind csv_import's kill-switch —
+// that flag gates the bulk-write side of Phase 5, export is read-only and every role
+// already has read access to this same data everywhere else in the app.
+export default async function DataSettingsPage() {
+  await requireUser();
+
+  return (
+    <div className="flex max-w-lg flex-col gap-6">
+      <div>
+        <h1 className="text-2xl font-semibold">Data</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Export every entry in this household as a CSV file.
+        </p>
+      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Export</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <a
+            href="/api/export"
+            data-testid="export-csv-link"
+            className={buttonVariants({ size: 'sm' })}
+          >
+            Export CSV
+          </a>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

@@ -34,6 +34,12 @@ export default defineConfig({
         // generateAction tests (a thin wrapper around this) and the Monthly page's
         // auto-generate hook (covered by e2e/monthly.spec.ts).
         'lib/generate-entries.ts',
+        // Same reasoning: every path here reads/writes monthly_entries against a live
+        // household — exercised by app/actions/import.integration.test.ts (a thin
+        // wrapper around this, same shape as generate-entries.ts above). The pure
+        // parsing/matching logic it calls into (lib/domain/csv.ts) IS unit-tested and
+        // stays in the gated scope.
+        'lib/import-csv.ts',
         // shadcn/ui-generated helper (clsx + tailwind-merge one-liner) — vendor
         // boilerplate, not application logic; clsx/tailwind-merge have their own tests.
         'lib/utils.ts',

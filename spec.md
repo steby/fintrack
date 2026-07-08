@@ -72,6 +72,28 @@ year, partial actuals, absent prior year) unit-testable without a live database 
 cover exactly those cases. Caught by a `/code-review` pass finding this diverged from the
 literal phase-plan wording without being written back here.
 
+**Phase 5 deviations:** the Phase 5 task list's "idempotent via content hash of
+(year,month,item,amount)" is implemented instead as **re-classification against live DB
+state**, no stored hash column: `classifyRow` (`lib/domain/csv.ts`) checks whether a
+candidate entry already has the exact actual amount a row would produce recorded
+(`'already-applied'`, not `'match'`/`'new'`) — so re-running the identical file a second
+time naturally reclassifies every previously-applied row as a no-op, without a
+migration or a separate hash column to keep in sync with the data it's hashing.
+Same practical guarantee (re-import is a no-op), simpler mechanism (the DB's own current
+state IS the check). `ColumnMapping` (`lib/domain/csv.ts`) maps by column **position**
+(index), not header **name** as an early implementation first tried — required once the
+"missing headers" edge case meant there may be no header text to map by at all, and it
+turned out to also fix an unrelated bug (a CSV with two identically-named columns
+previously had no way to disambiguate which one a mapping selected). `next.config.ts`'s
+Server Actions `bodySizeLimit` raised from the 1MB platform default to 20MB to accept
+Phase 5's CSV uploads (bounded separately by `lib/domain/csv.ts`'s own 5MB
+`MAX_CSV_BYTES`/2000-row caps, checked before parsing) — a **global** Next.js setting,
+not scoped to the import action alone, so it also widens the body-size ceiling for
+every other Server Action in the app including pre-auth `loginAction`; mitigated with
+`.max(200)` bounds on `app/actions/auth.ts`'s password fields rather than the larger
+architectural fix (moving CSV upload to its own Route Handler, scoped independently —
+deferred, see `PROGRESS.md`'s Phase 5 hardening-pass entry).
+
 ## Context
 
 `FinanceTracker/` (sibling project, not in this repo) is a single-user finance planner
