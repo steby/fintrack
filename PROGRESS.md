@@ -971,7 +971,8 @@ public (unlimited Actions minutes on standard runners) rather than throttle deve
 - CI is now fully green end to end (all steps, including E2E) on the public repo, confirming
   the Actions-minutes block is resolved.
 
-**`/code-review` pass on the above (before starting Phase 3), 14 findings, 9 fixed:**
+**`/code-review` pass on the above (before starting Phase 3), 14 findings, 7 fixed, 1 critical
+item found unresolved and escalated (see below), 3 deferred:**
 
 The first version of the CI cleanup script (`lib/db/clean-legacy-data.ts` at the time) had a
 critical bug: its legacy-name list included 7 names that are _also_ current, active names in
@@ -1018,6 +1019,39 @@ exist at all, not just get its colliding entries trimmed.
   rewrite, which had gone undocumented in the very session that made them (a real process
   violation of `AGENTS.md`'s "update spec.md immediately" rule — caught by the review's
   conventions angle, not spotted proactively).
+
+**⚠ UNRESOLVED — found by a re-review pass on this fix, requires the owner's explicit
+decision, deliberately NOT acted on:**
+
+- **The original, real-named `LEGACY_SEED_ITEM_NAMES`/`LEGACY_SEED_BANK_NAMES` content is
+  still reachable in this repo's git history, on the public remote, right now.** Removing the
+  legacy-name list (above) only changed the current HEAD state — it did not rewrite history,
+  unlike the `seed.ts` genericization pass earlier this session, which specifically used `git
+filter-repo` for exactly this reason. `8ebf134` (the commit that first added the buggy
+  version of this file, with the real values spelled out) is a confirmed ancestor of the
+  current public `origin/main` HEAD — verified directly: `git merge-base --is-ancestor 8ebf134
+origin/main` returns true, and `git show 8ebf134:lib/db/clean-legacy-data.ts` (or GitHub's
+  own commit/file-history UI) currently returns the real values in full. This is the exact
+  same class of exposure the earlier `seed.ts`/history-rewrite work was done to prevent — it
+  was simply missed for this second file.
+- **Why this isn't just fixed the same way, immediately:** the fix is the same technique
+  already used successfully once this session (`git filter-repo` to strip the file's real
+  content from history, then force-push) — but doing that requires a force-push and touches
+  the repo's shared history, which is explicitly outside this session's standing authorization
+  to act on without asking first, including overnight. Leaving a real, live exposure
+  unresolved rather than silently fixing it with an action outside that authorization was the
+  more conservative choice, even though it means the exposure persists a while longer.
+- **What to do:** on your next session, say the word and this gets fixed the same way as
+  `seed.ts` was — `git filter-repo --path lib/db/clean-legacy-data.ts --invert-paths`
+  (the file no longer exists at HEAD, so nothing needs re-adding this time), force-push, and a
+  full-history grep to confirm. Low risk to execute (same repo, no other collaborators, a
+  backup bundle from the earlier rewrite already exists locally), just outside standing
+  overnight authorization.
+- Also worth a look while addressing this: `app/actions/accounts.integration.test.ts` uses the
+  real bank brand names "DBS"/"OCBC" as arbitrary test-fixture values (pre-existing, not
+  introduced tonight, already reasoned about once this session as low-risk generic fixture
+  data) — not urgent on its own, but corroborates the leaked data above once cross-referenced,
+  so worth a second look in the same pass if convenient.
 
 Deferred, documented rather than fixed:
 

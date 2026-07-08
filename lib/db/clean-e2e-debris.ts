@@ -1,7 +1,5 @@
 import 'dotenv/config';
 import { like } from 'drizzle-orm';
-import { pool, db } from './index';
-import { logger } from '../log';
 import { bankAccounts, categories, monthlyEntries, recurringSchedule, users } from './schema';
 
 // Cleans E2E test debris left behind when a run is killed mid-test. This CI workflow uses
@@ -24,16 +22,25 @@ import { bankAccounts, categories, monthlyEntries, recurringSchedule, users } fr
 // mechanism (not household_id) — there's no single "right" household to scope to on a
 // shared branch used by many ephemeral test households — which makes this unsafe to run
 // against a real/shared database outside of CI without a deliberate override.
+//
+// ./schema and drizzle-orm are safe to import statically here (unlike ./index/../log
+// below) — schema.ts has no dependency on lib/env.ts, so importing it doesn't trigger
+// eager env validation.
 
 async function main() {
   if (process.env.CI !== 'true') {
     throw new Error(
-      'db:clean-legacy refuses to run outside CI (process.env.CI !== "true"). ' +
+      'db:clean-e2e-debris refuses to run outside CI (process.env.CI !== "true"). ' +
         'Its DELETE patterns are broad by name/prefix, not household-scoped, and are ' +
         'only safe against the shared `ci` Neon branch this workflow provisions — ' +
         'never point it at a local/dev/production DATABASE_URL.',
     );
   }
+
+  // Dynamically imported *after* the CI-only check above, so a stray local run fails with
+  // this script's own clear message instead of tripping lib/env.ts's eager validation
+  // first — same reasoning as lib/db/seed.ts's dynamic import of ./index/../log.
+  const [{ pool, db }, { logger }] = await Promise.all([import('./index'), import('../log')]);
 
   const result = await db.transaction(async (tx) => {
     const e2eEntries = await tx
@@ -71,6 +78,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  logger.error({ err }, 'Legacy data cleanup failed');
+  console.error('E2E debris cleanup failed:', err instanceof Error ? err.message : err);
   process.exit(1);
 });
