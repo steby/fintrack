@@ -24,9 +24,16 @@ export function CalendarView({
   const unscheduled: MonthlyEntryRow[] = [];
   for (const entry of entries) {
     if (entry.scheduledDay) {
-      const list = byDay.get(entry.scheduledDay) ?? [];
+      // Clamp to the last real day of the month (spec.md's Phase 6 email-reminder logic
+      // already establishes "month-end clamping for day 29-31" as the intended handling
+      // for a scheduled day that doesn't exist in a shorter month) — without this, an
+      // entry with scheduledDay=31 silently vanished from Feb/30-day months entirely,
+      // since cells only spans 1..daysInMonth and a truthy scheduledDay never falls
+      // through to the "unscheduled" bucket either.
+      const day = Math.min(entry.scheduledDay, daysInMonth);
+      const list = byDay.get(day) ?? [];
       list.push(entry);
-      byDay.set(entry.scheduledDay, list);
+      byDay.set(day, list);
     } else {
       unscheduled.push(entry);
     }
@@ -58,7 +65,12 @@ export function CalendarView({
           {cells.map((day) => {
             const dayEntries = byDay.get(day) ?? [];
             if (agenda && dayEntries.length === 0) return null;
+            // Uncategorized entries (categoryDirection null) are excluded from the net,
+            // not treated as expenses — consistent with summary-bar.tsx/page.tsx's
+            // sumCents, which excludes them from both income and expense totals for the
+            // same reason: a direction-less amount can't be classified as either.
             const dailyNetCents = dayEntries.reduce((sum, e) => {
+              if (e.categoryDirection === null) return sum;
               const cents = parseAmountToCents(e.budgetedAmount);
               return sum + (e.categoryDirection === 'income' ? cents : -cents);
             }, 0);
@@ -90,7 +102,13 @@ export function CalendarView({
                     >
                       <span className="flex items-center gap-1 truncate">
                         <span
-                          className={`size-1.5 shrink-0 rounded-full ${entry.categoryDirection === 'income' ? 'bg-emerald-500' : 'bg-red-500'}`}
+                          className={`size-1.5 shrink-0 rounded-full ${
+                            entry.categoryDirection === 'income'
+                              ? 'bg-emerald-500'
+                              : entry.categoryDirection === 'expense'
+                                ? 'bg-red-500'
+                                : 'bg-muted-foreground'
+                          }`}
                           aria-hidden
                         />
                         <span className="truncate">{entry.item}</span>
@@ -119,7 +137,9 @@ export function CalendarView({
                 className={`flex items-center justify-between rounded-md px-3 py-2 text-sm ${
                   entry.categoryDirection === 'income'
                     ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                    : 'bg-red-500/10 text-red-700 dark:text-red-400'
+                    : entry.categoryDirection === 'expense'
+                      ? 'bg-red-500/10 text-red-700 dark:text-red-400'
+                      : 'bg-muted text-muted-foreground'
                 }`}
               >
                 <span className="truncate font-medium">{entry.item}</span>

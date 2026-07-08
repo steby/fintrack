@@ -37,6 +37,14 @@ describe('parseAmountToCents', () => {
       expect(() => parseAmountToCents(raw)).toThrow(InvalidAmountError);
     },
   );
+
+  it("accepts exactly 10 integer digits (numeric(12,2)'s max)", () => {
+    expect(parseAmountToCents('9999999999.99')).toBe(999999999999);
+  });
+
+  it('rejects 11+ integer digits (would overflow numeric(12,2))', () => {
+    expect(() => parseAmountToCents('99999999999')).toThrow(InvalidAmountError);
+  });
 });
 
 describe('centsToAmount', () => {
@@ -86,6 +94,10 @@ describe('moneyInputSchema', () => {
   it('rejects NaN-shaped input', () => {
     expect(moneyInputSchema.safeParse('NaN').success).toBe(false);
     expect(moneyInputSchema.safeParse('abc').success).toBe(false);
+  });
+
+  it('rejects an amount that would overflow numeric(12,2) (adversarial: 11+ integer digits)', () => {
+    expect(moneyInputSchema.safeParse('99999999999').success).toBe(false);
   });
 });
 

@@ -17,39 +17,50 @@ export async function generateEntriesForRange(
   const months = walkMonths(from, to);
   if (months.length === 0) return 0;
 
-  const activeItems = await db
-    .select()
-    .from(recurringSchedule)
-    .where(
-      and(eq(recurringSchedule.householdId, householdId), eq(recurringSchedule.isActive, true)),
+  // spec.md: "Generate: INSERT … ON CONFLICT DO NOTHING in one transaction." The SELECT
+  // of active items and the bulk INSERT are wrapped together so a recurring item edited,
+  // toggled inactive, or deleted between the two (plausible: the auto-generate hook runs
+  // on every /monthly page load, potentially concurrently with a household member editing
+  // that same item on /recurring) can't produce entries generated from a stale read —
+  // Postgres's REPEATABLE READ-or-stronger guarantee isn't needed here since the SELECT
+  // and INSERT are otherwise independent statements; the transaction's real job is
+  // ensuring the two either both apply or the caller sees a clean failure, not a
+  // half-applied generate.
+  return db.transaction(async (tx) => {
+    const activeItems = await tx
+      .select()
+      .from(recurringSchedule)
+      .where(
+        and(eq(recurringSchedule.householdId, householdId), eq(recurringSchedule.isActive, true)),
+      );
+
+    const rowsToInsert = months.flatMap(({ year, month }) =>
+      activeItems
+        .filter((item) => shouldGenerate(item.frequency, item.scheduleMonths, month))
+        .map((item) => ({
+          householdId,
+          year,
+          month,
+          recurringScheduleId: item.id,
+          item: item.item,
+          categoryId: item.categoryId,
+          budgetedAmount: item.budgetedAmount,
+          bankAccountId: item.bankAccountId,
+        })),
     );
 
-  const rowsToInsert = months.flatMap(({ year, month }) =>
-    activeItems
-      .filter((item) => shouldGenerate(item.frequency, item.scheduleMonths, month))
-      .map((item) => ({
-        householdId,
-        year,
-        month,
-        recurringScheduleId: item.id,
-        item: item.item,
-        categoryId: item.categoryId,
-        budgetedAmount: item.budgetedAmount,
-        bankAccountId: item.bankAccountId,
-      })),
-  );
+    if (rowsToInsert.length === 0) return 0;
 
-  if (rowsToInsert.length === 0) return 0;
+    // ON CONFLICT DO NOTHING against the existing unique index on
+    // (household_id, year, month, recurring_schedule_id) — idempotent: a repeat call
+    // over an overlapping range only inserts genuinely new months. `.returning()`
+    // reports the true new-row count, not rowsToInsert.length.
+    const inserted = await tx
+      .insert(monthlyEntries)
+      .values(rowsToInsert)
+      .onConflictDoNothing()
+      .returning({ id: monthlyEntries.id });
 
-  // ON CONFLICT DO NOTHING against the existing unique index on
-  // (household_id, year, month, recurring_schedule_id) — idempotent: a repeat call over
-  // an overlapping range only inserts genuinely new months. `.returning()` reports the
-  // true new-row count, not rowsToInsert.length.
-  const inserted = await db
-    .insert(monthlyEntries)
-    .values(rowsToInsert)
-    .onConflictDoNothing()
-    .returning({ id: monthlyEntries.id });
-
-  return inserted.length;
+    return inserted.length;
+  });
 }

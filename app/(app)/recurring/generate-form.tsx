@@ -2,6 +2,7 @@
 
 import { useActionState, useState } from 'react';
 import { generateAction } from '../../actions/recurring';
+import { addMonths } from '../../../lib/domain/recurring';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
@@ -14,8 +15,11 @@ export function GenerateForm() {
   const now = new Date();
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
-  const toDefault =
-    currentMonth <= 12 ? { year: currentYear, month: 12 } : { year: currentYear + 1, month: 12 };
+  // 12 months inclusive of the current one (current + 11 more) — addMonths correctly
+  // rolls the year over regardless of which month "now" is, unlike the ternary this
+  // replaced (`currentMonth <= 12 ? ... : currentYear + 1 ...`), whose condition was
+  // always true (getMonth()+1 is always in [1,12]) and so never actually rolled over.
+  const toDefault = addMonths({ year: currentYear, month: currentMonth }, 11);
 
   if (!open) {
     return (

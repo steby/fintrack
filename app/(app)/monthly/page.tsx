@@ -40,8 +40,11 @@ export default async function MonthlyPage({
   // every page load — ON CONFLICT DO NOTHING makes repeated calls cheap no-ops once the
   // window is already filled, an accepted tradeoff at household scale (no formal load
   // tests, per spec.md's Tier-2 scope). Gated by the auto_generate kill-switch so an
-  // owner can disable it instantly if it ever misbehaves, without a redeploy.
-  if (await isEnabled(user.householdId, 'auto_generate')) {
+  // owner can disable it instantly if it ever misbehaves, without a redeploy. Also
+  // gated by `canManage` — viewers are read-only everywhere (lib/auth/rbac.ts), and
+  // without this check a viewer's page load would trigger real INSERTs, the one write
+  // path in the app that wasn't behind requireRole('write').
+  if (canManage && (await isEnabled(user.householdId, 'auto_generate'))) {
     const now = new Date();
     const from = { year: now.getFullYear(), month: now.getMonth() + 1 };
     await generateEntriesForRange(user.householdId, from, addMonths(from, 2));

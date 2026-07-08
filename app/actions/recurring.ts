@@ -2,7 +2,7 @@
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
-import { eq, and, inArray, sql } from 'drizzle-orm';
+import { eq, and, isNull, sql } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import {
   recurringSchedule,
@@ -13,8 +13,7 @@ import {
 } from '../../lib/db/schema';
 import { requireRole } from '../../lib/auth/guards';
 import { parseScheduleMonths, walkMonths } from '../../lib/domain/recurring';
-import { shouldPropagate } from '../../lib/domain/entries';
-import { moneyInputSchema, centsToAmount, parseAmountToCents } from '../../lib/money';
+import { moneyInputSchema, centsToAmount } from '../../lib/money';
 import { generateEntriesForRange } from '../../lib/generate-entries';
 
 export type RecurringActionState = { error?: string; success?: boolean } | undefined;
@@ -86,8 +85,15 @@ async function resolveRecurringInput(
 
   let actualDateDay: number | null = null;
   if (raw.actualDateDay) {
+    // A full-string digit match, not Number.parseInt — parseInt truncates at the first
+    // non-digit character ("5xyz" -> 5) instead of rejecting malformed input outright,
+    // silently accepting garbage as if it were clean input (unlike every money field in
+    // this file, which uses a strict full-match regex for exactly this reason).
+    if (!/^\d{1,2}$/.test(raw.actualDateDay)) {
+      return { ok: false, error: 'Day of month must be between 1 and 31.' };
+    }
     const day = Number.parseInt(raw.actualDateDay, 10);
-    if (!Number.isInteger(day) || day < 1 || day > 31) {
+    if (day < 1 || day > 31) {
       return { ok: false, error: 'Day of month must be between 1 and 31.' };
     }
     actualDateDay = day;
@@ -114,36 +120,23 @@ async function resolveRecurringInput(
 
 // Shared by updateRecurringAction's propagate branch and deleteRecurringAction's
 // removeForecast branch: both need exactly "forecast rows for this recurring item that
-// haven't been actualized or manually overridden" — literally the same predicate,
-// so both fetch candidates and filter with the actual tested lib/domain/entries.ts
-// function rather than each hand-translating it into a separate SQL WHERE clause that
-// could silently drift from what shouldPropagate actually checks.
-async function getPropagationTargetIds(
-  recurringScheduleId: string,
-  householdId: string,
-): Promise<string[]> {
-  const candidates = await db
-    .select({
-      id: monthlyEntries.id,
-      actualAmount: monthlyEntries.actualAmount,
-      isOverridden: monthlyEntries.isOverridden,
-    })
-    .from(monthlyEntries)
-    .where(
-      and(
-        eq(monthlyEntries.recurringScheduleId, recurringScheduleId),
-        eq(monthlyEntries.householdId, householdId),
-      ),
-    );
-
-  return candidates
-    .filter((c) =>
-      shouldPropagate({
-        actualCents: c.actualAmount === null ? null : parseAmountToCents(c.actualAmount),
-        isOverridden: c.isOverridden,
-      }),
-    )
-    .map((c) => c.id);
+// haven't been actualized or manually overridden" — lib/domain/entries.ts's
+// shouldPropagate expresses this predicate once for unit testing, and this is its SQL
+// form, applied directly inside the UPDATE/DELETE's own WHERE clause rather than as a
+// separate SELECT followed by a write keyed on the ids it returned. An earlier version
+// did exactly that (SELECT candidate ids, filter with shouldPropagate, then act on
+// `WHERE id IN (...)`) — a genuine TOCTOU race: a concurrent updateActualAction or
+// overrideBudgetAction landing on one of those exact rows between the SELECT and the
+// write would still get silently overwritten/deleted, since the write only checked id
+// membership, not a fresh predicate. Folding the two conditions directly into the
+// WHERE clause makes the read-and-write a single atomic statement instead.
+function propagationTargetFilter(recurringScheduleId: string, householdId: string) {
+  return and(
+    eq(monthlyEntries.recurringScheduleId, recurringScheduleId),
+    eq(monthlyEntries.householdId, householdId),
+    isNull(monthlyEntries.actualAmount),
+    eq(monthlyEntries.isOverridden, false),
+  );
 }
 
 export async function createRecurringAction(
@@ -222,18 +215,15 @@ export async function updateRecurringAction(
   }
 
   if (parsed.data.propagate === 'yes') {
-    const targetIds = await getPropagationTargetIds(parsed.data.id, actingUser.householdId);
-    if (targetIds.length > 0) {
-      await db
-        .update(monthlyEntries)
-        .set({
-          item: resolved.value.item,
-          categoryId: resolved.value.categoryId,
-          budgetedAmount: resolved.value.budgetedAmount,
-          bankAccountId: resolved.value.bankAccountId,
-        })
-        .where(inArray(monthlyEntries.id, targetIds));
-    }
+    await db
+      .update(monthlyEntries)
+      .set({
+        item: resolved.value.item,
+        categoryId: resolved.value.categoryId,
+        budgetedAmount: resolved.value.budgetedAmount,
+        bankAccountId: resolved.value.bankAccountId,
+      })
+      .where(propagationTargetFilter(parsed.data.id, actingUser.householdId));
   }
 
   revalidatePath('/recurring');
@@ -262,13 +252,12 @@ export async function deleteRecurringAction(
 
   if (parsed.data.removeForecast === 'yes') {
     // Only forecast rows (never actualized, never manually overridden) — the same
-    // shouldPropagate-filtered set as the propagate branch above. Actualized history
-    // for a deleted recurring item stays intact; only its recurring_schedule_id link
-    // goes null (ON DELETE SET NULL), matching "never overwrite actualized rows."
-    const targetIds = await getPropagationTargetIds(parsed.data.id, actingUser.householdId);
-    if (targetIds.length > 0) {
-      await db.delete(monthlyEntries).where(inArray(monthlyEntries.id, targetIds));
-    }
+    // predicate as the propagate branch above. Actualized history for a deleted
+    // recurring item stays intact; only its recurring_schedule_id link goes null
+    // (ON DELETE SET NULL), matching "never overwrite actualized rows."
+    await db
+      .delete(monthlyEntries)
+      .where(propagationTargetFilter(parsed.data.id, actingUser.householdId));
   }
 
   const result = await db

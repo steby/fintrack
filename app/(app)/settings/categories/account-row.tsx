@@ -28,6 +28,7 @@ export function AccountRow({
   canManage: boolean;
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const [accountType, setAccountType] = useState(account.accountType);
   const [updateState, updateAction, updatePending] = useActionState(updateAccountAction, undefined);
   const [deleteState, deleteAction, deletePending] = useActionState(deleteAccountAction, undefined);
 
@@ -55,27 +56,41 @@ export function AccountRow({
         <div className="flex items-center gap-2">
           <select
             name="accountType"
-            defaultValue={account.accountType}
+            value={accountType}
+            onChange={(e) => setAccountType(e.target.value as 'bank' | 'credit')}
             className="h-8 rounded-md border bg-background px-2 text-sm"
           >
             <option value="bank">Bank</option>
             <option value="credit">Credit</option>
           </select>
-          <select
-            name="linkedBankAccountId"
-            defaultValue={account.linkedBankAccountId ?? ''}
-            className="h-8 flex-1 rounded-md border bg-background px-2 text-sm"
-          >
-            <option value="">No linked account</option>
-            {linkOptions.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </select>
+          {/* Only a 'credit' account can link to a bank account (server-enforced in
+              app/actions/accounts.ts) — hidden for 'bank' so the form can't be submitted
+              into a combination the server will reject. */}
+          {accountType === 'credit' && (
+            <select
+              name="linkedBankAccountId"
+              defaultValue={account.linkedBankAccountId ?? ''}
+              className="h-8 flex-1 rounded-md border bg-background px-2 text-sm"
+            >
+              <option value="">No linked account</option>
+              {linkOptions.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
         <div className="flex justify-end gap-1">
-          <Button type="button" variant="ghost" size="sm" onClick={() => setIsEditing(false)}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setAccountType(account.accountType);
+              setIsEditing(false);
+            }}
+          >
             Cancel
           </Button>
           <Button type="submit" size="sm" disabled={updatePending}>

@@ -166,4 +166,27 @@ test.describe('monthly entries', () => {
     await expect(page.getByRole('button', { name: 'Ad-hoc entry' })).toHaveCount(0);
     await expect(page.locator('input[name="actualAmount"]')).toHaveCount(0);
   });
+
+  test('an invalid amount is rejected with a visible error (spec.md Phase 2 failure-path requirement)', async ({
+    page,
+  }) => {
+    await page.goto('/login');
+    await page.getByLabel('Email').fill(OWNER_EMAIL);
+    await page.getByLabel('Password').fill(OWNER_PASSWORD);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL('/');
+
+    await page.goto(currentMonthUrl());
+    await page.getByRole('button', { name: 'Ad-hoc entry' }).click();
+    await page.getByPlaceholder('e.g. Car Repair').fill(`E2E Invalid Amount ${Date.now()}`);
+    // 11 digits — a syntactically valid HTML5 <input type="number"> value (so the
+    // browser's own min/step constraint validation doesn't intercept the submission
+    // before it reaches the server), but one that overflows numeric(12,2)'s 10-digit
+    // integer-part limit, which addAdhocAction's zod schema now rejects gracefully
+    // instead of the Postgres "numeric field overflow" this used to crash with.
+    await page.getByPlaceholder('0.00').fill('99999999999');
+    await page.getByRole('button', { name: 'Add entry' }).click();
+
+    await expect(page.getByText('Enter a valid, non-negative budgeted amount.')).toBeVisible();
+  });
 });

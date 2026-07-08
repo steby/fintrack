@@ -87,6 +87,20 @@ describe('createRecurringAction', () => {
     await cleanup(member.household.id);
   });
 
+  it('rejects a malformed actualDateDay that parseInt would silently truncate (adversarial: "5xyz")', async () => {
+    const { createRecurringAction } = await import('./recurring');
+    const member = await makeHouseholdWithUser('member', 'Recur create malformed day');
+    mockToken = member.token;
+
+    const result = await createRecurringAction(
+      undefined,
+      formData({ item: 'Rent', frequency: 'Monthly', actualDateDay: '5xyz' }),
+    );
+    expect(result).toEqual({ error: 'Day of month must be between 1 and 31.' });
+
+    await cleanup(member.household.id);
+  });
+
   it('rejects a negative budgeted amount (adversarial)', async () => {
     const { createRecurringAction } = await import('./recurring');
     const member = await makeHouseholdWithUser('member', 'Recur create B');
@@ -458,6 +472,76 @@ describe('updateRecurringAction propagate', () => {
       .from(monthlyEntries)
       .where(eq(monthlyEntries.id, entry.id));
     expect(reloadedEntry.item).toBe('Old Name');
+
+    await cleanup(member.household.id);
+  });
+
+  it('concurrent propagate and actualize on the same row never corrupts state (TOCTOU race fix)', async () => {
+    const { updateRecurringAction } = await import('./recurring');
+    const { updateActualAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Recur propagate D');
+    const [item] = await db
+      .insert(recurringSchedule)
+      .values({
+        householdId: member.household.id,
+        item: 'Old Name',
+        budgetedAmount: '100.00',
+        frequency: 'Monthly',
+      })
+      .returning();
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: 2026,
+        month: 1,
+        recurringScheduleId: item.id,
+        item: 'Old Name',
+        budgetedAmount: '100.00',
+      })
+      .returning();
+
+    mockToken = member.token;
+    // Fire both concurrently: one actualizes the row, the other propagates a rename +
+    // budget change from the recurring item. The old implementation raced a SELECT of
+    // "eligible" ids against these writes; the fix folds the eligibility check directly
+    // into each write's own WHERE clause, so whichever commits first is what the other
+    // one's WHERE evaluates against — no interleaving should ever leave `item` and
+    // `budgetedAmount` disagreeing about whether propagate ran (Postgres updates both
+    // fields together in the one propagate statement, never partially).
+    await Promise.all([
+      updateActualAction(
+        undefined,
+        formData({ id: entry.id, actualAmount: '50.00', actualDate: '' }),
+      ),
+      updateRecurringAction(
+        undefined,
+        formData({
+          id: item.id,
+          item: 'New Name',
+          budgetedAmount: '200.00',
+          frequency: 'Monthly',
+          propagate: 'yes',
+        }),
+      ),
+    ]);
+
+    const [reloaded] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entry.id));
+    // The actual amount always lands — the two actions touch disjoint columns.
+    expect(reloaded.actualAmount).toBe('50.00');
+    // Propagate either fully applied (won the race, ran while the row was still
+    // forecast) or fully didn't (lost the race, actualize committed first so its WHERE
+    // excluded the row) — item and budgetedAmount must agree with each other, never a
+    // mix of old/new.
+    if (reloaded.item === 'New Name') {
+      expect(reloaded.budgetedAmount).toBe('200.00');
+    } else {
+      expect(reloaded.item).toBe('Old Name');
+      expect(reloaded.budgetedAmount).toBe('100.00');
+    }
 
     await cleanup(member.household.id);
   });

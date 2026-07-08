@@ -6,14 +6,18 @@ import { z } from 'zod';
 // pure domain arithmetic operates on integer cents instead, converting at the DB
 // boundary via the two functions below — never via parseFloat/division mid-calculation.
 
-// Matches an optional leading '-', one or more digits, and an optional 1-2 digit
-// fractional part — exactly what numeric(12,2) can hold. Deliberately stricter than
-// parseFloat (rejects "1e5", "Infinity", trailing garbage, etc). eslint-plugin-security
-// flags this as a possible catastrophic-backtracking regex, but its heuristic doesn't
-// account for the fact that `\d` and the literal `.` are disjoint character classes with
-// no shared characters to backtrack across — this pattern is linear-time for any input.
+// Matches an optional leading '-', 1-10 digits, and an optional 1-2 digit fractional
+// part — exactly what numeric(12,2) can hold (12 total precision - 2 scale = 10 integer
+// digits max). Deliberately stricter than parseFloat (rejects "1e5", "Infinity",
+// trailing garbage, etc) AND stricter than an unbounded `\d+`, which would accept an
+// amount Postgres itself would reject with a "numeric field overflow" — an unhandled
+// exception, since no Server Action wraps its DB writes in a try/catch — instead of
+// this validated, graceful rejection. eslint-plugin-security flags this as a possible
+// catastrophic-backtracking regex, but its heuristic doesn't account for the fact that
+// `\d` and the literal `.` are disjoint character classes with no shared characters to
+// backtrack across — this pattern is linear-time for any input.
 // eslint-disable-next-line security/detect-unsafe-regex
-const NUMERIC_PATTERN = /^(-?)(\d+)(?:\.(\d{1,2}))?$/;
+const NUMERIC_PATTERN = /^(-?)(\d{1,10})(?:\.(\d{1,2}))?$/;
 
 export class InvalidAmountError extends Error {
   constructor(raw: string) {
@@ -56,9 +60,10 @@ export const moneyInputSchema = z
   .string()
   .trim()
   // Same false positive as NUMERIC_PATTERN above: `\d` and the literal `.` never
-  // overlap, so there's nothing to backtrack across.
+  // overlap, so there's nothing to backtrack across. Capped at 10 integer digits —
+  // see NUMERIC_PATTERN's comment for why.
   // eslint-disable-next-line security/detect-unsafe-regex
-  .regex(/^\d+(\.\d{1,2})?$/, 'Enter a valid, non-negative amount (up to 2 decimal places)')
+  .regex(/^\d{1,10}(\.\d{1,2})?$/, 'Enter a valid, non-negative amount (up to 2 decimal places)')
   .transform(parseAmountToCents);
 
 // Same, but an empty string means "not provided" (e.g. clearing an actual amount back

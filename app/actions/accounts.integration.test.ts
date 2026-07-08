@@ -146,13 +146,112 @@ describe('createAccountAction', () => {
 
     await cleanup(member.household.id);
   });
+
+  it('rejects linking a "bank" account to another bank account (only "credit" accounts may link out)', async () => {
+    const { createAccountAction } = await import('./accounts');
+    const member = await makeHouseholdWithUser('member', 'Acct create E');
+    const [bank] = await db
+      .insert(bankAccounts)
+      .values({ householdId: member.household.id, name: 'DBS', accountType: 'bank' })
+      .returning();
+
+    mockToken = member.token;
+    const result = await createAccountAction(
+      undefined,
+      formData({ name: 'OCBC', accountType: 'bank', linkedBankAccountId: bank.id }),
+    );
+
+    expect(result).toEqual({ error: 'Only credit accounts can link to a bank account.' });
+
+    await cleanup(member.household.id);
+  });
 });
 
 describe('updateAccountAction', () => {
   it('rejects linking an account to itself', async () => {
     const { updateAccountAction } = await import('./accounts');
     const member = await makeHouseholdWithUser('member', 'Acct update A');
+    // Must be a 'credit' account — a 'bank' account can't have any linkedBankAccountId
+    // at all (the "source must be credit" check below fires first otherwise), so
+    // exercising the self-link guard specifically requires a type it's actually legal
+    // to attempt a link from.
     const [acct] = await db
+      .insert(bankAccounts)
+      .values({ householdId: member.household.id, name: 'Credit Card', accountType: 'credit' })
+      .returning();
+
+    mockToken = member.token;
+    const result = await updateAccountAction(
+      undefined,
+      formData({
+        id: acct.id,
+        name: 'Credit Card',
+        accountType: 'credit',
+        linkedBankAccountId: acct.id,
+      }),
+    );
+
+    expect(result).toEqual({ error: 'An account cannot link to itself.' });
+
+    await cleanup(member.household.id);
+  });
+
+  it('rejects setting a linkedBankAccountId while accountType is "bank"', async () => {
+    const { updateAccountAction } = await import('./accounts');
+    const member = await makeHouseholdWithUser('member', 'Acct update E');
+    const [bank1] = await db
+      .insert(bankAccounts)
+      .values({ householdId: member.household.id, name: 'DBS', accountType: 'bank' })
+      .returning();
+    const [bank2] = await db
+      .insert(bankAccounts)
+      .values({ householdId: member.household.id, name: 'OCBC', accountType: 'bank' })
+      .returning();
+
+    mockToken = member.token;
+    const result = await updateAccountAction(
+      undefined,
+      formData({ id: bank1.id, name: 'DBS', accountType: 'bank', linkedBankAccountId: bank2.id }),
+    );
+
+    expect(result).toEqual({ error: 'Only credit accounts can link to a bank account.' });
+
+    await cleanup(member.household.id);
+  });
+
+  it('rejects changing an account\'s type away from "bank" while another account links to it', async () => {
+    const { updateAccountAction } = await import('./accounts');
+    const member = await makeHouseholdWithUser('member', 'Acct update F');
+    const [bank] = await db
+      .insert(bankAccounts)
+      .values({ householdId: member.household.id, name: 'DBS', accountType: 'bank' })
+      .returning();
+    await db.insert(bankAccounts).values({
+      householdId: member.household.id,
+      name: 'Credit Card',
+      accountType: 'credit',
+      linkedBankAccountId: bank.id,
+    });
+
+    mockToken = member.token;
+    const result = await updateAccountAction(
+      undefined,
+      formData({ id: bank.id, name: 'DBS', accountType: 'credit' }),
+    );
+
+    expect(result).toEqual({
+      error: 'Cannot change type: another account is linked to this one as its bank account.',
+    });
+    const [unchanged] = await db.select().from(bankAccounts).where(eq(bankAccounts.id, bank.id));
+    expect(unchanged.accountType).toBe('bank');
+
+    await cleanup(member.household.id);
+  });
+
+  it('allows changing an account\'s type away from "bank" once nothing links to it', async () => {
+    const { updateAccountAction } = await import('./accounts');
+    const member = await makeHouseholdWithUser('member', 'Acct update G');
+    const [bank] = await db
       .insert(bankAccounts)
       .values({ householdId: member.household.id, name: 'DBS', accountType: 'bank' })
       .returning();
@@ -160,10 +259,10 @@ describe('updateAccountAction', () => {
     mockToken = member.token;
     const result = await updateAccountAction(
       undefined,
-      formData({ id: acct.id, name: 'DBS', accountType: 'bank', linkedBankAccountId: acct.id }),
+      formData({ id: bank.id, name: 'DBS', accountType: 'credit' }),
     );
 
-    expect(result).toEqual({ error: 'An account cannot link to itself.' });
+    expect(result).toEqual({ success: true });
 
     await cleanup(member.household.id);
   });

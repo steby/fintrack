@@ -114,7 +114,21 @@ export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canMana
               defaultValue={entry.actualAmount ?? ''}
               disabled={actualPending}
               className="h-7 w-24 rounded border bg-background px-1.5 text-right text-sm tabular-nums"
-              onChange={(e) => e.currentTarget.form?.requestSubmit()}
+              // Commit on blur, not on every keystroke — React's onChange fires per
+              // character (it's wired to the native "input" event), which combined with
+              // disabled={actualPending} would submit mid-typing and eat keystrokes typed
+              // while a prior submission is still in flight. onBlur + explicit Enter/Esc
+              // handling matches the reference app's native onchange (fires on blur/commit
+              // only) and spec.md's "keyboard-friendly: Enter saves, Esc cancels."
+              onBlur={(e) => e.currentTarget.form?.requestSubmit()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.currentTarget.form?.requestSubmit();
+                } else if (e.key === 'Escape') {
+                  e.currentTarget.value = entry.actualAmount ?? '';
+                  e.currentTarget.blur();
+                }
+              }}
             />
           </form>
         ) : (

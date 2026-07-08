@@ -139,6 +139,42 @@ describe('updateActualAction', () => {
     await cleanup(member.household.id);
   });
 
+  it('rejects a malformed actual date (adversarial: forged non-browser input)', async () => {
+    const { updateActualAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Monthly actual E');
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({ householdId: member.household.id, year: 2026, month: 1, item: 'Rent' })
+      .returning();
+
+    mockToken = member.token;
+    const result = await updateActualAction(
+      undefined,
+      formData({ id: entry.id, actualAmount: '10.00', actualDate: 'not-a-date' }),
+    );
+    expect(result).toEqual({ error: 'Invalid request.' });
+
+    await cleanup(member.household.id);
+  });
+
+  it('rejects a shape-valid but nonexistent calendar date (adversarial: Feb 30)', async () => {
+    const { updateActualAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Monthly actual F');
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({ householdId: member.household.id, year: 2026, month: 1, item: 'Rent' })
+      .returning();
+
+    mockToken = member.token;
+    const result = await updateActualAction(
+      undefined,
+      formData({ id: entry.id, actualAmount: '10.00', actualDate: '2026-02-30' }),
+    );
+    expect(result).toEqual({ error: 'Invalid request.' });
+
+    await cleanup(member.household.id);
+  });
+
   it('cannot update an entry in a DIFFERENT household (cross-tenant probe)', async () => {
     const { updateActualAction } = await import('./monthly');
     const memberA = await makeHouseholdWithUser('member', 'Monthly actual D-A');

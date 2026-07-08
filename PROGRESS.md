@@ -826,6 +826,104 @@ tables"). Dashboard aggregation, category budget caps, goals, net worth, CSV
 import/export, email/cron, and PWA remain later phases per `spec.md`'s numbered plan —
 nothing from this phase's own scope was skipped or shortcut.
 
+**Hardening pass (`/code-review` on the full Phase 2 diff, extra-high effort,
+2026-07-08):** 15 findings across 10 finder angles plus a gap-sweep, verified by direct
+code reading (not just agent votes) before triage. 13 fixed, 2 deferred with reasoning:
+
+- _Fixed_ — the Monthly page's auto-generate hook checked the `auto_generate` flag but
+  never `requireRole('write')`, the one write path in the app that wasn't role-gated —
+  a viewer's page load triggered real `monthly_entries` INSERTs, violating "viewers are
+  read-only everywhere." Gated behind `canManage` (already computed on the page for
+  other purposes), which also skips a wasted flag-cache lookup for viewers.
+- _Fixed_ — the inline "Actual" amount input auto-submitted on every keystroke
+  (React's `onChange` fires per character, unlike the ported Svelte app's `onchange`,
+  which only fires on blur/commit), and `disabled={actualPending}` locked the field
+  mid-typing, dropping keystrokes. Switched to `onBlur` + explicit Enter/Escape
+  handling, which also finally implements spec.md's "keyboard-friendly: Enter saves,
+  Esc cancels" requirement that had never actually been wired up.
+- _Fixed_ — Calendar/Agenda view silently dropped any entry whose `scheduledDay`
+  exceeded the viewed month's length (e.g. day 31 in February) — the exact edge case
+  spec.md's Phase 2 "Ready" section names explicitly. Clamped to the last real day of
+  the month, matching the month-end-clamping approach spec.md already establishes for
+  Phase 6's reminder logic.
+- _Fixed_ — Calendar view's daily net total and entry-dot coloring treated any
+  uncategorized entry (`categoryDirection === null`) as an expense, inconsistent with
+  this same PR's own List view fix (an "Uncategorized" section) and the Summary Bar
+  (which excludes them from totals entirely). Made it a real three-way split
+  (income/expense/excluded) in both the net calculation and the "No scheduled day"
+  card styling.
+- _Fixed_ — `getPropagationTargetIds` SELECTed candidate row ids matching
+  `shouldPropagate`, then a separate UPDATE/DELETE acted on those ids with no re-check
+  at write time — a genuine TOCTOU race (a concurrent `updateActualAction` landing on
+  one of those exact rows between the SELECT and the write would still get silently
+  overwritten). Replaced with a single atomic statement: the predicate is now part of
+  the UPDATE/DELETE's own WHERE clause, so the read-and-decide happens in the same
+  statement as the write. Verified live with a real concurrency test:
+  `updateActualAction` and `updateRecurringAction(propagate: 'yes')` fired
+  concurrently at the same row, asserting the final state is always one of the two
+  valid orderings, never a corrupted mix — run 5 times to rule out a test that only
+  ever exercises one interleaving.
+- _Fixed_ — `resolveLinkedAccountId` validated the link _target_ is a 'bank' account
+  but never checked the account being created/edited is itself 'credit', so a plain
+  'bank' account could end up with a non-null `linkedBankAccountId`. Added the source
+  check to both actions, plus a new guard in `updateAccountAction`: changing an
+  account's type away from 'bank' while another account still links to it as its bank
+  account is now rejected outright, not silently left dangling. UI forms updated to
+  hide the linked-account field for 'bank' type, so the server rejection is rare rather
+  than routine.
+- _Fixed_ — `generateEntriesForRange`'s SELECT-then-INSERT wasn't wrapped in a
+  transaction despite spec.md literally specifying "in one transaction." Wrapped in
+  `db.transaction()`.
+- _Fixed_ — three trust-boundary gaps that would have crashed as unhandled Postgres
+  exceptions instead of returning a graceful validation error: money schemas had no
+  cap on integer-digit count (an 11-digit amount would pass zod, then hit a
+  `numeric(12,2)` overflow), `actualDate` had zero format validation (any string
+  reached the `date` column), and `actualDateDay` used `Number.parseInt`, which
+  truncates at the first non-digit ("5xyz" → 5) instead of rejecting it. All three
+  fixed with strict validation matching the discipline already used for every other
+  money field in this codebase; the digit-cap fix verified live with a new E2E test
+  that submits an 11-digit ad-hoc amount through the real browser and confirms the
+  friendly error renders instead of a crash.
+- _Fixed_ — `generate-form.tsx`'s "12 months ahead" default had an always-true ternary
+  condition (`currentMonth <= 12`, and `now.getMonth()+1` is always in `[1,12]`), so
+  the year-rollover branch was dead code and the default silently stayed within the
+  current calendar year regardless of intent. Replaced with `addMonths(current, 11)`
+  (the existing pure helper) for an unambiguous, always-correct 12-month window. This
+  changed the _shape_ of what a bare "click Generate" produces (a full year forward,
+  not "through December"), which surfaced a real, pre-existing fragility in
+  `e2e/recurring.spec.ts`: its DB assertion queried for "the" generated entry with no
+  year/month filter, previously safe by coincidence (every prior default stayed within
+  one calendar year) — fixed the query to filter for the current month specifically.
+- _Fixed_ — no E2E test covered "invalid amount rejected with visible error," which
+  spec.md's Phase 2 test plan explicitly requires. Added one (doubles as live
+  confirmation of the digit-cap fix above).
+
+Deferred, documented rather than fixed:
+
+- **No UI control anywhere lets a user set an actual entry's date.** The hidden
+  `actualDate` field in `entry-row.tsx` only ever echoes back `entry.actualDate`, which
+  starts `null` and — since there was never a date input — can never become non-null
+  through the UI, despite `updateActualAction` fully supporting one and spec.md's task
+  list literally naming "updateActual (amount+date)." This is a small missing
+  _feature_ (a date `<input>`, wiring, and a UX decision on placement — inline vs. a
+  small popover), not a one-line bug fix, so it's scoped out of this hardening pass
+  rather than rushed in. Tracked for a follow-up.
+- **`lib/flags.ts`'s kill-switch cache is a bare module-level `Map`, with no
+  cross-instance invalidation on Vercel's serverless model.** `setFlag()` only evicts
+  the cache entry on whichever instance handled the toggle request; other concurrently
+  warm instances keep serving a stale value for up to their own independent 30s
+  window. At this app's household scale (a handful of concurrent users, not
+  production SaaS traffic) the realistic blast radius of a kill-switch flip taking up
+  to 30s longer to fully propagate is low, and redesigning the cache (e.g. a shared
+  KV/Redis-backed store) is a real architectural change, not a bug fix — accepted as a
+  documented limitation rather than solved under review-fixup time pressure.
+
+Re-verified end to end: unit, integration (recurring/accounts/monthly test files grew
+by the new adversarial + concurrency tests above), and E2E suites all green;
+lint/typecheck/build clean. Every fix was checked against the actual live dev branch or
+a real browser session, not just read — the concurrency fix specifically got 5
+consecutive runs to rule out a test that only exercises one interleaving of the race.
+
 ---
 
 <!--

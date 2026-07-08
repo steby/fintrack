@@ -12,6 +12,20 @@ export type MonthlyActionState = { error?: string; success?: boolean } | undefin
 
 const uuidOrEmpty = z.union([z.literal(''), z.string().uuid()]).optional();
 
+// Empty string means "clear the date"; otherwise must be a real YYYY-MM-DD calendar
+// date. The regex alone isn't enough — Postgres's own date parsing silently ROLLS OVER
+// an out-of-range day instead of rejecting it (e.g. "2026-02-30" becomes 2026-03-02),
+// so a shape-only check would let a malformed-but-regex-shaped date land as a
+// different, unintended date rather than being rejected. Parsing via Date and checking
+// the ISO round-trip matches catches both totally malformed strings ("not-a-date",
+// caught by the regex) and shape-valid-but-nonexistent dates (caught by the round-trip).
+const dateInputSchema = z.string().refine((v) => {
+  if (v === '') return true;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const parsed = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === v;
+}, 'Enter a valid date (YYYY-MM-DD)');
+
 async function resolveOptionalRef(
   table: typeof categories | typeof bankAccounts | typeof users,
   householdId: string,
@@ -32,7 +46,7 @@ async function resolveOptionalRef(
 const updateActualSchema = z.object({
   id: z.string().uuid(),
   actualAmount: z.string(),
-  actualDate: z.string(),
+  actualDate: dateInputSchema,
 });
 
 // Matches the reference app's updateActual action exactly: amount + date only, never

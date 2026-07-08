@@ -66,6 +66,15 @@ export async function createAccountAction(
     return { error: parsed.error.issues[0]?.message ?? 'Invalid account.' };
   }
 
+  // Only a 'credit' account can link out to a bank account — resolveLinkedAccountId
+  // already checks the LINK TARGET's type, but nothing previously checked the SOURCE
+  // account's own type, so a plain 'bank' account could end up with a non-null
+  // linkedBankAccountId (the exact "nonsensical" case resolveLinkedAccountId's own
+  // comment warns about, just from the other direction).
+  if (parsed.data.linkedBankAccountId && parsed.data.accountType !== 'credit') {
+    return { error: 'Only credit accounts can link to a bank account.' };
+  }
+
   const linked = await resolveLinkedAccountId(
     actingUser.householdId,
     parsed.data.linkedBankAccountId || undefined,
@@ -114,6 +123,11 @@ export async function updateAccountAction(
     return { error: parsed.error.issues[0]?.message ?? 'Invalid account.' };
   }
 
+  // Same "source must be credit" check as createAccountAction.
+  if (parsed.data.linkedBankAccountId && parsed.data.accountType !== 'credit') {
+    return { error: 'Only credit accounts can link to a bank account.' };
+  }
+
   const linked = await resolveLinkedAccountId(
     actingUser.householdId,
     parsed.data.linkedBankAccountId || undefined,
@@ -121,6 +135,29 @@ export async function updateAccountAction(
   );
   if (!linked.ok) {
     return { error: linked.error };
+  }
+
+  // Changing this account's type away from 'bank' would strand any OTHER account
+  // that links to it (a 'credit' account whose linkedBankAccountId now points at a
+  // non-bank account) — resolveLinkedAccountId only validates the link at the moment
+  // it's CREATED, not retroactively when the target's own type later changes. Reject
+  // rather than silently leaving (or cascading a fix into) another account's data.
+  if (parsed.data.accountType !== 'bank') {
+    const [linkingAccount] = await db
+      .select({ id: bankAccounts.id })
+      .from(bankAccounts)
+      .where(
+        and(
+          eq(bankAccounts.linkedBankAccountId, parsed.data.id),
+          eq(bankAccounts.householdId, actingUser.householdId),
+        ),
+      )
+      .limit(1);
+    if (linkingAccount) {
+      return {
+        error: 'Cannot change type: another account is linked to this one as its bank account.',
+      };
+    }
   }
 
   const result = await db

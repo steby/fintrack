@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { test, expect } from '@playwright/test';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { createTestDb } from './test-db';
 import { requireEnv } from './env';
 import { recurringSchedule, monthlyEntries, users } from '../lib/db/schema';
@@ -82,14 +82,24 @@ test.describe('recurring schedule', () => {
     await page.getByRole('button', { name: 'Generate', exact: true }).click();
     await expect(page.getByText(/Generated \d+ entr(y|ies)\./)).toBeVisible();
 
+    // The default generate range now spans a full 12 months forward (see
+    // generate-form.tsx's addMonths-based default), so more than one month's entry
+    // exists for this item — filter for the CURRENT month specifically rather than
+    // taking an unordered "first" row, which could otherwise land on any month in the
+    // range depending on Postgres's unspecified scan order.
     const now = new Date();
     const [generatedEntry] = await testDb
       .select()
       .from(monthlyEntries)
       .innerJoin(recurringSchedule, eq(monthlyEntries.recurringScheduleId, recurringSchedule.id))
-      .where(eq(recurringSchedule.item, itemName));
+      .where(
+        and(
+          eq(recurringSchedule.item, itemName),
+          eq(monthlyEntries.year, now.getFullYear()),
+          eq(monthlyEntries.month, now.getMonth() + 1),
+        ),
+      );
     expect(generatedEntry).toBeDefined();
-    expect(generatedEntry.monthly_entries.year).toBe(now.getFullYear());
 
     // Edit the item with propagate — the forecast entry should pick up the new name.
     await row.getByRole('button', { name: 'Edit' }).click();
