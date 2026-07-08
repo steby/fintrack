@@ -60,3 +60,12 @@ export function walkMonths(from: YearMonth, to: YearMonth): YearMonth[] {
   }
   return months;
 }
+
+// Adds (or, with a negative delta, subtracts) whole calendar months, correctly rolling
+// over year boundaries in either direction. Used to compute a rolling "next N months"
+// window (e.g. the auto-generate hook's "3 months from today") without hand-rolling
+// month-rollover arithmetic at each call site.
+export function addMonths(base: YearMonth, delta: number): YearMonth {
+  const totalMonths = base.year * 12 + (base.month - 1) + delta;
+  return { year: Math.floor(totalMonths / 12), month: (totalMonths % 12) + 1 };
+}

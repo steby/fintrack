@@ -12,9 +12,10 @@ import {
   frequencyEnum,
 } from '../../lib/db/schema';
 import { requireRole } from '../../lib/auth/guards';
-import { parseScheduleMonths, shouldGenerate, walkMonths } from '../../lib/domain/recurring';
+import { parseScheduleMonths, walkMonths } from '../../lib/domain/recurring';
 import { shouldPropagate } from '../../lib/domain/entries';
 import { moneyInputSchema, centsToAmount, parseAmountToCents } from '../../lib/money';
+import { generateEntriesForRange } from '../../lib/generate-entries';
 
 export type RecurringActionState = { error?: string; success?: boolean } | undefined;
 
@@ -360,52 +361,12 @@ export async function generateAction(
     return { error: parsed.error.issues[0]?.message ?? 'Invalid date range.' };
   }
 
-  const months = walkMonths(
+  const generated = await generateEntriesForRange(
+    actingUser.householdId,
     { year: parsed.data.fromYear, month: parsed.data.fromMonth },
     { year: parsed.data.toYear, month: parsed.data.toMonth },
   );
 
-  const activeItems = await db
-    .select()
-    .from(recurringSchedule)
-    .where(
-      and(
-        eq(recurringSchedule.householdId, actingUser.householdId),
-        eq(recurringSchedule.isActive, true),
-      ),
-    );
-
-  const rowsToInsert = months.flatMap(({ year, month }) =>
-    activeItems
-      .filter((item) => shouldGenerate(item.frequency, item.scheduleMonths, month))
-      .map((item) => ({
-        householdId: actingUser.householdId,
-        year,
-        month,
-        recurringScheduleId: item.id,
-        item: item.item,
-        categoryId: item.categoryId,
-        budgetedAmount: item.budgetedAmount,
-        bankAccountId: item.bankAccountId,
-      })),
-  );
-
-  if (rowsToInsert.length === 0) {
-    revalidatePath('/monthly');
-    return { success: true, generated: 0 };
-  }
-
-  // ON CONFLICT DO NOTHING against the existing unique index on
-  // (household_id, year, month, recurring_schedule_id) — a repeat generate() call over
-  // an overlapping range is a no-op for months already materialized, never a duplicate
-  // or an error. `.returning()` gives back only the rows that were ACTUALLY inserted,
-  // so `.length` is the true new-row count, not rowsToInsert.length.
-  const inserted = await db
-    .insert(monthlyEntries)
-    .values(rowsToInsert)
-    .onConflictDoNothing()
-    .returning({ id: monthlyEntries.id });
-
   revalidatePath('/monthly');
-  return { success: true, generated: inserted.length };
+  return { success: true, generated };
 }

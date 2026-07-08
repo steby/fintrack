@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { parseScheduleMonths, shouldGenerate, walkMonths, type YearMonth } from './recurring';
+import {
+  parseScheduleMonths,
+  shouldGenerate,
+  walkMonths,
+  addMonths,
+  type YearMonth,
+} from './recurring';
 
 describe('parseScheduleMonths', () => {
   it('returns [] for null/empty', () => {
@@ -128,6 +134,44 @@ describe('walkMonths (property)', () => {
           expect(month).toBeGreaterThanOrEqual(1);
           expect(month).toBeLessThanOrEqual(12);
         }
+      }),
+    );
+  });
+});
+
+describe('addMonths', () => {
+  it('adds within the same year', () => {
+    expect(addMonths({ year: 2026, month: 3 }, 2)).toEqual({ year: 2026, month: 5 });
+  });
+
+  it('rolls over a year boundary going forward', () => {
+    expect(addMonths({ year: 2026, month: 11 }, 3)).toEqual({ year: 2027, month: 2 });
+  });
+
+  it('rolls over a year boundary going backward (negative delta)', () => {
+    expect(addMonths({ year: 2027, month: 1 }, -2)).toEqual({ year: 2026, month: 11 });
+  });
+
+  it('delta of 0 is a no-op', () => {
+    expect(addMonths({ year: 2026, month: 7 }, 0)).toEqual({ year: 2026, month: 7 });
+  });
+});
+
+describe('addMonths (property)', () => {
+  it('always produces a valid calendar month (1-12)', () => {
+    fc.assert(
+      fc.property(yearMonthArb, fc.integer({ min: -240, max: 240 }), (base, delta) => {
+        const result = addMonths(base, delta);
+        expect(result.month).toBeGreaterThanOrEqual(1);
+        expect(result.month).toBeLessThanOrEqual(12);
+      }),
+    );
+  });
+
+  it('adding then subtracting the same delta returns the original month', () => {
+    fc.assert(
+      fc.property(yearMonthArb, fc.integer({ min: -240, max: 240 }), (base, delta) => {
+        expect(addMonths(addMonths(base, delta), -delta)).toEqual(base);
       }),
     );
   });

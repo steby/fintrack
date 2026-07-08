@@ -23,6 +23,15 @@ export default defineConfig({
         'lib/db/migrate.ts',
         'lib/db/schema.ts',
         'lib/db/seed.ts',
+        // Same reasoning as the DB plumbing above: every code path in here touches the
+        // real household_settings table (even the cache-hit path needs a real DB read
+        // to populate the cache first) — exercised by lib/flags.integration.test.ts.
+        'lib/flags.ts',
+        // Every path here does a real recurring_schedule read + monthly_entries bulk
+        // insert — exercised by app/actions/recurring.integration.test.ts's
+        // generateAction tests (a thin wrapper around this) and the Monthly page's
+        // auto-generate hook (covered by e2e/monthly.spec.ts).
+        'lib/generate-entries.ts',
         // shadcn/ui-generated helper (clsx + tailwind-merge one-liner) — vendor
         // boilerplate, not application logic; clsx/tailwind-merge have their own tests.
         'lib/utils.ts',
