@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { db, pool } from '../../lib/db';
 import { households, users, sessions, bankAccounts, recurringSchedule } from '../../lib/db/schema';
 import { generateToken } from '../../lib/auth/token';
@@ -91,10 +91,18 @@ describe('createAccountAction', () => {
     );
 
     expect(result).toEqual({ success: true });
+    // Scoped by household, not just by name — the seed script creates its own
+    // "Credit Card" account too (lib/db/seed.ts), so an unscoped query here could
+    // nondeterministically match a different household's row of the same name.
     const [credit] = await db
       .select()
       .from(bankAccounts)
-      .where(eq(bankAccounts.name, 'Credit Card'));
+      .where(
+        and(
+          eq(bankAccounts.name, 'Credit Card'),
+          eq(bankAccounts.householdId, member.household.id),
+        ),
+      );
     expect(credit.linkedBankAccountId).toBe(bank.id);
 
     await cleanup(member.household.id);

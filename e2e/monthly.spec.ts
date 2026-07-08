@@ -22,6 +22,10 @@ test.describe('monthly entries', () => {
   test.describe.configure({ mode: 'serial' });
 
   const itemName = `E2E Monthly Item ${Date.now()}`;
+  // The test renames the recurring item mid-run (the propagate step) — cleanup must
+  // match both names, or the renamed row leaks on every run (caught by seed.ts's
+  // idempotency check unexpectedly counting leftover rows from a prior E2E run).
+  const renamedItemName = `${itemName} propagated`;
   const adhocName = `E2E Adhoc ${Date.now()}`;
   const categoryName = `E2E Monthly Category ${Date.now()}`;
 
@@ -54,7 +58,7 @@ test.describe('monthly entries', () => {
     const items = await testDb
       .select({ id: recurringSchedule.id })
       .from(recurringSchedule)
-      .where(eq(recurringSchedule.item, itemName));
+      .where(inArray(recurringSchedule.item, [itemName, renamedItemName]));
     if (items.length > 0) {
       await testDb.delete(monthlyEntries).where(
         inArray(
@@ -63,7 +67,9 @@ test.describe('monthly entries', () => {
         ),
       );
     }
-    await testDb.delete(recurringSchedule).where(eq(recurringSchedule.item, itemName));
+    await testDb
+      .delete(recurringSchedule)
+      .where(inArray(recurringSchedule.item, [itemName, renamedItemName]));
     await testDb.delete(monthlyEntries).where(eq(monthlyEntries.item, adhocName));
     await testDb.delete(categories).where(eq(categories.name, categoryName));
     await testDb.delete(users).where(eq(users.email, VIEWER_EMAIL));
@@ -120,14 +126,15 @@ test.describe('monthly entries', () => {
     const recurringRow = page.getByTestId('recurring-row').filter({ hasText: itemName });
     await recurringRow.getByRole('button', { name: 'Edit' }).click();
     const editingRow = page.getByTestId('recurring-row').filter({ hasText: 'Save' });
-    const renamed = `${itemName} propagated`;
-    await editingRow.locator('input[name="item"]').fill(renamed);
+    await editingRow.locator('input[name="item"]').fill(renamedItemName);
     await editingRow.getByRole('button', { name: 'Save' }).click();
-    await expect(page.getByTestId('recurring-row').filter({ hasText: renamed })).toBeVisible();
+    await expect(
+      page.getByTestId('recurring-row').filter({ hasText: renamedItemName }),
+    ).toBeVisible();
 
     await page.goto(currentMonthUrl());
     await expect(page.getByTestId('entry-row').filter({ hasText: itemName })).toBeVisible();
-    await expect(page.getByTestId('entry-row').filter({ hasText: renamed })).toHaveCount(0);
+    await expect(page.getByTestId('entry-row').filter({ hasText: renamedItemName })).toHaveCount(0);
 
     // Ad-hoc entry: add then delete.
     await page.getByRole('button', { name: 'Ad-hoc entry' }).click();
