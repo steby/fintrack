@@ -1076,6 +1076,71 @@ Re-verified: typecheck/lint/unit/integration clean, CI green on the fix commit.
 
 ---
 
+## Phase 3: Dashboard + theming — status: complete 2026-07-09
+
+**What shipped:**
+
+- **Pure logic (`lib/domain/dashboard.ts`):** aggregation shaping over already-fetched row
+  arrays — monthly budgeted/actual series (always 12 points, even for an empty year),
+  year totals, expense category breakdown (sorted by budgeted descending), cumulative
+  savings walk, fixed-vs-variable split (`recurring_schedule_id IS NOT NULL`, ported
+  exactly from the reference app's `+page.server.ts`), bank inflow/outflow summary, and
+  YoY delta (null percentage rather than NaN/Infinity when there's no prior-year
+  baseline). 17 unit tests cover the named edge cases: empty year, all-zero, partial
+  actuals within a month, absent prior year, both years zero.
+- **Data layer (`lib/db/queries.ts`):** one scoped query (`getDashboardRows`) per
+  year — left-joins category direction/name/color and bank account name, converts
+  `numeric` strings to integer cents at the boundary. Deliberately fetches row-level
+  detail rather than pre-aggregating in SQL (unlike the reference app), so every
+  aggregation lives in the unit-tested pure layer instead. 5 integration tests
+  (household scoping, year scoping, null-handling, cents conversion).
+- **UI:** stat tiles (income/expense/net/savings-rate), cash-flow bar chart, expense
+  category doughnut, cumulative-savings line chart (all Recharts, reading
+  `var(--border)`/`var(--muted-foreground)`/`var(--popover)` so both themes render
+  correctly without a re-render), bank summary table, fixed-vs-variable card, YoY
+  card. Every amount goes through `formatSGD`/`formatSGDCompact` — no hardcoded `$`
+  (the original app's USD/SGD bug class).
+- **Theming:** `next-themes` wired into the root layout (`ThemeProvider`,
+  `suppressHydrationWarning`), a sidebar toggle (`useSyncExternalStore` for the
+  mount-check rather than an effect + `setState`, avoiding
+  `react-hooks/set-state-in-effect`). The dark theme's tokens were rewritten from
+  shadcn's default dark gray to **true OLED black** (`oklch(0 0 0)` background),
+  ported from the reference app's monochrome design system
+  (`FinanceTracker/src/app.css`) — spec.md's "preserving the OLED-dark identity."
+  Income/expense colors stay as explicit Tailwind utilities (emerald/red), matching
+  the convention Phase 2 already established, rather than the shadcn `--chart-*`
+  tokens.
+- **Year navigation:** a sidebar quick-jump (`YearNav`, anchored to the real current
+  year — Next.js layouts don't receive `searchParams`, so it can't reflect whichever
+  year the dashboard is currently showing) plus in-page prev/next controls on the
+  dashboard itself (`YearPicker`, which does know the selected year). Both are plain
+  `Link`s, URL-driven, no client state.
+- **E2E (`e2e/dashboard.spec.ts`, 5 tests):** a seeded year renders every widget; an
+  empty year (`?year=2099`) renders empty states with no crash and no `NaN` anywhere
+  on the page; `?year=99999`/`?year=not-a-number` clamp to the current year; the
+  sidebar year-jump and in-page year-picker both navigate correctly; the theme toggle
+  switches and persists across a reload. All run against a real Chromium browser, not
+  just asserted from code.
+- **Adversarial:** confirmed via grep that no dashboard file hardcodes a `$` — every
+  amount routes through `formatSGD`/`formatSGDCompact`.
+
+**Deviations from the literal phase plan, documented rather than silent:**
+
+- Fetches entry-level rows and aggregates in TypeScript rather than doing the
+  aggregation in SQL like the reference app — spec.md's own Phase 3 task list already
+  calls for "aggregation shaping ... as pure functions over row arrays," so this
+  isn't a deviation from spec, just flagged here since it's a real structural
+  difference from the app being ported.
+- The sidebar year selector can't reflect the dashboard's currently-selected year (a
+  Next.js architectural constraint — layouts don't receive `searchParams`); it's a
+  quick-jump anchored to the real current year instead, with the dashboard's own
+  prev/next controls handling fine-grained navigation once you're there.
+
+Re-verified: unit (17 new + 197 total), integration (5 new + 103 total), and E2E (5
+new + 24 total) all green; lint/typecheck/format/build clean.
+
+---
+
 <!--
 Copy the block above for each new phase. Keep sections in phase order. Convert relative
 dates to absolute (e.g. "today" -> the actual date) so the log stays readable later.
