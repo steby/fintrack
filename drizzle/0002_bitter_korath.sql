@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "household_invitations_household_email_pending_unique" ON "household_invitations" USING btree ("household_id","email") WHERE "household_invitations"."accepted_at" is null;

@@ -15,6 +15,13 @@
       "when": 1783509724961,
       "tag": "0001_left_tyrannus",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783512536023,
+      "tag": "0002_bitter_korath",
+      "breakpoints": true
     }
   ]
 }

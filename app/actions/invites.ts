@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
-import { eq, and, isNull, gt } from 'drizzle-orm';
+import { eq, and, isNull, lt } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { householdInvitations, users, sessions } from '../../lib/db/schema';
 import { requireRole } from '../../lib/auth/guards';
@@ -41,37 +41,37 @@ export async function createInviteAction(
     return { error: 'That email is already a member of a household.' };
   }
 
-  // Idempotency: a resubmit (double-click, retry after a slow/failed email send) must
-  // not create a second live invitation for the same email. An invite whose own
-  // expiry has already passed doesn't count — the owner should be able to send a
-  // fresh one without waiting for cleanup.
-  const existingInvite = await db
-    .select({ id: householdInvitations.id })
-    .from(householdInvitations)
-    .where(
-      and(
-        eq(householdInvitations.email, email),
-        eq(householdInvitations.householdId, actingUser.householdId),
-        isNull(householdInvitations.acceptedAt),
-        gt(householdInvitations.expiresAt, new Date()),
-      ),
-    )
-    .limit(1);
-  if (existingInvite[0]) {
-    return { error: 'An invite is already pending for that email.' };
-  }
-
   const token = generateToken();
   const expiresAt = inviteExpiry();
 
-  await db.insert(householdInvitations).values({
-    householdId: actingUser.householdId,
-    email,
-    role,
-    token,
-    invitedByUserId: actingUser.id,
-    expiresAt,
-  });
+  // Idempotency: a resubmit (double-click, retry after a slow/failed email send) must
+  // not create a second live invitation for the same email. Enforced atomically by the
+  // household_invitations_household_email_pending_unique partial index (one unaccepted
+  // invite per household+email) — NOT by a separate SELECT-then-INSERT, which is a
+  // TOCTOU race: two concurrent requests could both pass a SELECT check before either
+  // INSERT commits. When the existing pending invite has expired, this reissues it
+  // in place (fresh token + expiry) rather than requiring cleanup first.
+  const [invite] = await db
+    .insert(householdInvitations)
+    .values({
+      householdId: actingUser.householdId,
+      email,
+      role,
+      token,
+      invitedByUserId: actingUser.id,
+      expiresAt,
+    })
+    .onConflictDoUpdate({
+      target: [householdInvitations.householdId, householdInvitations.email],
+      targetWhere: isNull(householdInvitations.acceptedAt),
+      set: { role, token, invitedByUserId: actingUser.id, expiresAt, createdAt: new Date() },
+      setWhere: lt(householdInvitations.expiresAt, new Date()),
+    })
+    .returning({ id: householdInvitations.id });
+
+  if (!invite) {
+    return { error: 'An invite is already pending for that email.' };
+  }
 
   const acceptUrl = `${env.APP_URL}/invite/${token}`;
   await sendInviteEmail(email, acceptUrl);
@@ -169,14 +169,20 @@ export async function acceptInviteAction(
   }
 
   // If the submitting browser already has a session (e.g. an already-logged-in owner
-  // opened their own invite link, or a stale tab), revoke it before creating the new
-  // one — otherwise it's an orphaned-but-valid row until its own 30-day expiry.
+  // opened their own invite link, or a stale tab), it should end up revoked — otherwise
+  // it's an orphaned-but-valid row until its own 30-day expiry. The new session is
+  // created FIRST, deliberately: the invite above is already irreversibly accepted, so
+  // if the old-session delete ran first and createSession() then failed, the user would
+  // be left fully logged out with no way back in. Creating first means a failure here
+  // just leaves the old session (still valid) alongside the accepted invite — recoverable.
   const cookieStore = await cookies();
   const existingToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+
+  await createSession(newUser.id);
+
   if (existingToken) {
     await db.delete(sessions).where(eq(sessions.id, existingToken));
   }
 
-  await createSession(newUser.id);
   redirect('/');
 }

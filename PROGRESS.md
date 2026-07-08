@@ -505,19 +505,23 @@ Unlike the three Phase 0 rounds (diminishing returns on already-reviewed plumbin
 was fresh, unreviewed, security-critical code — auth, sessions, RBAC, cross-tenant
 scoping — and the review found real, exploitable gaps. 15 findings, all fixed:
 
-- _Fixed_ — `createInviteAction` wasn't idempotent (only checked for an existing
-  _user_, never an existing _pending invite_) and `acceptInviteAction` had a genuine
-  TOCTOU race: `validateInvite()` ran against a row read before the transaction
-  started, so two concurrent submissions of the same link both passed it, and the
-  losing `INSERT` threw an uncaught unique-violation instead of a friendly error.
-  Fixed the first with a pending-invite check (expired invites don't block a resend);
-  fixed the second by making the acceptance itself an atomic claim — `UPDATE
-household_invitations SET accepted_at = now() WHERE id = $1 AND accepted_at IS
-NULL`, checking whether that update actually affected a row _before_ ever touching
-  `users`. Verified with a real concurrency test: two simultaneous
-  `acceptInviteAction` calls against the same invite, asserting exactly one redirects
-  and the other gets "This invite has already been used," with exactly one user row
-  created.
+- _Partially fixed this round, fully closed next round (see below)_ —
+  `createInviteAction` wasn't idempotent (only checked for an existing _user_, never
+  an existing _pending invite_) and `acceptInviteAction` had a genuine TOCTOU race:
+  `validateInvite()` ran against a row read before the transaction started, so two
+  concurrent submissions of the same link both passed it, and the losing `INSERT`
+  threw an uncaught unique-violation instead of a friendly error. Fixed the second by
+  making the acceptance itself an atomic claim — `UPDATE household_invitations SET
+accepted_at = now() WHERE id = $1 AND accepted_at IS NULL`, checking whether that
+  update actually affected a row _before_ ever touching `users`. Verified with a real
+  concurrency test: two simultaneous `acceptInviteAction` calls against the same
+  invite, asserting exactly one redirects and the other gets "This invite has already
+  been used," with exactly one user row created. The first (`createInviteAction`) was
+  _not_ actually fixed by this round's change: the pending-invite check added was a
+  plain `SELECT` followed by an unguarded `INSERT` — the identical TOCTOU shape being
+  fixed two lines above, reintroduced in the sibling function in the same commit. This
+  entry originally (incorrectly) marked it "Fixed"; the next hardening round caught
+  and corrected both the bug and this log entry — see below.
 - _Fixed_ — `loginAction` had a timing side-channel: it returned immediately for a
   nonexistent email but ran a real argon2 `verify()` (~20ms, confirmed by direct
   measurement) for an existing user with the wrong password, before returning the
@@ -605,6 +609,95 @@ pure waste, not incorrect); and a pre-existing test-hygiene gap in
 `members.integration.test.ts` (two of its tests leak an orphaned household row per
 run) — real, but out of the 15 items actually triaged as fix-now for this round; the
 leaked rows were cleaned up manually rather than left to accumulate.
+
+**Third hardening pass (`/code-review` on the round-2 fix commit `5fe20aa`, extra-high
+effort, 2026-07-08):** a review of dense fix commits touching the same functions again
+— this project's own Phase 0 precedent (the seed.ts round) is that these are exactly
+where regressions hide. Found real gaps, including one round-2 fix that was itself
+broken. 7 items triaged fix-now, all fixed; the rest deferred with reasoning:
+
+- _Fixed_ — `createInviteAction`'s own idempotency check (added last round) was a
+  plain `SELECT` then `INSERT`, not atomic — the exact TOCTOU shape being fixed in
+  the sibling `acceptInviteAction` in that same commit. Closed properly this time: a
+  new partial unique index, `household_invitations_household_email_pending_unique`
+  ON `(household_id, email) WHERE accepted_at IS NULL`, makes "one pending invite per
+  household+email" a real Postgres constraint, not an application-level race. The
+  insert is now `INSERT ... ON CONFLICT (household_id, email) WHERE accepted_at IS
+  NULL DO UPDATE ... WHERE expires_at < now()` — reissues an expired pending invite
+  in place (same row, fresh token) and no-ops (returns nothing from `RETURNING`) when
+  a live one already exists, all in one atomic statement; no separate `SELECT` at all.
+  Verified with a real concurrency test: two simultaneous `createInviteAction` calls
+  for the same email, asserting exactly one succeeds and the other gets "An invite is
+  already pending for that email," with exactly one row left in the table. Also
+  corrected the "allows a fresh invite once expired" test, whose expectation (2 rows)
+  encoded the old insert-a-duplicate behavior — it's now 1 row, updated in place.
+- _Fixed_ — `acceptInviteAction` deleted the submitter's existing session (if any)
+  _before_ calling `createSession()` for the new user, with no transaction spanning
+  both. The invite claim is already irreversible by that point, so if `createSession()`
+  ever threw, the user would be left fully logged out with no way back in — a new
+  failure mode this exact commit introduced while fixing something else. Reordered:
+  create the new session first, delete the old one after, so a failure at that point
+  leaves the old (still-valid) session alongside the now-accepted invite instead of
+  logging the user out entirely.
+- _Fixed_ — `app/error.tsx` never called `lib/observability.ts`'s `captureException()`,
+  despite that helper being purpose-built and hardened across multiple Phase 0 rounds
+  for exactly this call site — an uncaught error reaching the boundary produced zero
+  log line or Sentry event anywhere. `error.tsx` is a Client Component (Next.js
+  requirement for error boundaries), so it can't import `lib/observability.ts`
+  directly — that module pulls in `pino`/`node:crypto` via `lib/log.ts`, which isn't
+  browser-bundleable. Added `app/actions/report-error.ts`, a Server Action bridge:
+  the boundary's `useEffect` sends `error.message`/`error.digest` (not the `Error`
+  instance) across the boundary, since production Next already redacts
+  server-originated error messages down to a digest anyway. Side effect noted, not
+  fixed (out of scope): wiring this up makes Turbopack statically resolve
+  `lib/observability.ts`'s dynamic `@sentry/nextjs` import for the first time (it was
+  previously unreachable dead code from the app's perspective), producing a
+  build-time "Module not found" warning when the optional package isn't installed —
+  confirmed harmless (`npm run build` and all test suites still succeed; this is the
+  documented keys-optional fallback path actually firing), but the comment in
+  `observability.ts` claiming the variable-specifier trick avoids this warning
+  entirely is now known to be wrong under Turbopack specifically.
+- _Fixed_ — `changePasswordAction`'s session-revocation query silently fell back to
+  deleting the current session too (`eq(sessions.userId, user.id)`, no `ne()`
+  exclusion) if `currentToken` were ever falsy — unreachable today since `requireUser`
+  and the later `cookies()` read see the same request-scoped cookie store, but silent
+  and untested. Changed to throw loudly instead, so the invariant stays enforced if
+  that ever changes, rather than quietly logging the requesting user out.
+- _Fixed_ — the new "change password" E2E describe block's `afterAll` never purged
+  `login_attempts` for its test email, unlike the sibling "auth" describe in the same
+  file, which explicitly does this for the identical reason (the test deliberately
+  triggers a failed login). Added the same purge.
+- _Fixed_ — the same test's two `browser.newContext()` calls were only closed at the
+  very end of the test body with no `try`/`finally` — any earlier assertion failure
+  (including the ones the test exists to check) would leak both contexts for the rest
+  of the worker process. Wrapped in `try`/`finally`.
+- _Fixed_ — `app/actions/invites.integration.test.ts`'s idempotency test only called
+  `createInviteAction` sequentially, never concurrently, so it never actually
+  exercised the TOCTOU race it was meant to guard against. Added a genuine
+  `Promise.all` concurrency test (see first item above).
+
+Re-verified end to end: lint/typecheck/build clean (Turbopack warning noted above,
+non-fatal), 92/92 unit tests, 32/32 integration tests against the live `dev` branch (up
+from 31 — the new concurrent-invite-creation race test), 11/11 E2E tests. Migration
+`drizzle/0002_bitter_korath.sql` (the new partial unique index) generated and applied to
+the `dev` branch.
+
+Six findings from this round were deliberately deferred (documented reasoning, not
+silently dropped): session-revocation logic duplicated across `changePasswordAction`
+and `acceptInviteAction` instead of a shared `revokeOtherSessions()` helper (real, but
+a refactor, not a bug); React 19's uncontrolled-form auto-reset clears
+`change-password-form.tsx`'s fields even when the action returns an error rather than
+throwing (a real UX papercut, not a security/correctness issue); no index on
+`household_invitations(email)` for lookups outside the pending-partial-index path
+(this round's atomic-upsert fix already eliminated the one query that needed it — the
+old unguarded `SELECT` is gone); `getClientIp()`'s `hops[hops.length - 1] || 'unknown'`
+fallback and its lack of dedicated test coverage (narrow edge case: a malformed
+`X-Forwarded-For` with an empty trailing segment); `session.test.ts`'s "fails closed"
+test not asserting `logger.error` was actually called (test-completeness nit, not a
+product bug); and `DUMMY_PASSWORD_HASH` being a hardcoded string rather than derived
+from `hashPassword()`'s live defaults (verified byte-identical today; would only drift
+if someone changed argon2 params in one place and not the other — accepted tradeoff for
+a Tier-2 app rather than adding machinery to keep them in sync).
 
 ---
 

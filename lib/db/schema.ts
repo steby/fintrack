@@ -13,6 +13,7 @@ import {
   index,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
+import { isNull } from 'drizzle-orm';
 
 // Phase 1 lays down the full domain model in one migration (every later phase adds
 // business logic on top, not new tables — see spec.md's Phase 2 "no new tables"). All
@@ -89,7 +90,18 @@ export const householdInvitations = pgTable(
     acceptedAt: timestamp('accepted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [uniqueIndex('household_invitations_token_unique').on(table.token)],
+  (table) => [
+    uniqueIndex('household_invitations_token_unique').on(table.token),
+    // Backs createInviteAction's idempotency check atomically: only one UNACCEPTED
+    // invite per (household, email) can exist at a time, enforced by Postgres itself
+    // via ON CONFLICT, not by a separate SELECT-then-INSERT (which is a TOCTOU race —
+    // two concurrent requests can both pass a SELECT check before either INSERT
+    // commits). Accepted invites are excluded from the predicate so history/re-invites
+    // after removal aren't constrained.
+    uniqueIndex('household_invitations_household_email_pending_unique')
+      .on(table.householdId, table.email)
+      .where(isNull(table.acceptedAt)),
+  ],
 );
 
 // Kill-switch flags (spec.md Feature Matrix) live here as rows, read per request with an

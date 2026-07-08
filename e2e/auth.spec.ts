@@ -156,6 +156,11 @@ test.describe('change password', () => {
 
   test.afterAll(async () => {
     await testDb.delete(users).where(eq(users.email, CHANGE_PW_EMAIL));
+    // Same reasoning as the "auth" describe's afterAll above: this test deliberately
+    // triggers a failed login (the stale old-password attempt on pageB), which would
+    // otherwise accumulate toward CHANGE_PW_EMAIL's rate-limit bucket across repeated
+    // runs within the 15-minute window.
+    await testDb.delete(loginAttempts).where(eq(loginAttempts.email, CHANGE_PW_EMAIL));
     await closeTestDb();
   });
 
@@ -163,47 +168,51 @@ test.describe('change password', () => {
     browser,
   }) => {
     // Two independent browser contexts simulate two devices logged into the same
-    // account at once.
+    // account at once. Wrapped in try/finally so an assertion failure partway through
+    // (including the ones this test exists to check) still closes both contexts instead
+    // of leaking them for the rest of the worker process.
     const contextA = await browser.newContext();
     const contextB = await browser.newContext();
-    const pageA = await contextA.newPage();
-    const pageB = await contextB.newPage();
+    try {
+      const pageA = await contextA.newPage();
+      const pageB = await contextB.newPage();
 
-    for (const page of [pageA, pageB]) {
-      await page.goto('/login');
-      await page.getByLabel('Email').fill(CHANGE_PW_EMAIL);
-      await page.getByLabel('Password').fill(OLD_PASSWORD);
-      await page.getByRole('button', { name: 'Sign in' }).click();
-      await expect(page).toHaveURL('/');
+      for (const page of [pageA, pageB]) {
+        await page.goto('/login');
+        await page.getByLabel('Email').fill(CHANGE_PW_EMAIL);
+        await page.getByLabel('Password').fill(OLD_PASSWORD);
+        await page.getByRole('button', { name: 'Sign in' }).click();
+        await expect(page).toHaveURL('/');
+      }
+
+      await pageA.goto('/settings/account');
+      await pageA.getByLabel('Current password').fill(OLD_PASSWORD);
+      await pageA.getByLabel('New password').fill(NEW_PASSWORD);
+      await pageA.getByRole('button', { name: 'Update password' }).click();
+      await expect(pageA.getByText('Password updated.')).toBeVisible();
+
+      // The session that MADE the change survives...
+      await pageA.goto('/');
+      await expect(pageA).toHaveURL('/');
+
+      // ...but the OTHER device's session is revoked, bouncing it to /login on its next
+      // navigation — the whole point of this fix.
+      await pageB.goto('/');
+      await expect(pageB).toHaveURL(/\/login$/);
+
+      // The old password no longer works; the new one does.
+      await pageB.getByLabel('Email').fill(CHANGE_PW_EMAIL);
+      await pageB.getByLabel('Password').fill(OLD_PASSWORD);
+      await pageB.getByRole('button', { name: 'Sign in' }).click();
+      await expect(pageB.getByText('Invalid email or password.')).toBeVisible();
+
+      await pageB.getByLabel('Email').fill(CHANGE_PW_EMAIL);
+      await pageB.getByLabel('Password').fill(NEW_PASSWORD);
+      await pageB.getByRole('button', { name: 'Sign in' }).click();
+      await expect(pageB).toHaveURL('/');
+    } finally {
+      await contextA.close();
+      await contextB.close();
     }
-
-    await pageA.goto('/settings/account');
-    await pageA.getByLabel('Current password').fill(OLD_PASSWORD);
-    await pageA.getByLabel('New password').fill(NEW_PASSWORD);
-    await pageA.getByRole('button', { name: 'Update password' }).click();
-    await expect(pageA.getByText('Password updated.')).toBeVisible();
-
-    // The session that MADE the change survives...
-    await pageA.goto('/');
-    await expect(pageA).toHaveURL('/');
-
-    // ...but the OTHER device's session is revoked, bouncing it to /login on its next
-    // navigation — the whole point of this fix.
-    await pageB.goto('/');
-    await expect(pageB).toHaveURL(/\/login$/);
-
-    // The old password no longer works; the new one does.
-    await pageB.getByLabel('Email').fill(CHANGE_PW_EMAIL);
-    await pageB.getByLabel('Password').fill(OLD_PASSWORD);
-    await pageB.getByRole('button', { name: 'Sign in' }).click();
-    await expect(pageB.getByText('Invalid email or password.')).toBeVisible();
-
-    await pageB.getByLabel('Email').fill(CHANGE_PW_EMAIL);
-    await pageB.getByLabel('Password').fill(NEW_PASSWORD);
-    await pageB.getByRole('button', { name: 'Sign in' }).click();
-    await expect(pageB).toHaveURL('/');
-
-    await contextA.close();
-    await contextB.close();
   });
 });

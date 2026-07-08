@@ -142,13 +142,15 @@ export async function changePasswordAction(
   // own password.
   const cookieStore = await cookies();
   const currentToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
-  await db
-    .delete(sessions)
-    .where(
-      currentToken
-        ? and(eq(sessions.userId, user.id), ne(sessions.id, currentToken))
-        : eq(sessions.userId, user.id),
-    );
+  if (!currentToken) {
+    // requireUser() above only succeeds via a valid session cookie read from this same
+    // request-scoped cookie store, so this is unreachable in practice. Throwing (rather
+    // than silently falling back to "delete every session, including this one") makes
+    // that invariant loud if it's ever violated, instead of quietly logging the
+    // requesting user out as a side effect of changing their own password.
+    throw new Error('changePasswordAction: no session token on an authenticated request.');
+  }
+  await db.delete(sessions).where(and(eq(sessions.userId, user.id), ne(sessions.id, currentToken)));
 
   return { success: true };
 }

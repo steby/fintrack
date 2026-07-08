@@ -144,29 +144,60 @@ describe('createInviteAction', () => {
     await cleanup(owner.household.id);
   });
 
-  it('allows a fresh invite once the previous one to the same email has expired', async () => {
+  it('allows a fresh invite once the previous one to the same email has expired, reissuing the same row', async () => {
     const { createInviteAction } = await import('./invites');
     const owner = await makeHouseholdWithUser('owner', 'Invite create E');
     const email = `invitee-${Date.now()}@example.com`;
+    const staleToken = generateToken();
 
     await db.insert(householdInvitations).values({
       householdId: owner.household.id,
       email,
       role: 'viewer',
-      token: generateToken(),
+      token: staleToken,
       invitedByUserId: owner.user.id,
       expiresAt: new Date(Date.now() - 1000),
     });
 
     mockToken = owner.token;
-    const result = await createInviteAction(undefined, formData({ email, role: 'viewer' }));
+    const result = await createInviteAction(undefined, formData({ email, role: 'member' }));
 
     expect(result).toEqual({ success: true });
+    // The atomic upsert (household_invitations_household_email_pending_unique) reissues
+    // the existing unaccepted row in place rather than inserting a second one — only one
+    // row per (household, email) can ever be pending at once, by construction.
     const rows = await db
       .select()
       .from(householdInvitations)
       .where(eq(householdInvitations.email, email));
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].role).toBe('member');
+    expect(rows[0].token).not.toBe(staleToken);
+    expect(rows[0].expiresAt.getTime()).toBeGreaterThan(Date.now());
+
+    await cleanup(owner.household.id);
+  });
+
+  it('concurrent invite creations for the same email only leave ONE pending invite (TOCTOU race fix)', async () => {
+    const { createInviteAction } = await import('./invites');
+    const owner = await makeHouseholdWithUser('owner', 'Invite create race');
+    mockToken = owner.token;
+    const email = `invitee-race-${Date.now()}@example.com`;
+
+    const submit = () => createInviteAction(undefined, formData({ email, role: 'viewer' }));
+    const results = await Promise.all([submit(), submit()]);
+
+    // Exactly one request wins (a fresh insert); the other loses the atomic
+    // ON CONFLICT ... WHERE race and gets the friendly "already pending" error — not a
+    // second live row and not an uncaught unique-constraint exception.
+    expect(results.filter((r) => r?.success)).toHaveLength(1);
+    expect(results).toContainEqual({ error: 'An invite is already pending for that email.' });
+
+    const rows = await db
+      .select()
+      .from(householdInvitations)
+      .where(eq(householdInvitations.email, email));
+    expect(rows).toHaveLength(1);
 
     await cleanup(owner.household.id);
   });
