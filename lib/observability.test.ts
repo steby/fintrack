@@ -137,7 +137,25 @@ describe('captureException', () => {
     expect(errorSpy).toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledWith(
       expect.objectContaining({ err: expect.anything() }),
-      expect.stringContaining('Failed to forward exception to Sentry'),
+      expect.stringContaining('failed while capturing/forwarding an exception'),
+    );
+  });
+
+  it('does not throw even if the initial logger.error call itself throws', async () => {
+    // Proves the whole body of captureException is guarded, not just the
+    // Sentry-forwarding part — a broken logger.error call must not propagate either.
+    vi.doMock('./env', () => ({ env: { SENTRY_DSN: undefined, NODE_ENV: 'test' } }));
+    const errorSpy = vi.fn(() => {
+      throw new Error('logger.error itself is broken');
+    });
+    const warnSpy = vi.fn();
+    vi.doMock('./log', () => ({ logger: { error: errorSpy, warn: warnSpy } }));
+
+    const { captureException } = await import('./observability');
+    await expect(captureException(new Error('boom'))).resolves.toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.anything() }),
+      expect.stringContaining('failed while capturing/forwarding an exception'),
     );
   });
 
@@ -169,14 +187,19 @@ describe('captureException', () => {
     );
 
     // The cache should have been reset (not permanently poisoned) — a later call with
-    // the underlying problem "resolved" should succeed rather than replaying the stale
-    // rejection forever.
+    // the underlying problem "resolved" should trigger a genuinely fresh initSentry()
+    // attempt, not silently reuse the first (broken) attempt's cached result. Assert on
+    // the SECOND call's warning reason being one initSentry() only produces via a fresh
+    // run through its own "package is missing" path — not merely that the FIRST call's
+    // reason didn't repeat, which would pass just as well if the cache were never reset
+    // at all (a stale cached promise never calls warnSpy again either, so "not called
+    // with X" is true in both the fixed and the still-broken case).
     shouldThrow = false;
     warnSpy.mockClear();
     await expect(captureException(new Error('second'))).resolves.toBeUndefined();
-    expect(warnSpy).not.toHaveBeenCalledWith(
-      expect.anything(),
-      expect.stringContaining('threw unexpectedly'),
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.anything() }),
+      expect.stringContaining('is not installed'),
     );
   });
 

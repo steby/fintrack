@@ -277,6 +277,96 @@ crashes env loading; confirmed 15 simulated HMR reloads hold `listenerCount` at 
 re-ran the seed script twice for idempotency; confirmed `migrate.ts` still runs cleanly
 against the new pool config.
 
+**Third hardening pass (`/code-review` on the pass above, extra-high effort,
+2026-07-08):** Reviewing the second pass's own diff caught that two of its "fixes" were
+themselves incomplete — the never-throws contract still had a hole, and one of the new
+regression tests didn't actually test the regression it was written for. 15 findings, 12
+fixed, 3 deliberately skipped (reasons below).
+
+- _Fixed_ — `captureException`'s initial `logger.error` call sat _outside_ its
+  try/catch, and the catch block's own `logger.warn` wasn't guarded like the sibling
+  `warnFallback()` helper — both could still throw and break the exact "never throws"
+  contract the second pass was written to establish. Wrapped the entire function body in
+  one try/catch instead of guarding pieces individually, so no future line added in the
+  wrong place can reopen the gap. Added a test that makes `logger.error` itself throw
+  and asserts `captureException` still resolves.
+- _Fixed_ — the "resets the cache and allows a later retry" regression test didn't
+  actually prove a retry occurred: its assertion (`warnSpy` not called with the _first_
+  call's message) passes identically whether the cache-reset fix exists or not, since a
+  never-reset stale cache just never calls `warnSpy` again either. Verified this
+  empirically by temporarily deleting the reset line and re-running the test — it still
+  passed. Fixed by asserting on what the _second_ call's warning reason actually is
+  (`'is not installed'`, which only a genuinely fresh `initSentry()` run produces),
+  which fails correctly when the reset is removed.
+- _Fixed_ — `seedEnvSchema` didn't use the `required()` helper this same round's second
+  pass added to `lib/env.ts`, so an entirely-absent `SEED_OWNER_EMAIL`/`PASSWORD` (the
+  normal fresh-checkout case, not just a blank one) fell back to zod's generic "received
+  undefined" instead of the intended message — verified directly with `schema.safeParse({})`
+  before fixing. Root cause: `required()` and `formatZodIssues` lived inside `lib/env.ts`,
+  which importing anything from (even one named export) still eagerly runs `loadEnv()`
+  against real `process.env` — exactly what `seed.ts` exists to avoid. Extracted both
+  into a new `lib/zod-format.ts`, pure and side-effect-free (no `process.env` access), so
+  `seed.ts` can now safely import the real helpers instead of hand-copying them. This
+  also closed two related findings in the same change: `lib/env.ts`'s docstring falsely
+  claimed `seed.ts` already reused `formatZodIssues` (it explicitly didn't, and said why
+  in its own comment) — now genuinely true; and the inlined formatter duplication is
+  gone. Also restored the "See .env.example..." trailer that had been dropped from every
+  seed-config validation error, not just the absent-key case. Verified live against a
+  scratch env file with `SEED_OWNER_EMAIL`/`PASSWORD` genuinely absent (not just
+  blanked) — real `.env` untouched throughout, confirmed byte-identical by hash before
+  and after.
+- _Fixed_ — `seed.ts`'s `main().catch()` used `console.error` for every failure, even
+  ones occurring _after_ `../log` had already been successfully dynamically imported
+  (DB unreachable, `hash()` failure) — losing pino's structured output and stack trace
+  for what's actually the more common real-world failure mode. Split: an inner
+  try/catch inside `main()` now logs post-import failures through the real logger; the
+  outer `console.error` catch is only reachable for the seed-config validation throw,
+  where the logger genuinely isn't available yet. Verified live: a scratch env file
+  pointed at an unreachable `DATABASE_URL` now produces a full structured pino error log
+  with stack trace, not a bare message.
+- _Fixed_ — the main pool's new timeouts (10s connect, 30s statement — from the second
+  pass) silently applied to `lib/db/migrate.ts` too, via the shared `pool` export, and
+  were never considered for that use case: a Neon cold-start or a legitimately
+  long-running DDL migration could now be killed where it previously just waited.
+  Exported `createPool()` and gave `migrate.ts` its own dedicated, uncached pool (it's a
+  one-shot script — no HMR-cache need) with a longer connection timeout and no
+  statement/query timeout, since a migration should be allowed to run to completion.
+  Verified live: `migrate.ts` still runs cleanly against the real `dev` branch.
+- _Fixed_ (minor) — `handlePoolError` logged `poolName` twice — once as a structured
+  field, once interpolated into the message string. Removed the redundant
+  interpolation.
+- _Fixed_ (minor) — `vitest.config.ts`'s `hookTimeout` comment named `query_timeout` as
+  what bounds the `afterAll` wait, but per the second pass's own correction elsewhere in
+  the codebase, `statement_timeout` (the smaller value, and the real server-side
+  cancellation) is what actually fires first. Corrected the comment.
+- _Fixed_ (minor) — `seed.ts`'s two independent dynamic imports (`./index`, `../log`)
+  were awaited sequentially. Switched to `Promise.all`.
+- _Skipped, documented_ — `createPool()`'s no-duplicate-listener safety rests on a prose
+  convention ("call only from the right-hand side of `??`") rather than anything
+  compiler-enforced. Only 2 call sites exist; compiler-enforcing this would be
+  over-engineering relative to what it buys at this scale.
+- _Skipped, documented_ — `lib/env.ts`'s eager top-level `loadEnv()` call is the deeper
+  architectural reason this exact class of bug (a one-off script needing partial env
+  validation) keeps recurring. The `lib/zod-format.ts` extraction above fixes the
+  practical symptom for the two helpers that needed reuse; a full lazy-`env` refactor is
+  out of proportion for Phase 0 and cuts against the deliberate "fail loud at boot"
+  design goal from `spec.md`.
+- _Skipped, documented_ — `getSentry()`'s catch-and-reset mechanism guards a path that's
+  already unreachable through `initSentry()`'s own two internal try/catches (only
+  exercised by a contrived test mock, not real operation). Harmless defense-in-depth,
+  already tested, not worth removing.
+
+Re-verified end to end: lint/typecheck/build clean, 39/39 unit tests (100% coverage, up
+from 38 — one new test added for the initial-log-throw fix), 3/3 integration tests
+against the live `dev` branch, 2/2 E2E, local Semgrep scan (`p/javascript`+
+`p/typescript`) 0 findings. Live-verified both `seed.ts` regressions directly: the
+entirely-absent-keys case now shows the exact intended message plus the restored
+`.env.example` trailer; the DB-unreachable case now shows full structured pino output
+with a stack trace instead of a bare string. Confirmed `migrate.ts` still runs cleanly
+against its new dedicated pool. All scratch-env testing used isolated copies in a
+scratchpad directory — the real `.env` was confirmed byte-identical (by hash) before and
+after every test in this pass.
+
 ---
 
 <!--

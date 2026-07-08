@@ -60,9 +60,12 @@ export default defineConfig({
           testTimeout: 15000,
           // The tight-timeout test in lib/db/index.integration.test.ts deliberately
           // leaves an orphaned query running against the health pool; afterAll's
-          // healthCheckPool.end() has to wait for it (bounded by the pool's own
-          // query_timeout, 10s). That's within a hair of Vitest's default 10s
-          // hookTimeout, so give hooks real headroom to avoid a spurious timeout.
+          // healthCheckPool.end() has to wait for it to actually finish. The health
+          // pool's statement_timeout (8s) is what bounds that wait in practice — it's
+          // the real server-side cancellation (see lib/db/index.ts); query_timeout
+          // (10s) is only a client-side timer that would fire second, as a backstop.
+          // Either way that's within a hair of Vitest's default 10s hookTimeout, so
+          // give hooks real headroom to avoid a spurious timeout.
           hookTimeout: 20000,
           // Integration tests share one real Postgres branch — run serially to avoid
           // cross-test data races on the same tables.

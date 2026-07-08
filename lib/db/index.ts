@@ -15,7 +15,7 @@ function handlePoolError(poolName: string) {
     // EventEmitter 'error' and crashes the process. Log (tagged by pool, so a main-pool
     // error — potentially customer-impacting — isn't confused with a health-check-pool
     // one) and let the pool recover instead.
-    logger.error({ err, pool: poolName }, `Unexpected error on idle Postgres client (${poolName})`);
+    logger.error({ err, pool: poolName }, 'Unexpected error on idle Postgres client');
   };
 }
 
@@ -61,7 +61,7 @@ if (env.NODE_ENV !== 'production') {
 }
 
 export const db = drizzle(pool, { schema });
-export { pool, healthCheckPool };
+export { pool, healthCheckPool, createPool };
 
 /** Used by /api/health. Never throws — returns false on any failure or timeout.
  *  `timeoutMs` bounds how long the caller waits for a response; the health pool's own

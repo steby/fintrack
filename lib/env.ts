@@ -1,20 +1,11 @@
 import { z } from 'zod';
+import { required, formatZodIssues } from './zod-format';
 
 const boolString = (defaultValue: 'true' | 'false') =>
   z
     .enum(['true', 'false'])
     .default(defaultValue)
     .transform((v) => v === 'true');
-
-// The schema-wide blank-to-undefined normalization in loadEnv() means a required field's
-// `undefined` case can come from either a genuinely missing key OR a blank `KEY=` line —
-// either way, zod's default "invalid_type" message ("received undefined") is generic.
-// This gives required fields their own specific "is required" message for that case,
-// while leaving their other validators (`.min()`, `.url()`, ...) untouched for the
-// present-but-invalid case.
-const required = (message: string) => ({
-  error: (issue: { input: unknown }) => (issue.input === undefined ? message : undefined),
-});
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -62,13 +53,6 @@ const envSchema = z.object({
   // mean a malformed value crashes `next dev`/`next build`/`drizzle-kit`, not just
   // `npm run db:seed` — a real regression a previous version of this file had.
 });
-
-/** Formats a ZodError as the multi-line, human-readable list every error in this app
- *  uses. Exported so other one-off validation (e.g. lib/db/seed.ts's own schema) doesn't
- *  need to re-derive the same formatting. */
-export function formatZodIssues(error: z.ZodError): string {
-  return error.issues.map((issue) => `  - ${issue.path.join('.')}: ${issue.message}`).join('\n');
-}
 
 /** Exported (not just used internally) so unit tests can validate arbitrary env shapes
  *  without mutating the real process.env. Loosely typed (not NodeJS.ProcessEnv) since

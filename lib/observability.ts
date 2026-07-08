@@ -75,17 +75,18 @@ function getSentry(): Promise<SentryModule | null> {
 }
 
 export async function captureException(error: unknown, context?: Record<string, unknown>) {
-  // context spread comes first so a context key literally named `err` can never shadow
-  // the actual exception being logged.
-  logger.error({ ...context, err: error }, 'captured exception');
-
   // This whole seam exists to be safe to call from any error-handling path, so it must
-  // never itself throw — even if getSentry() or the real Sentry client's own
-  // captureException somehow does.
+  // never itself throw — the entire body is guarded, not just the Sentry-forwarding
+  // part, since even the initial log call below can throw (e.g. a `context` value with
+  // a throwing getter, or a broken logger) and that must not propagate either.
   try {
+    // context spread comes first so a context key literally named `err` can never
+    // shadow the actual exception being logged.
+    logger.error({ ...context, err: error }, 'captured exception');
+
     const sentry = await getSentry();
     sentry?.captureException(error, context ? { extra: context } : undefined);
   } catch (err) {
-    logger.warn({ err }, 'Failed to forward exception to Sentry (already logged locally above)');
+    warnFallback('failed while capturing/forwarding an exception', err);
   }
 }
