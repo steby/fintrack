@@ -141,6 +141,16 @@ test.describe('monthly entries', () => {
             eq(monthlyEntries.month, now.getMonth() + 1),
           ),
         );
+      // A code-review pass found that expect.poll doesn't catch a throwing callback the
+      // way it catches a failing matcher — if the scoped query ever matched zero rows
+      // (e.g. a month boundary crossed between this Date() and currentMonthUrl()'s own),
+      // `persisted.actualDate` would throw a raw, confusing TypeError instead of a clear
+      // assertion failure. Fail loud and specific instead.
+      if (!persisted) {
+        throw new Error(
+          `No monthly_entries row found for "${itemName}" in ${now.getFullYear()}-${now.getMonth() + 1}`,
+        );
+      }
       return persisted.actualDate;
     };
     await expect.poll(currentMonthActualDate).toBe(null);

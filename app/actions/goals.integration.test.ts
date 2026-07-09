@@ -132,22 +132,28 @@ describe('createGoalAction', () => {
   it('rejects creating a goal when FEATURE_SAVINGS_GOALS is disabled (server-side, not just hidden UI)', async () => {
     vi.doMock('../../lib/env', () => ({ env: { FEATURE_SAVINGS_GOALS: false } }));
     vi.resetModules();
-    const { createGoalAction } = await import('./goals');
-    const member = await makeHouseholdWithUser('member', 'Goal create F');
-    mockToken = member.token;
+    // A code-review pass found this mock/unmock pair had no try/finally — a failing
+    // assertion below would leave the mocked (nearly-empty) env module active for
+    // every later test in the run, masking the real failure behind unrelated errors.
+    try {
+      const { createGoalAction } = await import('./goals');
+      const member = await makeHouseholdWithUser('member', 'Goal create F');
+      mockToken = member.token;
 
-    const result = await createGoalAction(
-      undefined,
-      formData({ name: 'Trip', targetAmount: '5000.00' }),
-    );
-    expect(result).toEqual({ error: 'Savings goals are not enabled.' });
+      const result = await createGoalAction(
+        undefined,
+        formData({ name: 'Trip', targetAmount: '5000.00' }),
+      );
+      expect(result).toEqual({ error: 'Savings goals are not enabled.' });
 
-    const rows = await db.select().from(goals).where(eq(goals.householdId, member.household.id));
-    expect(rows).toHaveLength(0);
+      const rows = await db.select().from(goals).where(eq(goals.householdId, member.household.id));
+      expect(rows).toHaveLength(0);
 
-    await cleanup(member.household.id);
-    vi.doUnmock('../../lib/env');
-    vi.resetModules();
+      await cleanup(member.household.id);
+    } finally {
+      vi.doUnmock('../../lib/env');
+      vi.resetModules();
+    }
   });
 });
 
@@ -249,17 +255,20 @@ describe('deleteGoalAction', () => {
 
     vi.doMock('../../lib/env', () => ({ env: { FEATURE_SAVINGS_GOALS: false } }));
     vi.resetModules();
-    const { deleteGoalAction } = await import('./goals');
+    try {
+      const { deleteGoalAction } = await import('./goals');
 
-    mockToken = member.token;
-    const result = await deleteGoalAction(undefined, formData({ id: goal.id }));
-    expect(result).toEqual({ success: true });
+      mockToken = member.token;
+      const result = await deleteGoalAction(undefined, formData({ id: goal.id }));
+      expect(result).toEqual({ success: true });
 
-    const rows = await db.select().from(goals).where(eq(goals.id, goal.id));
-    expect(rows).toHaveLength(0);
+      const rows = await db.select().from(goals).where(eq(goals.id, goal.id));
+      expect(rows).toHaveLength(0);
 
-    await cleanup(member.household.id);
-    vi.doUnmock('../../lib/env');
-    vi.resetModules();
+      await cleanup(member.household.id);
+    } finally {
+      vi.doUnmock('../../lib/env');
+      vi.resetModules();
+    }
   });
 });

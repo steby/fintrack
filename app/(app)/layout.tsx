@@ -2,7 +2,6 @@ import Link from 'next/link';
 import { requireUser } from '../../lib/auth/guards';
 import { can } from '../../lib/auth/rbac';
 import { logoutAction } from '../actions/auth';
-import { env } from '../../lib/env';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { YearNav } from './year-nav';
@@ -27,11 +26,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/monthly" className="rounded-md px-2 py-1.5 hover:bg-muted">
             Monthly
           </Link>
-          {env.FEATURE_SAVINGS_GOALS && (
-            <Link href="/goals" className="rounded-md px-2 py-1.5 hover:bg-muted">
-              Goals
-            </Link>
-          )}
+          {/* Always shown, even with FEATURE_SAVINGS_GOALS off — goals/page.tsx renders
+              a delete-only view of existing goals in that state (an owner who disables
+              the feature still needs to be able to remove old data), so hiding this
+              link would make that page undiscoverable except by bookmarked URL. */}
+          <Link href="/goals" className="rounded-md px-2 py-1.5 hover:bg-muted">
+            Goals
+          </Link>
           {/* csv_import is a per-household runtime kill-switch (default off), not a
               build-time env flag like FEATURE_SAVINGS_GOALS above — this link always
               shows so a member can discover the feature and ask an owner to enable it;

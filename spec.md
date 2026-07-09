@@ -72,6 +72,18 @@ year, partial actuals, absent prior year) unit-testable without a live database 
 cover exactly those cases. Caught by a `/code-review` pass finding this diverged from the
 literal phase-plan wording without being written back here.
 
+**Phase 4 deviation (logged 2026-07-09, during the cross-phase cleanup pass):**
+`deleteGoalAction` (`app/actions/goals.ts`) is deliberately **not** gated by
+`FEATURE_SAVINGS_GOALS`, unlike `createGoalAction`/`updateGoalAction` — an owner who
+disables the feature still needs to remove old goal data without re-enabling it first (a
+config-flag flip requires a redeploy). This narrows the Phase 4 adversarial rule below
+("flag off ⇒ zero traces in UI and actions rejected") to apply to create/update only;
+`app/(app)/goals/page.tsx` still renders existing goals (delete-only, no add/edit
+controls) when the flag is off, and the sidebar's Goals link (`app/(app)/layout.tsx`)
+stays visible unconditionally so that delete-only view is actually reachable. Caught
+undocumented by a `/code-review` pass — the code shipped this way in the same session
+the decision was made, but this spec.md note lagged behind it.
+
 **Phase 5 deviations:** the Phase 5 task list's "idempotent via content hash of
 (year,month,item,amount)" is implemented instead as **re-classification against live DB
 state**, no stored hash column: `classifyRow` (`lib/domain/csv.ts`) checks whether a

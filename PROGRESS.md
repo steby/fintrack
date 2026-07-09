@@ -2029,4 +2029,92 @@ carried forward as if it were still pending.
 Re-verified: unit 311/311 unchanged, integration 161/161 (up from 157 — the 4 new
 `auth.integration.test.ts` tests), lint/typecheck/format clean.
 
+**`/code-review` pass on the full cross-phase cleanup pass (extra-high effort,
+2026-07-09):** the first formal 10-angle review of this session's cleanup work (diffed
+against `fe05abf`, the last commit that had already gone through one). Strong
+cross-angle convergence on the most severe candidate — two angles independently
+proposed a data-loss bug in `entry-row.tsx`'s new date input — which made verification
+worth doing empirically rather than by reasoning alone, matching this project's
+established practice for subtle timing bugs.
+
+- _Refuted, empirically_ — the suspected bug: `entry-row.tsx`'s new `actualDate` input
+  shares one `<form>` and one `disabled={actualPending}` flag with `actualAmount`;
+  the theory was that submitting one field disables both, force-blurring whichever is
+  focused, triggering a second `requestSubmit()` whose `FormData` is missing the
+  now-disabled fields, which `updateActualAction` would then interpret as "clear both
+  fields." Verified by actually running it — a real `npm run dev` server plus a
+  throwaway Playwright script (deleted after use), instrumented to count Server Action
+  POSTs and snapshot focus/disabled state, run 4 times (3× Tab, 1× Enter). Exactly one
+  POST fired every time; the DB always held the correct values afterward. Root cause
+  of the refutation: React's `pending` update flushes synchronously (SyncLane) inside
+  the same discrete-event boundary that triggered it, before the browser's native Tab
+  action can move focus to the sibling field — so the sibling is never in a state where
+  it can be force-blurred. The same test did surface a real, much smaller side effect
+  (see below).
+- _Fixed_ — **the sidebar's Goals nav link was still hidden by `env.FEATURE_SAVINGS_GOALS`**,
+  unchanged from before this diff, even though this diff specifically made
+  `deleteGoalAction`/`goals/page.tsx` work with the flag off precisely so an owner
+  could clean up old data without re-enabling the feature. With the link hidden, that
+  page was unreachable except by a bookmarked URL — the fix this diff shipped had no
+  discoverable entry point. Fixed to always show the link (`app/(app)/layout.tsx`),
+  matching the exact precedent already established two lines below it for `/import`'s
+  kill-switch link.
+- _Fixed_ — **`spec.md`'s Phase 4 adversarial rule ("flag off ⇒ zero traces in UI and
+  actions rejected") was never updated** to note the new goals-delete exception, an
+  AGENTS.md process violation (confirmed against exact quoted text from both files).
+  Every other phase with a real deviation has a matching note in spec.md's deviation
+  log; Phase 4 didn't. Added one, in the same chronological position as the others.
+- _Fixed_ — `e2e/monthly.spec.ts`'s new `currentMonthActualDate` closure destructured
+  `[persisted]` and read `persisted.actualDate` with no check for a zero-row result.
+  Verified against Playwright's actual source (not assumed) that `expect.poll` does
+  NOT catch a throwing callback the way it catches a failing matcher — a zero-row
+  match would throw a raw, confusing `TypeError` on the first poll attempt instead of
+  a clear message. Added an explicit guard that throws a readable error naming the
+  item/year/month it failed to find.
+- _Fixed_ — `goals.integration.test.ts`'s two `vi.doMock('../../lib/env', ...)` /
+  `vi.doUnmock(...)` pairs (one pre-existing, one added earlier this session) had no
+  `try`/`finally` — a failing assertion between the two calls would leave the mocked,
+  nearly-empty env module active for every later test in the run, masking the real
+  failure behind confusing unrelated errors. Wrapped both in `try`/`finally`.
+- _Confirmed real but deferred, with reasoning_ — the `actualDate` field's move from a
+  controlled hidden input to an uncontrolled visible one carries a real (if narrow)
+  stale-value risk on concurrent multi-editor edits; out of scope per spec.md's own
+  stated "owner does all data entry" usage pattern and "concurrency stress
+  deliberately skipped" rigor tier. `goal-card.tsx`'s `isEditing` state not resetting
+  when `canEdit` flips false is real in isolated component logic but requires an
+  unreachable-in-practice mid-session redeploy, and the server-side gate still blocks
+  the actual write regardless — UI-cosmetic only. The E2E month-boundary race in the
+  same `currentMonthActualDate` closure is real but astronomically unlikely (~1 in
+  tens of thousands of runs) — not worth restructuring test timing over.
+  `requireConfigFlag`/`requireKillSwitch` returning the raw message string as their
+  "disabled" sentinel means a hypothetical empty-string message would silently bypass
+  the gate — not triggered by any of the 8 real call sites (all pass non-empty
+  literals), and CLAUDE.md's own rule is not to guard against scenarios that can't
+  happen. The empirical test above surfaced a genuine minor UX regression (Tab no
+  longer moves focus from `actualAmount` to `actualDate` — lands on `<body>` instead,
+  because the shared `disabled` flip forces a blur mid-transition) — real, but the
+  correct fix (per-field pending state instead of one shared flag) is a small design
+  decision, not a one-line patch; left for a dedicated pass rather than rushed here.
+- _Cleanup, noted not fixed_ — `app/actions/*.integration.test.ts` now has 9 files
+  independently defining near-identical `makeHouseholdWithUser`/`formData`/`cleanup`
+  helpers with no shared module — genuinely past this project's own "three similar
+  lines" extraction threshold (unlike the `reactedTo` idiom, which has been
+  repeatedly and deliberately left un-extracted for consistency reasons already
+  documented above). Flagged as the strongest extraction candidate for a future
+  dedicated pass. `accounts.ts`/`categories.ts`'s `requireConfigFlag` call sites read
+  more verbosely than their pre-diff one-line inline checks did — kept anyway, since
+  reverting just those 2 files would recreate the exact "N different gating shapes"
+  problem this pass just consolidated; the added verbosity is the accepted cost of one
+  consistent pattern everywhere. `goals/page.tsx` now runs an unconditional DB query
+  regardless of the flag — the accepted cost of the intended new delete-only-when-off
+  behavior, not a bug. `requireConfigFlag`/`requireKillSwitch` being two
+  differently-shaped functions (sync vs. async) rather than one fully unified flag API
+  is a real architectural point, consistent with this project's established pattern of
+  deferring big unification work rather than doing it opportunistically mid-pass.
+
+Re-verified end to end: lint/typecheck/format/build clean, unit 311/311 unchanged,
+integration 161/161 unchanged, E2E 36/36 under `CI=true` (production build, workers=1,
+retries=2 — the same conditions that caught the earlier `monthly.spec.ts` bug in this
+session, run again here as a matter of course before pushing).
+
 ---
