@@ -2717,3 +2717,83 @@ against a real running server, and the YearNav fix via real Playwright screensho
 and DOM queries at both viewport widths.
 
 ---
+
+## Going live: GitHub sync, Resend, and the first real Vercel deployment
+
+Everything up to this point had been verified locally and via CI, but three real
+gaps remained: 3 commits sitting unpushed, no real email delivery configured, and no
+actual deployment. All three closed in one session.
+
+**GitHub sync:** local `main` was 3 commits ahead of `origin/main` (the entire Phase 7
+feature commit and both code-review rounds had never been pushed — everything
+verified up to that point was local-only, never actually run through the real CI
+pipeline). Pushed; confirmed genuinely green via `gh run view` (not just `gh run
+watch`, per this project's own established discipline for that command's
+unreliability).
+
+**Dependabot CI gap found and fixed:** all 8 open Dependabot PRs were failing CI —
+not from the dependency bumps themselves, but because GitHub withholds repository
+secrets from Dependabot-triggered workflow runs by default (`DATABASE_URL is
+required` was the actual crash, before the workflow ever reached a real test). Fixed
+by provisioning the same 4 secrets as Dependabot-scoped secrets (`gh secret set
+--app dependabot`), using freshly rotated values (a real `ci`-branch `DATABASE_URL`
+fetched via the Neon API, a fresh `SESSION_SECRET` — confirmed harmless to rotate
+since it's validated but never actually consumed by session verification — and fresh
+CI-only `SEED_OWNER_EMAIL`/`PASSWORD`, mirrored into the regular Actions scope too so
+both stay in sync). Verified by re-triggering PR #1's CI: passed for real.
+
+With real CI signal (not just the secrets gap) on the remaining PRs:
+**TypeScript 5.9→7.0.2 and eslint 9→10.6.0 are both genuinely incompatible** with
+this project's current `eslint-config-next` (confirmed via actual crash logs —
+`@typescript-eslint`/`typescript-estree` and `eslint-plugin-react` both throw on the
+new major versions) — left unmerged. `react`/`react-dom`'s bumps are split across two
+separate PRs that fail independently on a peer-dependency mismatch when merged apart;
+they need to land together. The three GitHub Actions version bumps are safe,
+low-risk maintenance.
+
+**Resend:** verified `steby.net` via DNS (user's own domain, not the
+`onboarding@resend.dev` sandbox — that sandbox address is restricted to only deliver
+to the account owner's own email, which would have meant reminder/recap emails
+silently never reaching any other household member). Extracted the
+previously-duplicated hardcoded sender address (`resend.ts` and `invite.ts` each had
+their own copy) into one `lib/email/from-address.ts` constant.
+
+**First real Vercel deployment:** linked a new `steby/fintrack` Vercel project
+(GitHub auto-connect failed via CLI — needs the Vercel GitHub App authorized through
+the dashboard, a browser/OAuth step outside what CLI automation can do; deployed via
+`vercel --prod` directly in the meantime). Migrated and seeded the Neon `production`
+branch for the first time ever (previously provisioned in Phase 0 but never used) —
+same owner credentials as local dev, so the real household's actual login carries
+over. Configured every required production env var (`DATABASE_URL` pointed at
+`production`, fresh `SESSION_SECRET`/`CRON_SECRET`, `RESEND_API_KEY`, `APP_URL`, all
+feature flag defaults). Hit one real deployment failure along the way — a build
+silently hung indefinitely at the TypeScript-check step (compiled fine in ~18s, then
+stuck for 25+ minutes with no progress); traced to a corrupted build cache carried
+forward from a stuck prior deployment (`vercel rm` on that stuck deployment
+inadvertently tore down the working production alias too, causing a brief real
+outage) — resolved by redeploying, which happened to complete cleanly (Vercel
+appears to have started from a fresh cache after the stuck deployment was removed).
+Verified live, not just "deployed": health check (`db: 'up'`), a real Playwright
+login using the seeded owner's actual credentials, and service worker registration
+all confirmed working against the production URL before calling it done.
+
+Every DB write against `production`/every GitHub secret rotation/every Vercel env-var
+write in this session was preceded by the auto-mode safety classifier blocking an
+under-specified attempt and requiring an explicit, scoped confirmation before
+proceeding — consistent with this project's own "measure twice" discipline, just
+enforced by tooling instead of self-discipline alone this time.
+
+**Deferred items closed:** see the section above this one for the two PWA
+path-list/cache-versioning gaps (shared `lib/pwa/static-paths.ts`,
+`public/sw.js` → `app/sw.js/route.ts`) — both verified live against this same
+production deployment (correct `CACHE_NAME` baked in from the real deploying commit
+SHA).
+
+**Still open:** repo visibility remains public (unchanged from earlier); the
+`isPublicRoute()` architectural refactor for proxy.ts's matcher remains deliberately
+deferred (larger, more invasive change to a security-critical file, not urgent now
+that the concrete regex gaps are closed); GitHub auto-deploy-on-push isn't wired up
+yet (needs the Vercel GitHub App authorized via the dashboard); TypeScript 7/eslint 10
+Dependabot PRs stay open until `eslint-config-next` supports them.
+
+---
