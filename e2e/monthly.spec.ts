@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { test, expect } from '@playwright/test';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { createTestDb } from './test-db';
 import { requireEnv } from './env';
 import { recurringSchedule, monthlyEntries, users, categories } from '../lib/db/schema';
@@ -118,17 +118,35 @@ test.describe('monthly entries', () => {
     // yet — a toHaveValue check here would pass even if the submission never persisted
     // anything, unlike the amount case above, which waits on a value ('+$5.00') that
     // only appears once the server has actually responded.
+    //
+    // Scoped by year+month, not just item name: "Generate forecast" defaults to a
+    // 12-month-ahead window (lib/domain/recurring.ts's addMonths), so this recurring
+    // item has ~12 monthly_entries rows sharing the same item text, only one of which
+    // (the current month, matching currentMonthUrl()) is the row the UI just updated.
+    // An unscoped query non-deterministically grabbed one of the other 11 (still null)
+    // rows here — the exact bug class e2e/recurring.spec.ts's own DB assertion was
+    // fixed for during the Phase 2 hardening pass, reproduced this time by running
+    // with CI=true locally (production build, workers=1, retries=2) after this test
+    // passed twice in a row under the looser local dev-server/parallel config, which
+    // never surfaced the ambiguity.
+    const now = new Date();
+    const currentMonthActualDate = async () => {
+      const [persisted] = await testDb
+        .select({ actualDate: monthlyEntries.actualDate })
+        .from(monthlyEntries)
+        .where(
+          and(
+            eq(monthlyEntries.item, itemName),
+            eq(monthlyEntries.year, now.getFullYear()),
+            eq(monthlyEntries.month, now.getMonth() + 1),
+          ),
+        );
+      return persisted.actualDate;
+    };
+    await expect.poll(currentMonthActualDate).toBe(null);
     await row.locator('input[name="actualDate"]').fill('2026-01-15');
     await row.locator('input[name="actualDate"]').blur();
-    await expect
-      .poll(async () => {
-        const [persisted] = await testDb
-          .select({ actualDate: monthlyEntries.actualDate })
-          .from(monthlyEntries)
-          .where(eq(monthlyEntries.item, itemName));
-        return persisted.actualDate;
-      })
-      .toBe('2026-01-15');
+    await expect.poll(currentMonthActualDate).toBe('2026-01-15');
 
     // Override this month's budgeted amount — a Phase 2 addition beyond the reference
     // app, marking the row is_overridden so a later recurring-item propagate can't

@@ -1972,4 +1972,26 @@ proven against the real DB via `expect.poll`, not a client-side echo. History re
 independently verified via a full-history grep and a green CI run on the force-pushed
 commit (`gh run view`, not just the `push` command's own exit code).
 
+**Second real bug caught after push, before this was actually done — CI failed on the
+first attempt** (`gh run view`, not trusted from `gh run watch`'s own exit code, per
+this project's own established lesson): the `monthly.spec.ts` date-entry test's DB
+assertion queried `eq(monthlyEntries.item, itemName)` with no year/month scope.
+"Generate forecast" defaults to a 12-month-ahead window, so the recurring item created
+by this test has ~12 `monthly_entries` rows sharing the same item text; the query
+non-deterministically grabbed one of the 11 _other_ months' still-`null` rows instead
+of the current month's row the UI actually updated — the exact bug class
+`e2e/recurring.spec.ts`'s own DB assertion was fixed for during the Phase 2 hardening
+pass, reintroduced this time in a different file. It passed twice locally (once in
+isolation, once in the full suite) before this was caught, because the local dev
+config (`workers: undefined`, `retries: 0`, `next dev`) never happened to expose the
+ambiguity the way it did every single time under CI's config. Reproduced deterministically
+by running `CI=true npx playwright test` locally — production build via `next start`,
+`workers: 1`, `retries: 2` — matching the identical technique Phase 1's PROGRESS.md
+entry already documents for this exact class of pass-locally-fail-in-CI gap. Fixed by
+scoping the query to the current year+month (matching `currentMonthUrl()`), plus an
+added pre-fill poll asserting the scoped row starts at `null` (proving the query
+targets exactly one real row, not zero, before trusting the post-fill assertion means
+anything). Re-verified: full suite green under `CI=true` locally (36/36, no retries
+needed), then pushed and confirmed green on the actual CI run.
+
 ---
