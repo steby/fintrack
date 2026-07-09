@@ -22,3 +22,15 @@
 91399c76e0e49505d8ca02989b9dec8fdabd8f2e:lib/__adversarial_secret.ts:generic-api-key:4
 1118ec45abccfdd0e8e36d827171c96b11178df5:lib/__adversarial_secret.ts:generic-api-key:4
 6f7574f88d3e1e139b04f0e117882df2d6c7adf1:lib/__adversarial_secret.ts:generic-api-key:4
+
+# Phase 6: an English-phrase-like fake CRON_SECRET test fixture
+# ('test-cron-secret-with-enough-length-1234') in the three cron route integration
+# tests tripped generic-api-key on entropy. The very next commit
+# (95a5205fe645010db9c01d0c9a4458a4d880d768) fixed the CURRENT file content by
+# switching to a low-entropy repeated-character value instead — but gitleaks scans
+# full git history, not just HEAD, so the superseded commit below keeps re-triggering
+# on every scan regardless. Allowlisted by fingerprint rather than rewriting
+# already-pushed public history for a trivial test-fixture false positive.
+b30a605c09b3e6bf99a0f5ffb28320fc9bd57d73:app/api/cron/generate/route.integration.test.ts:generic-api-key:14
+b30a605c09b3e6bf99a0f5ffb28320fc9bd57d73:app/api/cron/recap/route.integration.test.ts:generic-api-key:10
+b30a605c09b3e6bf99a0f5ffb28320fc9bd57d73:app/api/cron/reminders/route.integration.test.ts:generic-api-key:16
