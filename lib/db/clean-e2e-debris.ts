@@ -1,6 +1,14 @@
 import 'dotenv/config';
-import { like } from 'drizzle-orm';
-import { bankAccounts, categories, monthlyEntries, recurringSchedule, users } from './schema';
+import { fileURLToPath } from 'node:url';
+import { and, eq, like, lt, ne } from 'drizzle-orm';
+import {
+  bankAccounts,
+  categories,
+  households,
+  monthlyEntries,
+  recurringSchedule,
+  users,
+} from './schema';
 
 // Cleans E2E test debris left behind when a run is killed mid-test. This CI workflow uses
 // `concurrency: cancel-in-progress: true`, so a rapid sequence of pushes — normal during
@@ -26,6 +34,56 @@ import { bankAccounts, categories, monthlyEntries, recurringSchedule, users } fr
 // ./schema and drizzle-orm are safe to import statically here (unlike ./index/../log
 // below) — schema.ts has no dependency on lib/env.ts, so importing it doesn't trigger
 // eager env validation.
+
+// Second pass, added for Phase 6: catches orphaned households from ANY test source
+// (not just E2E-prefixed rows) — integration tests each clean up their own household
+// at the end of their own `it()` block, but the same cancel-in-progress trigger
+// explained above can leave one behind before that cleanup runs. Every other query in
+// this codebase is household-scoped, so leaked orphans were invisible to correctness —
+// until Phase 6's cron routes (lib/db/queries.ts's getAllHouseholds) became the first
+// code to ever iterate literally every household in the DB, at which point months of
+// accumulated debris turned an invisible-but-harmless leak into real, observed test
+// timeouts (188 integration tests include ones that do real per-household transactional
+// work, e.g. api/cron/generate's route).
+//
+// Age-based rather than name/prefix-based: integration test files don't share one
+// naming convention the way E2E specs do (each file picks its own household labels),
+// so there's no single pattern to match. Every legitimate household from this workflow
+// is deleted within seconds of being created by its own test; anything older than an
+// hour is unambiguously orphaned, never a real in-flight test. The one household this
+// must never touch — the real seeded owner's, looked up by SEED_OWNER_EMAIL exactly
+// like lib/db/seed.ts does — is excluded explicitly, not just "hopefully old enough."
+const ORPHAN_HOUSEHOLD_AGE_MS = 60 * 60 * 1000;
+
+// Extracted from main() so it's testable against a real (local/dev) DB without going
+// through this file's hard CI-only guard or its dynamic ./index import — see
+// clean-e2e-debris.integration.test.ts. `now` is injectable for the same reason every
+// other "what does 'today' mean" function in this codebase takes one (lib/domain/
+// today.ts) — deterministic tests, no reliance on wall-clock timing.
+export async function cleanOrphanedHouseholds(
+  db: typeof import('./index').db,
+  seedOwnerEmail: string | undefined,
+  now: Date = new Date(),
+): Promise<{ orphanedHouseholds: number }> {
+  const [seedOwner] = seedOwnerEmail
+    ? await db
+        .select({ householdId: users.householdId })
+        .from(users)
+        .where(eq(users.email, seedOwnerEmail))
+    : [];
+
+  const cutoff = new Date(now.getTime() - ORPHAN_HOUSEHOLD_AGE_MS);
+  const orphanedHouseholds = await db
+    .delete(households)
+    .where(
+      seedOwner
+        ? and(lt(households.createdAt, cutoff), ne(households.id, seedOwner.householdId))
+        : lt(households.createdAt, cutoff),
+    )
+    .returning({ id: households.id });
+
+  return { orphanedHouseholds: orphanedHouseholds.length };
+}
 
 async function main() {
   if (process.env.CI !== 'true') {
@@ -75,6 +133,13 @@ async function main() {
     });
 
     logger.info(result, 'Cleaned stale E2E debris (idempotent).');
+
+    const orphanResult = await cleanOrphanedHouseholds(db, process.env.SEED_OWNER_EMAIL);
+    logger.info(
+      orphanResult,
+      'Cleaned orphaned (>1h old) households from any test source (idempotent).',
+    );
+
     await pool.end();
   } catch (err) {
     // The real logger is available here (the dynamic import above already succeeded), so
@@ -85,9 +150,20 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  // Only reachable for failures *before* the dynamic imports above succeed — i.e. the
-  // CI-only guard throw — since the real logger isn't available yet at that point.
-  console.error('E2E debris cleanup failed:', err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+// Only auto-runs when this file is the actual entry point (`tsx lib/db/clean-e2e-debris.ts`,
+// per package.json's db:clean-e2e-debris script) — NOT when it's imported for
+// cleanOrphanedHouseholds, as clean-e2e-debris.integration.test.ts now does. Without
+// this guard, importing this module for its one testable export would also trigger
+// this unconditional call, which throws on the CI-only check and calls
+// process.exit(1) — fine for a real CLI invocation, but it would kill the test
+// worker process for anything that merely imports this file. fileURLToPath, not a raw
+// string compare against import.meta.url, so this is correct on Windows (backslash
+// paths) as well as POSIX.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    // Only reachable for failures *before* the dynamic imports above succeed — i.e. the
+    // CI-only guard throw — since the real logger isn't available yet at that point.
+    console.error('E2E debris cleanup failed:', err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}
