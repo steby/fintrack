@@ -2,6 +2,7 @@ import 'server-only';
 import { Resend } from 'resend';
 import { env } from '../env';
 import { logger } from '../log';
+import { EMAIL_FROM } from './from-address';
 
 const SEND_TIMEOUT_MS = 5000;
 
@@ -22,7 +23,7 @@ export async function sendInviteEmail(email: string, acceptUrl: string): Promise
   try {
     await Promise.race([
       resend.emails.send({
-        from: 'FinTrack <onboarding@resend.dev>',
+        from: EMAIL_FROM,
         to: email,
         subject: "You've been invited to a FinTrack household",
         html: `<p>You've been invited to join a household on FinTrack.</p><p><a href="${acceptUrl}">Accept invite</a></p>`,

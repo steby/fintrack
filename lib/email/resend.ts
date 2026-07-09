@@ -2,6 +2,7 @@ import 'server-only';
 import { Resend } from 'resend';
 import { env } from '../env';
 import { logger } from '../log';
+import { EMAIL_FROM } from './from-address';
 
 const SEND_TIMEOUT_MS = 5000;
 const MAX_RETRIES = 2;
@@ -21,7 +22,7 @@ async function sendOnce(resend: Resend, input: SendEmailInput): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const result = await Promise.race([
-      resend.emails.send({ from: 'FinTrack <onboarding@resend.dev>', ...input }),
+      resend.emails.send({ from: EMAIL_FROM, ...input }),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new Error('Resend request timed out')), SEND_TIMEOUT_MS);
       }),
