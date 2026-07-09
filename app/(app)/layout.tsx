@@ -51,6 +51,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/settings/data" className="rounded-md px-2 py-1.5 hover:bg-muted">
             Data
           </Link>
+          <Link href="/settings/notifications" className="rounded-md px-2 py-1.5 hover:bg-muted">
+            Notifications
+          </Link>
           <Link href="/settings/account" className="rounded-md px-2 py-1.5 hover:bg-muted">
             Account
           </Link>

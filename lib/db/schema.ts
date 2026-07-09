@@ -24,6 +24,7 @@ export const roleEnum = pgEnum('role', ['owner', 'member', 'viewer']);
 export const directionEnum = pgEnum('direction', ['income', 'expense']);
 export const accountTypeEnum = pgEnum('account_type', ['bank', 'credit']);
 export const frequencyEnum = pgEnum('frequency', ['Monthly', 'Quarterly', 'Yearly']);
+export const emailTypeEnum = pgEnum('email_type', ['reminder', 'recap']);
 
 export const households = pgTable('households', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -43,6 +44,10 @@ export const users = pgTable(
     passwordHash: text('password_hash').notNull(),
     name: text('name').notNull(),
     role: roleEnum('role').notNull().default('member'),
+    // Phase 6: per-member opt-in for reminder/recap emails — off by default, so
+    // enabling the email_reminders/monthly_recap kill-switch for a household doesn't
+    // itself start emailing anyone who hasn't asked for it.
+    notifyByEmail: boolean('notify_by_email').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -240,3 +245,31 @@ export const goals = pgTable('goals', {
   targetDate: date('target_date'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Idempotency ledger for Phase 6's cron-triggered emails (spec.md: "cron double-fire
+// must not double-send"). One row per (household, type, period) that was actually
+// attempted — a cron route claims a slot by inserting here (ON CONFLICT DO NOTHING)
+// *before* sending, so two overlapping invocations for the same period can't both
+// send. `period` granularity differs by type: a UTC calendar date ("2026-07-09") for
+// reminders (at most one reminder digest per household per day), a year-month
+// ("2026-07") for recap (at most one per household per month) — free-form text rather
+// than a typed date/month column since the two shapes don't share a column type.
+export const emailLog = pgTable(
+  'email_log',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    householdId: uuid('household_id')
+      .notNull()
+      .references(() => households.id, { onDelete: 'cascade' }),
+    type: emailTypeEnum('type').notNull(),
+    period: text('period').notNull(),
+    sentAt: timestamp('sent_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('email_log_household_type_period_unique').on(
+      table.householdId,
+      table.type,
+      table.period,
+    ),
+  ],
+);

@@ -1,3 +1,5 @@
+import { utcDaysBetween } from './today';
+
 // Pure logic for Phase 4's category budgets and savings goals — spec.md's Ready
 // criteria calls out "budget of 0 vs null (unset ≠ zero cap)" and "goal with past
 // target_date" as edge cases; both are handled explicitly below rather than left to
@@ -61,7 +63,11 @@ export function computeGoalProgress(
   const isComplete = savedCents >= targetCents;
   const percentage = targetCents > 0 ? (savedCents / targetCents) * 100 : savedCents > 0 ? 100 : 0;
   const remainingCents = targetCents - savedCents;
-  const isOverdue = targetDate !== null && !isComplete && targetDate.getTime() < now.getTime();
+  // Day-granularity, not raw instant comparison (spec.md Phase 6 pre-decision — shared
+  // UTC "today" concept): a goal due today isn't overdue until tomorrow. The previous
+  // instant-based comparison had a real off-by-one here, flagging a goal overdue for
+  // however many hours were left in its own due date.
+  const isOverdue = targetDate !== null && !isComplete && utcDaysBetween(now, targetDate) < 0;
 
   let projectedCompletionDate: string | null = null;
   if (!isComplete && savedCents > 0) {

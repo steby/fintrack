@@ -1,10 +1,25 @@
-import { and, eq, lt } from 'drizzle-orm';
+import { and, eq, lt, or } from 'drizzle-orm';
 import { db } from './index';
-import { monthlyEntries, categories, bankAccounts, recurringSchedule } from './schema';
+import {
+  monthlyEntries,
+  categories,
+  bankAccounts,
+  recurringSchedule,
+  households,
+  users,
+  emailLog,
+} from './schema';
 import { parseAmountToCents } from '../money';
 import { bestEstimateCents, type DashboardEntryRow } from '../domain/dashboard';
 import type { NetWorthAccountInput } from '../domain/net-worth';
 import type { MatchCandidateEntry } from '../domain/csv';
+import type { UpcomingBillCandidate } from '../domain/reminders';
+import type { YearMonth } from '../domain/recurring';
+
+// Matches lib/flags.ts's KillSwitchKey pattern: a small, hand-written union rather than
+// derived from the pgEnum, since Drizzle doesn't export a ready-made TS type for enum
+// columns and this is only ever used at these two call sites.
+export type EmailType = 'reminder' | 'recap';
 
 // Dashboard row fetch (spec.md Phase 3) — one scoped query per year, left-joined for
 // category direction/name/color and bank account name. Deliberately fetches
@@ -291,4 +306,83 @@ export async function getNameLookup(householdId: string): Promise<NameLookup> {
   for (const row of accountRows) accountIdByName.set(row.name.trim().toLowerCase(), row.id);
 
   return { categoryIdByName, accountIdByName };
+}
+
+// Phase 6: cron routes have no user session, so they enumerate every household
+// themselves rather than being handed one via requireUser() — each cron route then
+// checks that household's own kill-switch (email_reminders/monthly_recap/auto_generate)
+// before doing anything with it.
+export async function getAllHouseholds(): Promise<{ id: string; name: string }[]> {
+  return db.select({ id: households.id, name: households.name }).from(households);
+}
+
+// Candidates for lib/domain/reminders.ts's selectUpcomingBills, spanning one or more
+// (year, month) buckets — the caller passes both the current month and next month so a
+// bill due in the first few days of next month is still visible within the 3-day
+// window even though it lives in a different monthly_entries row. OR-of-AND rather than
+// a single BETWEEN, since (year, month) pairs don't collapse into one orderable range
+// across a year boundary (e.g. Dec 2026 + Jan 2027) without extra arithmetic this avoids.
+export async function getUpcomingBillCandidates(
+  householdId: string,
+  buckets: YearMonth[],
+): Promise<UpcomingBillCandidate[]> {
+  if (buckets.length === 0) return [];
+
+  const rows = await db
+    .select({
+      id: monthlyEntries.id,
+      item: monthlyEntries.item,
+      year: monthlyEntries.year,
+      month: monthlyEntries.month,
+      actualDateDay: recurringSchedule.actualDateDay,
+      actualAmount: monthlyEntries.actualAmount,
+      budgetedAmount: monthlyEntries.budgetedAmount,
+    })
+    .from(monthlyEntries)
+    .innerJoin(recurringSchedule, eq(monthlyEntries.recurringScheduleId, recurringSchedule.id))
+    .where(
+      and(
+        eq(monthlyEntries.householdId, householdId),
+        or(
+          ...buckets.map((b) =>
+            and(eq(monthlyEntries.year, b.year), eq(monthlyEntries.month, b.month)),
+          ),
+        ),
+      ),
+    );
+
+  return rows;
+}
+
+// Household members who've opted in to reminder/recap emails (users.notifyByEmail —
+// off by default, spec.md Phase 6 UI: "recipient opt-in per member"). Any role can opt
+// in; this isn't an owner-only notification.
+export async function getEmailRecipients(
+  householdId: string,
+): Promise<{ id: string; email: string; name: string }[]> {
+  return db
+    .select({ id: users.id, email: users.email, name: users.name })
+    .from(users)
+    .where(and(eq(users.householdId, householdId), eq(users.notifyByEmail, true)));
+}
+
+// Idempotency claim for Phase 6's cron emails (spec.md: "cron double-fire must not
+// double-send"). Inserts a ledger row via ON CONFLICT DO NOTHING and reports whether
+// *this* call actually created it — the atomic part a SELECT-then-INSERT can't
+// guarantee under two overlapping cron invocations. Deliberately called BEFORE the
+// email is sent, not after: a slot claimed here that then fails to send (Resend down)
+// is not retried until the next scheduled period, matching spec.md's documented
+// failure mode ("retry w/ backoff, then log + degrade") rather than adding a second,
+// unbounded retry loop across cron runs.
+export async function claimEmailSlot(
+  householdId: string,
+  type: EmailType,
+  period: string,
+): Promise<boolean> {
+  const inserted = await db
+    .insert(emailLog)
+    .values({ householdId, type, period })
+    .onConflictDoNothing()
+    .returning({ id: emailLog.id });
+  return inserted.length > 0;
 }

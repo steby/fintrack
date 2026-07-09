@@ -65,6 +65,20 @@ describe('computeGoalProgress', () => {
     expect(result.isOverdue).toBe(false);
   });
 
+  it('does not flag a goal overdue on its own due date, even hours into the day (day-granularity, not instant)', () => {
+    const targetDate = new Date('2026-07-01T00:00:00Z');
+    const laterSameDay = new Date('2026-07-01T23:00:00Z');
+    const result = computeGoalProgress(50000, 100000, createdAt, targetDate, laterSameDay);
+    expect(result.isOverdue).toBe(false);
+  });
+
+  it('flags a goal overdue starting the day after its target date', () => {
+    const targetDate = new Date('2026-07-01T00:00:00Z');
+    const nextDay = new Date('2026-07-02T00:00:01Z');
+    const result = computeGoalProgress(50000, 100000, createdAt, targetDate, nextDay);
+    expect(result.isOverdue).toBe(true);
+  });
+
   it('never produces NaN/Infinity for a zero-target goal', () => {
     const result = computeGoalProgress(0, 0, createdAt, null, now);
     expect(Number.isFinite(result.percentage)).toBe(true);

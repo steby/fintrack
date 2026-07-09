@@ -2118,3 +2118,131 @@ retries=2 — the same conditions that caught the earlier `monthly.spec.ts` bug 
 session, run again here as a matter of course before pushing).
 
 ---
+
+## Phase 6 — Email + Cron (Resend, keys-optional)
+
+**What shipped** (file-level):
+
+- **Pre-decisions resolved in `spec.md`** before writing code: (a) the app stays
+  UTC-only — no household-timezone column — accepting up to ~16h SGT skew on
+  reminder/recap fire times as a documented Tier-2 limitation; (b) built and tested
+  entirely in keys-optional log-fallback mode (`RESEND_API_KEY` unset); (c) not yet
+  deployed to Vercel, so `vercel.json`'s cron schedule is built and documented but its
+  actual scheduled firing is unverified until a real deploy — cron routes are instead
+  verified via authenticated manual/integration requests.
+- **Shared "today" concept** (`lib/domain/today.ts`): `utcStartOfDay`/`utcDaysBetween`,
+  UTC-day-granularity, not raw instant comparison. Retrofitted into
+  `lib/domain/budgeting.ts`'s `computeGoalProgress` `isOverdue` check (previously
+  compared full timestamps — a goal was marked overdue for however many hours were left
+  in its own due date; now day-granular, closing the gap `spec.md`'s Phase 4 hardening
+  pass deliberately left open pending this exact decision).
+- **Pure logic**: `lib/domain/reminders.ts`'s `selectUpcomingBills` — due-in-≤3-days
+  selection with month-end day clamping (day 31 in a 30-day month, Feb in leap vs.
+  non-leap years), excludes already-paid entries and entries with no fixed due day,
+  sorted soonest-first.
+- **Model** (migration `0003_ordinary_molecule_man.sql`, expand-only): `users` gained
+  `notify_by_email` (boolean, default false — per-member opt-in); new `email_log` table
+  (`household_id`, `type` enum('reminder'|'recap'), `period` text, unique on all three)
+  as the cron dedup ledger.
+- **Trust boundary**: `lib/auth/cron.ts`'s `verifyCronRequest` — timing-safe
+  `Authorization: Bearer <CRON_SECRET>` check, fails closed if `CRON_SECRET` is unset.
+  Matches Vercel's own documented cron-auth convention (confirmed via Context7 against
+  Vercel's docs, not guessed).
+- **Data layer**: `lib/email/resend.ts`'s `sendEmail` — 5s timeout, 2 retries with
+  backoff, then logs and degrades (never throws); kept separate from Phase 1's
+  `lib/email/invite.ts` rather than unifying them — that file's own comment already
+  explains why a single attempt is enough for invites, and reminder/recap emails have no
+  human fallback if the first attempt fails, so they get real retries. `lib/email/
+templates.ts`'s `reminderEmailHtml`/`recapEmailHtml` build raw HTML with a shared
+  `escapeHtml` — every interpolated value (household name, item name) is escaped before
+  use. New `lib/db/queries.ts` functions: `getAllHouseholds`, `getUpcomingBillCandidates`
+  (spans a current+next-month bucket pair so a bill due early next month still falls in
+  the 3-day window), `getEmailRecipients` (opted-in members only), `claimEmailSlot`
+  (atomic `INSERT ... ON CONFLICT DO NOTHING` dedup claim, called _before_ sending).
+- **Cron routes**: `app/api/cron/{generate,reminders,recap}/route.ts`, each looping over
+  every household and checking that household's own kill-switch
+  (`auto_generate`/`email_reminders`/`monthly_recap`) before doing anything.
+  `generate` is a backstop for households that don't load `/monthly` regularly (that
+  page's own on-load hook already does the same 3-month rolling generate — this just
+  triggers it on a schedule too). `recap` fires on the 1st of the month, summarizing the
+  month that just closed. `vercel.json` schedules all three (off-round minutes,
+  generate → reminders → recap in sequence, all just after UTC midnight).
+- **UI**: `app/(app)/settings/notifications/` — kill-switch toggles (owner-only,
+  read-only badge for everyone else), a per-member self-service opt-in row (a member can
+  only flip their own, never another's — no `userId` field exists in that action's
+  input), and a "send test email" button (self-service, bypasses both kill-switches and
+  the dedup ledger — it's a deliverability check, not the real notification path).
+  `app/actions/notifications.ts`: `toggleEmailRemindersAction`/`toggleMonthlyRecapAction`
+  (owner-only via `requireRole('manage_settings')`, mirroring Phase 5's
+  `toggleCsvImportAction` precedent exactly rather than a new generic parameterized
+  action), `updateNotifyByEmailAction`/`sendTestEmailAction` (`requireUser`, self only).
+  Verified live against a real dev server (Playwright script, not just component
+  reasoning): logged in, toggled both switches, opted in, sent a test email, confirmed
+  persistence across reload.
+
+**Test/CI status**: Unit 344/344 (was 311), Integration 188/188 (was 161), E2E 38/38
+(was 36) under `CI=true` (production build, workers=1, retries=2). Coverage 98.18%
+stmts / 95.85% branch on `lib/**` (gate is 80%). Lint/typecheck/format/build clean.
+
+**Failure modes handled**: Resend down/timeout → retry with backoff, then log and
+degrade (never throws, never blocks the loop). Cron double-fire → dedup ledger makes the
+second call a no-op (integration-tested: exactly one `email_log` row after two calls).
+No upcoming bills / empty prior month → no email sent, but the period is still claimed
+(so the household isn't re-checked all day/month). No opted-in recipients → skipped.
+Missing/forged `CRON_SECRET` → 401, fails closed. **One household's failure never stops
+the rest of the loop** (see Real bugs below).
+
+**Key decisions and why**: UTC-only over a household-timezone column (see
+pre-decisions above) — simplicity over completeness, explicitly accepted as a Tier-2
+limitation rather than deferred silently. `sendTestEmailAction` deliberately bypasses
+kill-switches/dedup — it's a wiring check, not a real send. Two near-duplicate toggle
+actions instead of one generic `toggleFlag(flag)` action — matches this project's
+established "a little duplication over premature abstraction" convention, and
+`toggleCsvImportAction` (Phase 5) already set this exact precedent.
+
+**Real bugs found and fixed** (adversarial pass, one dispatched review agent covering
+cron trust boundary, dedup race safety, date/month arithmetic, HTML escaping,
+authorization, and money-parsing paths):
+
+- **[Fixed] Per-household errors could crash the entire `reminders`/`recap` cron run.**
+  Unlike `api/cron/generate` (which already wrapped its loop body in try/catch with an
+  explicit "one household's failure shouldn't stop the rest" comment), `reminders` and
+  `recap` had no such guard — a transient DB hiccup fetching one household's candidates/
+  recipients would throw uncaught, aborting the request and silently skipping every
+  household later in the iteration order for that day/month. Worse, since
+  `claimEmailSlot` runs _before_ the throw, that household's dedup slot stays claimed
+  with nothing sent — no retry until the next scheduled period. Fixed by wrapping each
+  household's processing in try/catch in both routes, matching `generate`'s existing
+  pattern exactly. New integration test (`route.integration.test.ts`): one household
+  configured to throw via a mocked `getUpcomingBillCandidates`, asserts the _other_
+  household in the same run still gets its email and the response is a clean 200, not a
+  crash.
+
+**Deferred / accepted, with reasoning**:
+
+- **Sequential per-household loop, no batching/pagination, no execution-time budget.**
+  Real for a large household count (Vercel function timeout, no resumption checkpoint),
+  but this app's own stated scope is single-family/household-scale (spec.md: "owner does
+  all data entry; family mostly views," Tier-2 "no formal load tests") — the same
+  tradeoff already accepted for `generate-entries.ts`'s on-load hook. Not worth adding
+  batching/pagination infrastructure for a scale this app was never meant to run at.
+- **`sendTestEmailAction` has no rate limit**, unlike login's DB-counter-based limiter.
+  Real risk is shared `RESEND_API_KEY` quota/cost exhaustion from a spammed button, but
+  it's authenticated-only (no anonymous attack surface), self-targeting only (not a
+  cross-user vector), and currently fully inert — no `RESEND_API_KEY` is configured yet,
+  so every "send" is a log line, not a real API call. Worth revisiting if/when a real key
+  is wired in for an actual deploy, not before.
+- **Recap's "empty month" skip excludes uncategorized/ad-hoc-only entries** (it reuses
+  `buildMonthlySeries`, which only sums rows with a resolved income/expense direction).
+  Flagged by the review as "needs verification" — checked against `lib/domain/
+dashboard.ts`'s own comment and confirmed this is the same convention already applied
+  everywhere else in the app since Phase 3 (summary bars, calendar view), not a new or
+  isolated Phase 6 gap. Left as-is for consistency.
+
+CI secrets note: `CRON_SECRET`/`RESEND_API_KEY` are still not configured as GitHub
+Actions secrets — not needed, since every cron integration test mocks `lib/env`
+directly (same `vi.doMock` pattern used throughout this codebase for flag-gated tests)
+rather than depending on real ambient env. They'll need to be added as real _Vercel_
+env vars at actual deploy time, not as CI secrets.
+
+---
