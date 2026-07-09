@@ -54,16 +54,12 @@ import {
 // must never touch — the real seeded owner's, looked up by SEED_OWNER_EMAIL exactly
 // like lib/db/seed.ts does — is excluded explicitly, not just "hopefully old enough."
 //
-// TEMPORARY (2026-07-10): lowered from 1 hour to 5 minutes for one remediation run —
-// exactly the "months of accumulated debris" scenario described above finally tipped
+// Briefly lowered to 5 minutes on 2026-07-10 for a one-time remediation run, after
+// months of accumulated debris (see the comment above) finally tipped
 // getAllHouseholds()-driven cron route tests (reminders/recap/generate) into hanging
-// for their full 15s test timeout on their very first real DB call, made worse by
-// several of my own rapid CI reruns tonight each adding more orphaned households
-// before this step ever got a chance to age them out. Safe to run at any threshold
-// here specifically because this step runs before this run's own tests start — there
-// is no in-flight data yet to accidentally catch, only leftovers from runs that
-// already finished. Revert to 60 * 60 * 1000 once a clean run confirms this worked.
-const ORPHAN_HOUSEHOLD_AGE_MS = 5 * 60 * 1000;
+// for their full 15s test timeout — confirmed fixed by a subsequent clean CI run, then
+// reverted back to the original 1-hour threshold here.
+const ORPHAN_HOUSEHOLD_AGE_MS = 60 * 60 * 1000;
 
 // Extracted from main() so it's testable against a real (local/dev) DB without going
 // through this file's hard CI-only guard or its dynamic ./index import — see

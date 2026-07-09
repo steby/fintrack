@@ -17,9 +17,7 @@ import { cleanOrphanedHouseholds } from './clean-e2e-debris';
 // old `createdAt`) can ever be candidates for deletion. Getting this wrong would delete
 // real local dev data, not just test debris — worth the extra care.
 const NOW = new Date('2020-01-01T00:00:00Z');
-// Paired with clean-e2e-debris.ts's TEMPORARY (2026-07-10) threshold — revert both
-// together once a clean CI run confirms the one-time remediation worked.
-const ONE_HOUR_MS = 5 * 60 * 1000;
+const ONE_HOUR_MS = 60 * 60 * 1000;
 
 async function makeHousehold(label: string, createdAt: Date) {
   const [household] = await db.insert(households).values({ name: label, createdAt }).returning();
