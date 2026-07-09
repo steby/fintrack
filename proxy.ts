@@ -91,31 +91,29 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // manifest.webmanifest/icon/apple-icon/icons/sw.js (Phase 7 PWA assets) are static
-  // and deploy-scoped, not user-scoped — a browser fetches the manifest and icons for
-  // an install prompt, and registers sw.js, before any login happens (most visibly on
-  // /login itself), so they must never redirect for lack of a session, same as the
-  // pre-existing static/health exclusions below.
-  //
-  // `icon$`/`apple-icon$`/`sw.js$` are anchored to the end of the path (not bare
-  // substrings) and `icons/` requires the trailing slash — a bare `icon`/`apple-icon`
-  // alternative would also match any FUTURE route merely starting with those letters
-  // (e.g. a hypothetical `/icon-editor`) and silently exempt it from the session check
-  // entirely, the exact class of gap this file's own comment above warns about.
-  //
-  // A code-review pass caught the same class of gap still open on the entries this
-  // anchoring didn't originally touch: `favicon.ico`/`manifest.webmanifest`/`sw.js`
-  // had unescaped literal dots (`.` matches ANY character in regex, so e.g. `/swXjs`
-  // or `/faviconXico` also silently bypassed the session check), and `api/health` was
-  // never anchored at all (so `/api/health-check` did too) — verified by compiling
-  // and testing the actual matcher regex, not just reading it. `_next/static`/
+  // manifest.webmanifest/icon/apple-icon/icons/sw.js/favicon.ico (see
+  // lib/pwa/static-paths.ts) are static and deploy-scoped, not user-scoped — a
+  // browser fetches the manifest and icons for an install prompt, and registers
+  // sw.js, before any login happens (most visibly on /login itself), so they must
+  // never redirect for lack of a session, same as the pre-existing static/health
+  // exclusions below. api/health$ is anchored for the same reason (a hypothetical
+  // `/api/health-check` shouldn't silently bypass auth either). `_next/static`/
   // `_next/image` are deliberately left as unanchored prefixes: Next reserves the
   // entire `_next/*` namespace for itself, so no app route can ever collide there.
   //
-  // This same set of paths is ALSO hardcoded in public/sw.js's isCacheableStatic() —
-  // kept in sync by hand (see that file's comment for why the two can't share a
-  // literal module). Adding a new static PWA route means updating both lists.
+  // MUST be a literal string, not a computed value: Next.js statically parses
+  // `config.matcher` at build time (AST analysis, not execution) — a real build
+  // confirmed a computed expression here is rejected outright ("Entry matcher[0]
+  // need to be static strings"). The PWA-specific alternatives below
+  // (`icon$|icons/|apple-icon$|sw\.js$|favicon\.ico$|manifest\.webmanifest$`) are
+  // NOT hand-typed from scratch — they're the tested, byte-for-byte output of
+  // lib/pwa/static-paths.ts's buildPwaMatcherAlternatives(), which is what
+  // app/sw.js/route.ts's cacheable-path check imports directly (a Route Handler's
+  // body has no such static-parsing restriction). lib/pwa/static-paths.test.ts
+  // asserts buildPwaMatcherAlternatives()'s output still equals what's hardcoded
+  // here — if you change STATIC_PWA_EXACT_PATHS/STATIC_PWA_PREFIX_PATHS, that test
+  // fails until this literal is updated to match, so the two can't silently drift.
   matcher: [
-    '/((?!_next/static|_next/image|favicon\\.ico$|api/health$|manifest\\.webmanifest$|icon$|icons/|apple-icon$|sw\\.js$).*)',
+    '/((?!_next/static|_next/image|api/health$|icon$|apple-icon$|favicon\\.ico$|manifest\\.webmanifest$|sw\\.js$|icons/).*)',
   ],
 };
