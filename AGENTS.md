@@ -12,9 +12,11 @@ here, read in order:
 3. [`PROGRESS.md`](./PROGRESS.md) — the living log. Read the last entry to see which phase is
    current and what's already shipped before starting new work.
 
-Reference project (read-only, for porting behavior — do not modify): `../FinanceTracker`, the
-original single-user SvelteKit app this rebuild is functionally cloning and expanding. Keep it
-around at least through Phase 5 (CSV export fix references its broken query).
+Reference project: `../FinanceTracker`, the original single-user SvelteKit app this rebuild
+functionally cloned and expanded, was kept read-only alongside this repo through Phase 5 (CSV
+export fix referenced its broken query). All phases (0–7) are now complete and the app is
+deployed to production — the reference project has been removed from the workspace and is no
+longer needed.
 
 Rigor Tier: **2** (Core + Hardened, pragmatic — see `spec.md` for the exact scope of what's
 hardened vs. deliberately skipped).

@@ -2817,7 +2817,7 @@ pools across hot reloads instead of leaking a new one per edit). Every
 `*.integration.test.ts` file also had its own `afterAll(() => pool.end())`, written as
 if closing "its own" pool. With `fileParallelism: false` (integration tests share one
 real Postgres branch, run serially, not in parallel), whichever file happened to finish
-first closed the *shared* globalThis-cached pool — poisoning it for every file
+first closed the _shared_ globalThis-cached pool — poisoning it for every file
 scheduled to run afterward in that same run. `app/actions/*` sorts before
 `app/api/cron/*` alphabetically, so by the time the cron route tests ran, an earlier
 file's `afterAll` had already ended the pool they were about to inherit. This is the
@@ -2825,7 +2825,7 @@ exact bug class `e2e/test-db.ts`'s own comment already documents as fixed once b
 for Playwright specs under CI's `workers: 1` — the same anti-pattern had re-appeared,
 independently, on the integration-test side, most likely newly exposed by Phase 6/7
 adding cron test files that land late in file-execution order (earlier, smaller
-integration suites likely never had a file scheduled to run *after* whichever file
+integration suites likely never had a file scheduled to run _after_ whichever file
 happened to close the pool first).
 
 **Fix:** removed the per-file `afterAll(() => pool.end())` (and the now-unused `pool`
@@ -2844,7 +2844,7 @@ needed. Also reran full local lint, `tsc --noEmit`, unit tests+coverage (353/353
 
 Also re-confirms the earlier resource-contention theory was a real, separate
 phenomenon too (documented in the cross-phase cleanup pass above) — just not what
-caused *this* failure. Both can be true: CI push cadence can still leave orphaned
+caused _this_ failure. Both can be true: CI push cadence can still leave orphaned
 `ci`-branch households (that's what `db:clean-e2e-debris` exists for), independently of
 this pool-lifecycle bug.
 
