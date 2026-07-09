@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 import { eq, and, inArray } from 'drizzle-orm';
 import { createTestDb } from './test-db';
 import { requireEnv } from './env';
+import { login } from './login';
 import {
   categories,
   bankAccounts,
@@ -16,14 +17,6 @@ const OWNER_EMAIL = requireEnv('SEED_OWNER_EMAIL');
 const OWNER_PASSWORD = requireEnv('SEED_OWNER_PASSWORD');
 
 const { db: testDb, close: closeTestDb } = createTestDb();
-
-async function login(page: import('@playwright/test').Page, email: string, password: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(password);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL('/');
-}
 
 // Fixed, far-future year/month — deterministic, and won't collide with real seeded
 // data or any auto-generated forecast rows tied to the actual current month.

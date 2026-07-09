@@ -39,19 +39,11 @@ export async function GET(request: Request) {
   for (const household of allHouseholds) {
     // One household's failure (a transient DB hiccup fetching candidates/recipients,
     // say) must not abort every OTHER household still left in this loop — matches
-    // api/cron/generate's same try/catch. Without this, a single bad household could
-    // silently skip everyone after it for the rest of the day, and — worse — leave that
-    // household's ledger slot claimed with nothing actually sent (claimEmailSlot runs
-    // first; see its own comment), so it's not even retried until tomorrow.
+    // api/cron/generate's same try/catch. A failure here happens before claimEmailSlot
+    // is ever reached (see its call site below), so it's naturally retried on the next
+    // scheduled invocation — nothing is left stuck in a stale "claimed" state.
     try {
       if (!(await isEnabled(household.id, 'email_reminders'))) continue;
-
-      // Claimed BEFORE fetching/sending (see lib/db/queries.ts's claimEmailSlot comment
-      // for why a failed send afterward isn't retried until the next scheduled period).
-      if (!(await claimEmailSlot(household.id, 'reminder', period))) {
-        alreadyClaimed++;
-        continue;
-      }
 
       const candidates = await getUpcomingBillCandidates(household.id, buckets);
       const bills = selectUpcomingBills(candidates, today);
@@ -63,6 +55,19 @@ export async function GET(request: Request) {
       const recipients = await getEmailRecipients(household.id);
       if (recipients.length === 0) {
         skippedNoRecipients++;
+        continue;
+      }
+
+      // Claimed only once we know there's actually something to send — not earlier.
+      // Recipients (a live opt-in toggle, unlike bills) can change within the same
+      // day: claiming before this check would let a household with zero recipients at
+      // claim-time permanently forfeit that day's reminder even if someone opts in
+      // before a genuine cron double-fire. This still gives the same double-send
+      // protection (the atomic claim right before send prevents two concurrent
+      // invocations that both found bills+recipients from both sending), it just no
+      // longer locks in a "nothing to do" state as if it were "already handled."
+      if (!(await claimEmailSlot(household.id, 'reminder', period))) {
+        alreadyClaimed++;
         continue;
       }
 

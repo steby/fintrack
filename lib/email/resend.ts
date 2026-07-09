@@ -17,13 +17,28 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function sendOnce(resend: Resend, input: SendEmailInput): Promise<unknown> {
-  return Promise.race([
-    resend.emails.send({ from: 'FinTrack <onboarding@resend.dev>', ...input }),
-    new Promise((_resolve, reject) =>
-      setTimeout(() => reject(new Error('Resend request timed out')), SEND_TIMEOUT_MS),
-    ),
-  ]);
+async function sendOnce(resend: Resend, input: SendEmailInput): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      resend.emails.send({ from: 'FinTrack <onboarding@resend.dev>', ...input }),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('Resend request timed out')), SEND_TIMEOUT_MS);
+      }),
+    ]);
+    // The Resend SDK resolves — never rejects — on API-level failures (bad/restricted
+    // key, rate limit, quota exceeded, validation error): it returns
+    // { data: null, error: {...} } instead of throwing. Without this check, a real
+    // failure here would look identical to a success to every caller below.
+    if (result.error) {
+      throw new Error(`Resend API error (${result.error.name}): ${result.error.message}`);
+    }
+  } finally {
+    // Clears the pending timeout when the real send settles first, so it doesn't fire
+    // ~SEND_TIMEOUT_MS later as a dangling, harmless-but-wasted timer. A no-op if the
+    // timeout already fired (that's why we're in the catch path in the first place).
+    clearTimeout(timer);
+  }
 }
 
 // Shared low-level sender for Phase 6's reminder/recap emails — 5s timeout + 2 retries

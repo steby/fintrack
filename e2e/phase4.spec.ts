@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 import { eq, inArray } from 'drizzle-orm';
 import { createTestDb } from './test-db';
 import { requireEnv } from './env';
+import { login } from './login';
 import { categories, bankAccounts, goals, users } from '../lib/db/schema';
 
 const OWNER_EMAIL = requireEnv('SEED_OWNER_EMAIL');
@@ -11,14 +12,6 @@ const VIEWER_EMAIL = 'e2e-phase4-viewer@example.com';
 const VIEWER_PASSWORD = 'viewer-password-123';
 
 const { db: testDb, close: closeTestDb } = createTestDb();
-
-async function login(page: import('@playwright/test').Page, email: string, password: string) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(password);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL('/');
-}
 
 test.describe('Phase 4: category budgets, goals, net worth', () => {
   test.describe.configure({ mode: 'serial' });

@@ -1,22 +1,17 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { eq, and } from 'drizzle-orm';
 import { db, pool } from '../../../../lib/db';
-import {
-  households,
-  users,
-  categories,
-  recurringSchedule,
-  monthlyEntries,
-  emailLog,
-} from '../../../../lib/db/schema';
+import { categories, recurringSchedule, monthlyEntries, emailLog } from '../../../../lib/db/schema';
 import { setFlag } from '../../../../lib/flags';
+import {
+  CRON_SECRET,
+  makeHousehold,
+  makeRecipient,
+  cleanupHousehold,
+  mockCronEnv,
+} from '../test-helpers';
 
 vi.mock('server-only', () => ({}));
-
-// Low-entropy repeated-character value, not an English-phrase-like string — matches
-// lib/auth/cron.test.ts's convention, deliberately chosen so gitleaks' generic-api-key
-// entropy heuristic doesn't flag an obviously-fake test fixture as a real secret.
-const CRON_SECRET = 'a'.repeat(40);
 
 afterAll(async () => {
   await pool.end();
@@ -27,26 +22,6 @@ afterEach(() => {
   vi.doUnmock('../../../../lib/db/queries');
   vi.resetModules();
 });
-
-async function makeHousehold(label: string) {
-  const [household] = await db.insert(households).values({ name: label }).returning();
-  return household;
-}
-
-async function makeRecipient(householdId: string, label: string) {
-  const [user] = await db
-    .insert(users)
-    .values({
-      householdId,
-      email: `${label.replace(/\s+/g, '-')}-${Date.now()}-${Math.random()}@example.com`,
-      passwordHash: 'x',
-      name: label,
-      role: 'member',
-      notifyByEmail: true,
-    })
-    .returning();
-  return user;
-}
 
 async function makeUnpaidBill(householdId: string, item: string, actualDateDay: number) {
   const now = new Date();
@@ -76,27 +51,17 @@ async function makeUnpaidBill(householdId: string, item: string, actualDateDay: 
   });
 }
 
-async function cleanup(householdId: string) {
-  await db.delete(households).where(eq(households.id, householdId));
-}
-
-async function loadRouteWithMockedEnv(overrides: Record<string, unknown> = {}) {
-  vi.doMock('../../../../lib/env', () => ({
-    env: { CRON_SECRET, RESEND_API_KEY: undefined, ...overrides },
-  }));
-  vi.resetModules();
-  return import('./route');
-}
-
 describe('GET /api/cron/reminders', () => {
   it('rejects a request with no authorization header (401)', async () => {
-    const { GET } = await loadRouteWithMockedEnv();
+    mockCronEnv();
+    const { GET } = await import('./route');
     const response = await GET(new Request('http://localhost/api/cron/reminders'));
     expect(response.status).toBe(401);
   });
 
   it('rejects a request with a forged secret (401)', async () => {
-    const { GET } = await loadRouteWithMockedEnv();
+    mockCronEnv();
+    const { GET } = await import('./route');
     const response = await GET(
       new Request('http://localhost/api/cron/reminders', {
         headers: { authorization: 'Bearer forged-secret' },
@@ -110,7 +75,8 @@ describe('GET /api/cron/reminders', () => {
     await makeUnpaidBill(household.id, 'Rent', new Date().getUTCDate());
     await makeRecipient(household.id, 'Owner');
 
-    const { GET } = await loadRouteWithMockedEnv();
+    mockCronEnv();
+    const { GET } = await import('./route');
     const response = await GET(
       new Request('http://localhost/api/cron/reminders', {
         headers: { authorization: `Bearer ${CRON_SECRET}` },
@@ -123,7 +89,7 @@ describe('GET /api/cron/reminders', () => {
     const logged = await db.select().from(emailLog).where(eq(emailLog.householdId, household.id));
     expect(logged).toHaveLength(0);
 
-    await cleanup(household.id);
+    await cleanupHousehold(household.id);
   });
 
   it('sends a reminder digest for a bill due within the window, when enabled and opted in', async () => {
@@ -132,7 +98,8 @@ describe('GET /api/cron/reminders', () => {
     await makeUnpaidBill(household.id, 'Rent', new Date().getUTCDate());
     await makeRecipient(household.id, 'Owner');
 
-    const { GET } = await loadRouteWithMockedEnv();
+    mockCronEnv();
+    const { GET } = await import('./route');
     const response = await GET(
       new Request('http://localhost/api/cron/reminders', {
         headers: { authorization: `Bearer ${CRON_SECRET}` },
@@ -146,15 +113,16 @@ describe('GET /api/cron/reminders', () => {
     expect(logged).toHaveLength(1);
     expect(logged[0].type).toBe('reminder');
 
-    await cleanup(household.id);
+    await cleanupHousehold(household.id);
   });
 
-  it('does not send when there are no upcoming bills, but still claims the day (no empty email)', async () => {
+  it('does not send, and does not claim the day, when there are no upcoming bills (no empty email)', async () => {
     const household = await makeHousehold('Reminders no bills A');
     await setFlag(household.id, 'email_reminders', true);
     await makeRecipient(household.id, 'Owner');
 
-    const { GET } = await loadRouteWithMockedEnv();
+    mockCronEnv();
+    const { GET } = await import('./route');
     const response = await GET(
       new Request('http://localhost/api/cron/reminders', {
         headers: { authorization: `Bearer ${CRON_SECRET}` },
@@ -162,12 +130,14 @@ describe('GET /api/cron/reminders', () => {
     );
     const body = await response.json();
     expect(body.sent).toBe(0);
-    expect(body.skippedNoBills).toBe(1);
+    expect(body.skippedNoBills).toBeGreaterThanOrEqual(1);
 
+    // Not claimed — a bill could show up later the same day (e.g. an ad-hoc entry),
+    // and there's no reason to permanently forfeit the day when nothing was sent yet.
     const logged = await db.select().from(emailLog).where(eq(emailLog.householdId, household.id));
-    expect(logged).toHaveLength(1); // claimed even though nothing was sent
+    expect(logged).toHaveLength(0);
 
-    await cleanup(household.id);
+    await cleanupHousehold(household.id);
   });
 
   it('does not send when no member has opted in', async () => {
@@ -175,7 +145,8 @@ describe('GET /api/cron/reminders', () => {
     await setFlag(household.id, 'email_reminders', true);
     await makeUnpaidBill(household.id, 'Rent', new Date().getUTCDate());
 
-    const { GET } = await loadRouteWithMockedEnv();
+    mockCronEnv();
+    const { GET } = await import('./route');
     const response = await GET(
       new Request('http://localhost/api/cron/reminders', {
         headers: { authorization: `Bearer ${CRON_SECRET}` },
@@ -183,9 +154,39 @@ describe('GET /api/cron/reminders', () => {
     );
     const body = await response.json();
     expect(body.sent).toBe(0);
-    expect(body.skippedNoRecipients).toBe(1);
+    expect(body.skippedNoRecipients).toBeGreaterThanOrEqual(1);
 
-    await cleanup(household.id);
+    // Not claimed — see the "opts in after an earlier empty check" test below for why
+    // this matters: a member could opt in before a later legitimate invocation.
+    const logged = await db.select().from(emailLog).where(eq(emailLog.householdId, household.id));
+    expect(logged).toHaveLength(0);
+
+    await cleanupHousehold(household.id);
+  });
+
+  it('sends once a member opts in, even after an earlier call found no recipients for the same day', async () => {
+    const household = await makeHousehold('Reminders late opt-in A');
+    await setFlag(household.id, 'email_reminders', true);
+    await makeUnpaidBill(household.id, 'Rent', new Date().getUTCDate());
+
+    mockCronEnv();
+    const { GET } = await import('./route');
+    const request = () =>
+      new Request('http://localhost/api/cron/reminders', {
+        headers: { authorization: `Bearer ${CRON_SECRET}` },
+      });
+
+    const first = await (await GET(request())).json();
+    expect(first.sent).toBe(0);
+    expect(first.skippedNoRecipients).toBeGreaterThanOrEqual(1);
+
+    // A member opts in after the first (empty) check for the same UTC day.
+    await makeRecipient(household.id, 'Owner');
+
+    const second = await (await GET(request())).json();
+    expect(second.sent).toBe(1); // not stuck behind a stale claim from the first call
+
+    await cleanupHousehold(household.id);
   });
 
   it('is idempotent: a second call the same UTC day does not double-send (dedup ledger)', async () => {
@@ -194,7 +195,8 @@ describe('GET /api/cron/reminders', () => {
     await makeUnpaidBill(household.id, 'Rent', new Date().getUTCDate());
     await makeRecipient(household.id, 'Owner');
 
-    const { GET } = await loadRouteWithMockedEnv();
+    mockCronEnv();
+    const { GET } = await import('./route');
     const request = () =>
       new Request('http://localhost/api/cron/reminders', {
         headers: { authorization: `Bearer ${CRON_SECRET}` },
@@ -213,7 +215,7 @@ describe('GET /api/cron/reminders', () => {
       .where(and(eq(emailLog.householdId, household.id), eq(emailLog.type, 'reminder')));
     expect(logged).toHaveLength(1); // exactly one row, not two
 
-    await cleanup(household.id);
+    await cleanupHousehold(household.id);
   });
 
   it('one household throwing (e.g. a transient DB error) does not stop other households from being processed', async () => {
@@ -227,9 +229,7 @@ describe('GET /api/cron/reminders', () => {
     await makeUnpaidBill(healthy.id, 'Rent', new Date().getUTCDate());
     await makeRecipient(healthy.id, 'Owner');
 
-    vi.doMock('../../../../lib/env', () => ({
-      env: { CRON_SECRET, RESEND_API_KEY: undefined },
-    }));
+    mockCronEnv();
     vi.doMock('../../../../lib/db/queries', async (importOriginal) => {
       const actual = await importOriginal<typeof import('../../../../lib/db/queries')>();
       return {
@@ -256,7 +256,7 @@ describe('GET /api/cron/reminders', () => {
     expect(response.status).toBe(200); // one household's throw never 500s the whole request
     expect(body.sent).toBe(1); // the healthy household still got its email
 
-    await cleanup(failing.id);
-    await cleanup(healthy.id);
+    await cleanupHousehold(failing.id);
+    await cleanupHousehold(healthy.id);
   });
 });

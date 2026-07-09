@@ -17,16 +17,25 @@ export async function GET(request: Request) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // Computed once, outside the loop — every household gets the same generation window
+  // for this invocation, matching reminders/recap's "one shared today" pattern. Inside
+  // the loop, a slow run straddling a UTC day/month rollover could give later
+  // households a different window than earlier ones.
+  const now = new Date();
+  const from = { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
+
   const allHouseholds = await getAllHouseholds();
   let processed = 0;
   let insertedTotal = 0;
 
   for (const household of allHouseholds) {
-    if (!(await isEnabled(household.id, 'auto_generate'))) continue;
-
-    const now = new Date();
-    const from = { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
+    // The whole per-household body — including the flag check, not just
+    // generateEntriesForRange — is inside the guard: a transient failure in
+    // isEnabled() (e.g. a DB hiccup reading household_settings) must not abort every
+    // household still left in the loop, matching reminders/recap's identical guard.
     try {
+      if (!(await isEnabled(household.id, 'auto_generate'))) continue;
+
       insertedTotal += await generateEntriesForRange(household.id, from, addMonths(from, 2));
       processed++;
     } catch (err) {

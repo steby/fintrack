@@ -1,21 +1,14 @@
 import 'dotenv/config';
 import { test, expect } from '@playwright/test';
 import { requireEnv } from './env';
+import { login } from './login';
 
 const OWNER_EMAIL = requireEnv('SEED_OWNER_EMAIL');
 const OWNER_PASSWORD = requireEnv('SEED_OWNER_PASSWORD');
 
-async function login(page: import('@playwright/test').Page) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(OWNER_EMAIL);
-  await page.getByLabel('Password').fill(OWNER_PASSWORD);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL('/');
-}
-
 test.describe('dashboard', () => {
   test('a seeded year renders every widget without crashing', async ({ page }) => {
-    await login(page);
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     await expect(page.getByText(/Household overview for \d{4}/)).toBeVisible();
     // "Income"/"Expense" legitimately appear twice (stat tiles + the YoY card below) —
@@ -33,7 +26,7 @@ test.describe('dashboard', () => {
   });
 
   test('an empty year (no entries) renders empty states, not a crash', async ({ page }) => {
-    await login(page);
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
     await page.goto('/?year=2099');
 
     await expect(page.getByText('Household overview for 2099')).toBeVisible();
@@ -50,7 +43,7 @@ test.describe('dashboard', () => {
   });
 
   test('an out-of-range year param is clamped instead of crashing', async ({ page }) => {
-    await login(page);
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
     const expectedText = `Household overview for ${new Date().getFullYear()}`;
 
     await page.goto('/?year=99999');
@@ -63,7 +56,7 @@ test.describe('dashboard', () => {
   test('year picker navigates and the sidebar year links jump to the dashboard', async ({
     page,
   }) => {
-    await login(page);
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
     const currentYear = new Date().getFullYear();
 
     await page.getByTestId('year-picker-prev').click();
@@ -77,7 +70,7 @@ test.describe('dashboard', () => {
   });
 
   test('theme toggle switches and persists across reload', async ({ page }) => {
-    await login(page);
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     const html = page.locator('html');
     const initiallyDark = await html.evaluate((el) => el.classList.contains('dark'));

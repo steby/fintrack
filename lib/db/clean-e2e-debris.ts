@@ -64,25 +64,37 @@ export async function cleanOrphanedHouseholds(
   db: typeof import('./index').db,
   seedOwnerEmail: string | undefined,
   now: Date = new Date(),
-): Promise<{ orphanedHouseholds: number }> {
-  const [seedOwner] = seedOwnerEmail
-    ? await db
-        .select({ householdId: users.householdId })
-        .from(users)
-        .where(eq(users.email, seedOwnerEmail))
-    : [];
+): Promise<{ orphanedHouseholds: number; skippedUnverifiedSeedOwner: boolean }> {
+  let seedOwnerHouseholdId: string | undefined;
+  if (seedOwnerEmail) {
+    const [seedOwner] = await db
+      .select({ householdId: users.householdId })
+      .from(users)
+      .where(eq(users.email, seedOwnerEmail));
+    if (!seedOwner) {
+      // Fail CLOSED, not open: a configured SEED_OWNER_EMAIL that doesn't resolve to a
+      // real row (a rotated secret, or the very first run against a fresh DB) means we
+      // can't verify which household to protect — skip the whole sweep rather than
+      // deleting everything unprotected. Self-heals within one run: the "Seed
+      // database" CI step immediately after this one creates/confirms the owner under
+      // whatever email is currently configured, so the next run's lookup succeeds and
+      // normal cleanup resumes on its own.
+      return { orphanedHouseholds: 0, skippedUnverifiedSeedOwner: true };
+    }
+    seedOwnerHouseholdId = seedOwner.householdId;
+  }
 
   const cutoff = new Date(now.getTime() - ORPHAN_HOUSEHOLD_AGE_MS);
   const orphanedHouseholds = await db
     .delete(households)
     .where(
-      seedOwner
-        ? and(lt(households.createdAt, cutoff), ne(households.id, seedOwner.householdId))
+      seedOwnerHouseholdId
+        ? and(lt(households.createdAt, cutoff), ne(households.id, seedOwnerHouseholdId))
         : lt(households.createdAt, cutoff),
     )
     .returning({ id: households.id });
 
-  return { orphanedHouseholds: orphanedHouseholds.length };
+  return { orphanedHouseholds: orphanedHouseholds.length, skippedUnverifiedSeedOwner: false };
 }
 
 async function main() {
@@ -135,10 +147,19 @@ async function main() {
     logger.info(result, 'Cleaned stale E2E debris (idempotent).');
 
     const orphanResult = await cleanOrphanedHouseholds(db, process.env.SEED_OWNER_EMAIL);
-    logger.info(
-      orphanResult,
-      'Cleaned orphaned (>1h old) households from any test source (idempotent).',
-    );
+    if (orphanResult.skippedUnverifiedSeedOwner) {
+      logger.warn(
+        orphanResult,
+        'SEED_OWNER_EMAIL is configured but no matching user was found — skipped the ' +
+          'orphaned-household sweep this run (failing closed) instead of deleting ' +
+          'unprotected. Should self-resolve once the Seed database step (next) runs.',
+      );
+    } else {
+      logger.info(
+        orphanResult,
+        'Cleaned orphaned (>1h old) households from any test source (idempotent).',
+      );
+    }
 
     await pool.end();
   } catch (err) {

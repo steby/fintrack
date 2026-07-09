@@ -89,6 +89,51 @@ describe('sendEmail', () => {
     );
   });
 
+  it('treats a resolved {data: null, error} response as a failure, not a success', async () => {
+    // The real Resend SDK resolves (never rejects) on API-level failures — this mock
+    // matches that exact shape, not a thrown exception, to prove sendEmail actually
+    // inspects the resolved value rather than only reacting to a caught exception.
+    vi.useFakeTimers();
+    vi.doMock('../env', () => ({ env: { RESEND_API_KEY: 're_test_key' } }));
+    const errorSpy = vi.fn();
+    vi.doMock('../log', () => ({ logger: { info: vi.fn(), error: errorSpy } }));
+    const sendSpy = vi.fn().mockResolvedValue({
+      data: null,
+      error: { name: 'invalid_api_key', message: 'API key is invalid', statusCode: 401 },
+    });
+    vi.doMock('resend', () => ({
+      Resend: class {
+        emails = { send: sendSpy };
+      },
+    }));
+
+    const { sendEmail } = await import('./resend');
+    const promise = sendEmail(INPUT);
+    await vi.advanceTimersByTimeAsync(2000);
+    await expect(promise).resolves.toBe(false);
+
+    expect(sendSpy).toHaveBeenCalledTimes(3); // initial + 2 retries — treated like any other failure
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ to: INPUT.to, subject: INPUT.subject }),
+      expect.stringContaining('Failed to send email after retries'),
+    );
+  });
+
+  it('succeeds without retrying when the resolved response has data and no error', async () => {
+    vi.doMock('../env', () => ({ env: { RESEND_API_KEY: 're_test_key' } }));
+    vi.doMock('../log', () => ({ logger: { info: vi.fn(), error: vi.fn() } }));
+    const sendSpy = vi.fn().mockResolvedValue({ data: { id: 'email_1' }, error: null });
+    vi.doMock('resend', () => ({
+      Resend: class {
+        emails = { send: sendSpy };
+      },
+    }));
+
+    const { sendEmail } = await import('./resend');
+    await expect(sendEmail(INPUT)).resolves.toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('treats a timeout the same as a rejection and eventually degrades', async () => {
     vi.useFakeTimers();
     vi.doMock('../env', () => ({ env: { RESEND_API_KEY: 're_test_key' } }));

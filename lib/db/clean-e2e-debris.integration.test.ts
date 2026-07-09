@@ -71,6 +71,7 @@ describe('cleanOrphanedHouseholds', () => {
 
     const result = await cleanOrphanedHouseholds(db, seedOwnerEmail, NOW);
     expect(result.orphanedHouseholds).toBeGreaterThanOrEqual(1);
+    expect(result.skippedUnverifiedSeedOwner).toBe(false);
 
     const [seedRow] = await db.select().from(households).where(eq(households.id, seedHousehold.id));
     const [otherRow] = await db.select().from(households).where(eq(households.id, otherOld.id));
@@ -78,6 +79,25 @@ describe('cleanOrphanedHouseholds', () => {
     expect(otherRow).toBeUndefined(); // equally old, no exclusion — deleted
 
     await cleanup(seedHousehold.id);
+  });
+
+  it('fails CLOSED — deletes nothing — when seedOwnerEmail is configured but no user matches it', async () => {
+    const unmatchedEmail = `orphan-test-unmatched-${Date.now()}@example.com`;
+    const old = await makeHousehold(
+      'Orphan test UNVERIFIED SEED',
+      new Date(NOW.getTime() - ONE_HOUR_MS - 1000),
+    );
+
+    const result = await cleanOrphanedHouseholds(db, unmatchedEmail, NOW);
+    expect(result.orphanedHouseholds).toBe(0);
+    expect(result.skippedUnverifiedSeedOwner).toBe(true);
+
+    // Nothing was deleted at all — not even the genuinely-old, unrelated household —
+    // because the sweep was skipped entirely rather than running unprotected.
+    const [row] = await db.select().from(households).where(eq(households.id, old.id));
+    expect(row).toBeDefined();
+
+    await cleanup(old.id);
   });
 
   it('does not throw and still deletes old households when no seed owner email is configured', async () => {

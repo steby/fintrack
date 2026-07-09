@@ -369,9 +369,13 @@ export async function getEmailRecipients(
 // Idempotency claim for Phase 6's cron emails (spec.md: "cron double-fire must not
 // double-send"). Inserts a ledger row via ON CONFLICT DO NOTHING and reports whether
 // *this* call actually created it — the atomic part a SELECT-then-INSERT can't
-// guarantee under two overlapping cron invocations. Deliberately called BEFORE the
-// email is sent, not after: a slot claimed here that then fails to send (Resend down)
-// is not retried until the next scheduled period, matching spec.md's documented
+// guarantee under two overlapping cron invocations. Callers claim right BEFORE the
+// send loop, after confirming there's actually something to send (bills/content AND
+// opted-in recipients) — not any earlier. Claiming before those checks would let a
+// household with nothing to send *yet* (e.g. zero recipients today) permanently
+// forfeit the period even if that changes before a genuine double-fire, since the slot
+// would already show as claimed. A slot claimed here that then fails to send (Resend
+// down) is not retried until the next scheduled period, matching spec.md's documented
 // failure mode ("retry w/ backoff, then log + degrade") rather than adding a second,
 // unbounded retry loop across cron runs.
 export async function claimEmailSlot(

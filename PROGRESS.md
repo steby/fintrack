@@ -2278,4 +2278,82 @@ the codebase's first ever unscoped-across-all-households query:
   machine's real 2026-dated households (confirmed 54 households, oldest 2026-07-08,
   untouched before and after).
 
+## `/code-review` pass on the full Phase 6 diff (10 angles, verified, swept)
+
+Full xhigh-effort review against `4c5687a...HEAD` (the complete Phase 6 diff, ~3770
+lines). 10 parallel finder angles → 1-vote verification per surviving candidate → one
+gap-sweep pass. 12 findings reported, all CONFIRMED. Triaged and fixed 9; left 2
+deliberately as-is with reasoning below.
+
+**Fixed — real correctness bugs:**
+
+- **`lib/email/resend.ts` never validated the Resend SDK's resolved response.**
+  Confirmed against the actual installed SDK source
+  (`node_modules/resend/dist/index.mjs`): `resend.emails.send()` does not throw on
+  API-level failures (bad/restricted key, rate limit, quota exceeded, validation
+  error) — it resolves with `{ data: null, error: {...} }`. `sendEmail` only reacted to
+  thrown exceptions, so a real failure would've been silently reported as success once
+  a real `RESEND_API_KEY` is ever configured. Fixed: `sendOnce` now throws on a
+  resolved `.error`, routing it through the exact same retry/backoff/log path as any
+  other failure — no new failure-handling logic needed, just closing the gap. Also
+  fixed the adjacent, previously-unclaimed `setTimeout` leak in the same function
+  (now cleared via `finally` once the real send settles). 2 new unit tests
+  (resolved-error-is-a-failure, resolved-success-with-explicit-`error: null`).
+- **`api/cron/generate/route.ts`'s `isEnabled` check sat outside its try/catch**,
+  unlike the identical guard in `reminders`/`recap` (added earlier this same session) —
+  a transient DB error reading the flag would've aborted the whole cron run instead of
+  being isolated to one household, contradicting the route's own comment and the
+  `PROGRESS.md` note that claimed it already matched the sibling routes. Fixed by
+  moving the flag check inside the try, and hoisted `now`/`from` above the loop (was
+  recomputed per-iteration, risking an inconsistent generation window for households
+  processed either side of a UTC day/month rollover mid-run). New integration test
+  mocking `isEnabled` to throw for one household, asserting the other still succeeds.
+- **The reminders/recap dedup ledger claimed a household's slot _before_ checking
+  whether there was anything to send.** Bills are relatively stable within a day, but
+  recipient opt-in (`users.notifyByEmail`) is a live setting — claiming before that
+  check meant a household with zero recipients at claim-time would permanently forfeit
+  the whole period even if a member opted in minutes later, should a genuine cron
+  double-fire happen afterward. Fixed by moving `claimEmailSlot` to right before the
+  send loop, after confirming there's real content _and_ real recipients — still gives
+  the same double-send protection (the atomic claim immediately before send still
+  prevents two concurrent invocations that both found something to send from both
+  sending), it just no longer locks in a "nothing to do yet" state as if it were
+  "already handled." New tests: a household with no recipients is no longer claimed;
+  opting in after an earlier empty check succeeds on the next call instead of being
+  stuck behind a stale claim. (Surfaced by the gap-sweep pass, not the initial 10
+  angles — a good example of why that pass exists.)
+
+**Fixed — cleanup/duplication, matching this project's own "3+ instances" extraction
+convention:**
+
+- Extracted `app/api/cron/test-helpers.ts` (`CRON_SECRET`, `makeHousehold`,
+  `makeRecipient`, `cleanupHousehold`, `mockCronEnv`) — the three cron route
+  integration test files each independently redeclared byte-identical copies of all
+  five.
+- Extracted `e2e/login.ts` — four E2E spec files (`dashboard`, `phase4`, `phase5`,
+  `notifications`) each independently redeclared an identical `login()` helper;
+  `dashboard.spec.ts`'s no-arg variant (hardcoded to the seed owner) was unified to the
+  same `login(page, email, password)` signature the other three already used.
+- `recap/route.ts` computed `MONTH_SHORT[target.month - 1]` twice (email body +
+  subject line) instead of once into a shared local.
+
+**Deliberately left as-is, with reasoning:**
+
+- **Serial (not `Promise.all`'d) per-recipient `sendEmail` loop.** Real, but
+  parallelizing sends to the same third-party API risks tripping Resend's own rate
+  limits — a genuine tradeoff, not a free win, at a scale (a handful of recipients, one
+  household) where it doesn't matter yet. Distinct from — but adjacent to —
+  the already-documented "sequential per-household loop" deferral above.
+- **`app/actions/notifications.ts` redeclaring `import.ts`'s `ToggleFlagActionState`/
+  `toggleSchema`.** Explicitly a deliberate style choice (the file's own comment cites
+  `toggleCsvImportAction` as established precedent), not an oversight — matches this
+  project's repeatedly-reaffirmed preference for a little duplication over a premature
+  shared-abstraction API. Working as intended.
+
+Re-verified end to end after every fix: lint/typecheck/format/build clean, unit
+346/346 (was 344), integration 188/188 unchanged (net: 7 new tests added, 0 net count
+change beyond the earlier-documented Phase 6 total), E2E 38/38 under `CI=true`
+(production build, workers=1, retries=2). Coverage 98.19% stmts / 95.87% branch on
+`lib/**` (gate is 80%).
+
 ---

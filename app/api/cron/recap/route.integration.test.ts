@@ -1,16 +1,18 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { eq, and } from 'drizzle-orm';
 import { db, pool } from '../../../../lib/db';
-import { households, users, categories, monthlyEntries, emailLog } from '../../../../lib/db/schema';
+import { categories, monthlyEntries, emailLog } from '../../../../lib/db/schema';
 import { setFlag } from '../../../../lib/flags';
 import { addMonths } from '../../../../lib/domain/recurring';
+import {
+  CRON_SECRET,
+  makeHousehold,
+  makeRecipient,
+  cleanupHousehold,
+  mockCronEnv,
+} from '../test-helpers';
 
 vi.mock('server-only', () => ({}));
-
-// Low-entropy repeated-character value, not an English-phrase-like string — matches
-// lib/auth/cron.test.ts's convention, deliberately chosen so gitleaks' generic-api-key
-// entropy heuristic doesn't flag an obviously-fake test fixture as a real secret.
-const CRON_SECRET = 'a'.repeat(40);
 
 function targetPeriod() {
   const now = new Date();
@@ -26,26 +28,6 @@ afterEach(() => {
   vi.doUnmock('../../../../lib/env');
   vi.resetModules();
 });
-
-async function makeHousehold(label: string) {
-  const [household] = await db.insert(households).values({ name: label }).returning();
-  return household;
-}
-
-async function makeRecipient(householdId: string, label: string) {
-  const [user] = await db
-    .insert(users)
-    .values({
-      householdId,
-      email: `${label.replace(/\s+/g, '-')}-${Date.now()}-${Math.random()}@example.com`,
-      passwordHash: 'x',
-      name: label,
-      role: 'member',
-      notifyByEmail: true,
-    })
-    .returning();
-  return user;
-}
 
 async function makePriorMonthEntry(householdId: string, amount: string) {
   const { year, month } = targetPeriod();
@@ -64,27 +46,17 @@ async function makePriorMonthEntry(householdId: string, amount: string) {
   });
 }
 
-async function cleanup(householdId: string) {
-  await db.delete(households).where(eq(households.id, householdId));
-}
-
-async function loadRouteWithMockedEnv(overrides: Record<string, unknown> = {}) {
-  vi.doMock('../../../../lib/env', () => ({
-    env: { CRON_SECRET, RESEND_API_KEY: undefined, ...overrides },
-  }));
-  vi.resetModules();
-  return import('./route');
-}
-
 describe('GET /api/cron/recap', () => {
   it('rejects a request with no authorization header (401)', async () => {
-    const { GET } = await loadRouteWithMockedEnv();
+    mockCronEnv();
+    const { GET } = await import('./route');
     const response = await GET(new Request('http://localhost/api/cron/recap'));
     expect(response.status).toBe(401);
   });
 
   it('rejects a request with a forged secret (401)', async () => {
-    const { GET } = await loadRouteWithMockedEnv();
+    mockCronEnv();
+    const { GET } = await import('./route');
     const response = await GET(
       new Request('http://localhost/api/cron/recap', {
         headers: { authorization: 'Bearer forged-secret' },
@@ -98,7 +70,8 @@ describe('GET /api/cron/recap', () => {
     await makePriorMonthEntry(household.id, '5000.00');
     await makeRecipient(household.id, 'Owner');
 
-    const { GET } = await loadRouteWithMockedEnv();
+    mockCronEnv();
+    const { GET } = await import('./route');
     const response = await GET(
       new Request('http://localhost/api/cron/recap', {
         headers: { authorization: `Bearer ${CRON_SECRET}` },
@@ -110,7 +83,7 @@ describe('GET /api/cron/recap', () => {
     const logged = await db.select().from(emailLog).where(eq(emailLog.householdId, household.id));
     expect(logged).toHaveLength(0);
 
-    await cleanup(household.id);
+    await cleanupHousehold(household.id);
   });
 
   it('sends a recap for the prior month when enabled, with data, and opted in', async () => {
@@ -119,7 +92,8 @@ describe('GET /api/cron/recap', () => {
     await makePriorMonthEntry(household.id, '5000.00');
     await makeRecipient(household.id, 'Owner');
 
-    const { GET } = await loadRouteWithMockedEnv();
+    mockCronEnv();
+    const { GET } = await import('./route');
     const response = await GET(
       new Request('http://localhost/api/cron/recap', {
         headers: { authorization: `Bearer ${CRON_SECRET}` },
@@ -132,15 +106,16 @@ describe('GET /api/cron/recap', () => {
     expect(logged).toHaveLength(1);
     expect(logged[0].type).toBe('recap');
 
-    await cleanup(household.id);
+    await cleanupHousehold(household.id);
   });
 
-  it('skips a household with zero entries in the prior month (no empty recap), but still claims the period', async () => {
+  it('skips, and does not claim the period, for a household with zero entries in the prior month (no empty recap)', async () => {
     const household = await makeHousehold('Recap empty A');
     await setFlag(household.id, 'monthly_recap', true);
     await makeRecipient(household.id, 'Owner');
 
-    const { GET } = await loadRouteWithMockedEnv();
+    mockCronEnv();
+    const { GET } = await import('./route');
     const response = await GET(
       new Request('http://localhost/api/cron/recap', {
         headers: { authorization: `Bearer ${CRON_SECRET}` },
@@ -148,12 +123,60 @@ describe('GET /api/cron/recap', () => {
     );
     const body = await response.json();
     expect(body.sent).toBe(0);
-    expect(body.skippedEmpty).toBe(1);
+    expect(body.skippedEmpty).toBeGreaterThanOrEqual(1);
+
+    // Not claimed — a household could still get real entries added for that month
+    // before the month is truly closed out, so the period isn't permanently forfeited.
+    const logged = await db.select().from(emailLog).where(eq(emailLog.householdId, household.id));
+    expect(logged).toHaveLength(0);
+
+    await cleanupHousehold(household.id);
+  });
+
+  it('does not send, and does not claim the period, when no member has opted in', async () => {
+    const household = await makeHousehold('Recap no recipients A');
+    await setFlag(household.id, 'monthly_recap', true);
+    await makePriorMonthEntry(household.id, '5000.00');
+
+    mockCronEnv();
+    const { GET } = await import('./route');
+    const response = await GET(
+      new Request('http://localhost/api/cron/recap', {
+        headers: { authorization: `Bearer ${CRON_SECRET}` },
+      }),
+    );
+    const body = await response.json();
+    expect(body.sent).toBe(0);
+    expect(body.skippedNoRecipients).toBeGreaterThanOrEqual(1);
 
     const logged = await db.select().from(emailLog).where(eq(emailLog.householdId, household.id));
-    expect(logged).toHaveLength(1);
+    expect(logged).toHaveLength(0);
 
-    await cleanup(household.id);
+    await cleanupHousehold(household.id);
+  });
+
+  it('sends once a member opts in, even after an earlier call found no recipients for the same month', async () => {
+    const household = await makeHousehold('Recap late opt-in A');
+    await setFlag(household.id, 'monthly_recap', true);
+    await makePriorMonthEntry(household.id, '5000.00');
+
+    mockCronEnv();
+    const { GET } = await import('./route');
+    const request = () =>
+      new Request('http://localhost/api/cron/recap', {
+        headers: { authorization: `Bearer ${CRON_SECRET}` },
+      });
+
+    const first = await (await GET(request())).json();
+    expect(first.sent).toBe(0);
+    expect(first.skippedNoRecipients).toBeGreaterThanOrEqual(1);
+
+    await makeRecipient(household.id, 'Owner');
+
+    const second = await (await GET(request())).json();
+    expect(second.sent).toBe(1); // not stuck behind a stale claim from the first call
+
+    await cleanupHousehold(household.id);
   });
 
   it('is idempotent: a second call the same month does not double-send (dedup ledger)', async () => {
@@ -162,7 +185,8 @@ describe('GET /api/cron/recap', () => {
     await makePriorMonthEntry(household.id, '5000.00');
     await makeRecipient(household.id, 'Owner');
 
-    const { GET } = await loadRouteWithMockedEnv();
+    mockCronEnv();
+    const { GET } = await import('./route');
     const request = () =>
       new Request('http://localhost/api/cron/recap', {
         headers: { authorization: `Bearer ${CRON_SECRET}` },
@@ -181,6 +205,6 @@ describe('GET /api/cron/recap', () => {
       .where(and(eq(emailLog.householdId, household.id), eq(emailLog.type, 'recap')));
     expect(logged).toHaveLength(1);
 
-    await cleanup(household.id);
+    await cleanupHousehold(household.id);
   });
 });
