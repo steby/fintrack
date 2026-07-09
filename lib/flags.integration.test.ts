@@ -1,12 +1,8 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { db, pool } from './db';
+import { db } from './db';
 import { households, householdSettings } from './db/schema';
 import { isEnabled, setFlag } from './flags';
-
-afterAll(async () => {
-  await pool.end();
-});
 
 async function makeHousehold(label: string) {
   const [household] = await db.insert(households).values({ name: label }).returning();

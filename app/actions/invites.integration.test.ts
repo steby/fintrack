@@ -1,6 +1,6 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { db, pool } from '../../lib/db';
+import { db } from '../../lib/db';
 import { users, sessions, householdInvitations } from '../../lib/db/schema';
 import { generateToken } from '../../lib/auth/token';
 import { inviteExpiry } from '../../lib/auth/invite-rules';
@@ -26,10 +26,6 @@ vi.mock('next/navigation', () => ({
     throw new Error(`NEXT_REDIRECT:${url}`);
   },
 }));
-
-afterAll(async () => {
-  await pool.end();
-});
 
 afterEach(() => {
   mockToken = undefined;

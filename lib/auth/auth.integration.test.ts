@@ -1,6 +1,6 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { eq, and, gte } from 'drizzle-orm';
-import { db, pool } from '../db';
+import { db } from '../db';
 import { households, users, sessions, householdInvitations, loginAttempts } from '../db/schema';
 import { generateToken } from './token';
 import { newExpiry, isExpired } from './session-rules';
@@ -10,10 +10,6 @@ import {
   LOGIN_RATE_LIMIT_WINDOW_MS,
   LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
 } from './rate-limit';
-
-afterAll(async () => {
-  await pool.end();
-});
 
 async function makeHouseholdWithOwner(name: string) {
   const [household] = await db.insert(households).values({ name }).returning();

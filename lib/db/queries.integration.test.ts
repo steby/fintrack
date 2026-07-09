@@ -1,6 +1,6 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { db, pool } from './index';
+import { db } from './index';
 import { households, categories, bankAccounts, monthlyEntries, recurringSchedule } from './schema';
 import {
   getDashboardRows,
@@ -11,10 +11,6 @@ import {
   getMatchCandidates,
   getNameLookup,
 } from './queries';
-
-afterAll(async () => {
-  await pool.end();
-});
 
 async function makeHousehold(label: string) {
   const [household] = await db.insert(households).values({ name: label }).returning();

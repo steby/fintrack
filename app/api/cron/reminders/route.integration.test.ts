@@ -1,6 +1,6 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { eq, and } from 'drizzle-orm';
-import { db, pool } from '../../../../lib/db';
+import { db } from '../../../../lib/db';
 import { categories, recurringSchedule, monthlyEntries, emailLog } from '../../../../lib/db/schema';
 import { setFlag } from '../../../../lib/flags';
 import {
@@ -10,10 +10,6 @@ import {
   cleanupHousehold,
   mockCronEnv,
 } from '../test-helpers';
-
-afterAll(async () => {
-  await pool.end();
-});
 
 afterEach(() => {
   vi.doUnmock('../../../../lib/env');

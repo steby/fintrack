@@ -2797,3 +2797,55 @@ yet (needs the Vercel GitHub App authorized via the dashboard); TypeScript 7/esl
 Dependabot PRs stay open until `eslint-config-next` supports them.
 
 ---
+
+## Fixing a real cross-file pool-lifecycle bug in integration tests (2026-07-10)
+
+After the deploy above, both main-branch CI and Dependabot PR #4 failed integration
+tests — initially assumed to be resource contention from several CI runs hitting the
+shared `ci` Neon branch at once (this session pushed 4 commits in quick succession,
+each cancelling the previous run mid-cleanup via the workflow's
+`cancel-in-progress: true`, a previously-documented cause of orphaned test households).
+Reran both cleanly (no concurrent pushes this time) to test that theory — **both
+failed again, identically**, which ruled resource contention out. The real signature
+wasn't the 15s timeout originally suspected; it was `Cannot use a pool after calling
+end on the pool`, thrown from `getUpcomingBillCandidates`/`isEnabled` inside the cron
+reminders/recap route handlers, for over a dozen households in a single test run.
+
+**Root cause:** `lib/db/index.ts` caches its `pool`/`healthCheckPool` singletons on
+`globalThis` (a pattern borrowed from the standard Next.js dev-server HMR fix — reusing
+pools across hot reloads instead of leaking a new one per edit). Every
+`*.integration.test.ts` file also had its own `afterAll(() => pool.end())`, written as
+if closing "its own" pool. With `fileParallelism: false` (integration tests share one
+real Postgres branch, run serially, not in parallel), whichever file happened to finish
+first closed the *shared* globalThis-cached pool — poisoning it for every file
+scheduled to run afterward in that same run. `app/actions/*` sorts before
+`app/api/cron/*` alphabetically, so by the time the cron route tests ran, an earlier
+file's `afterAll` had already ended the pool they were about to inherit. This is the
+exact bug class `e2e/test-db.ts`'s own comment already documents as fixed once before,
+for Playwright specs under CI's `workers: 1` — the same anti-pattern had re-appeared,
+independently, on the integration-test side, most likely newly exposed by Phase 6/7
+adding cron test files that land late in file-execution order (earlier, smaller
+integration suites likely never had a file scheduled to run *after* whichever file
+happened to close the pool first).
+
+**Fix:** removed the per-file `afterAll(() => pool.end())` (and the now-unused `pool`
+import) from all 19 integration test files that had one, plus the equivalent
+`pool.end()`/`healthCheckPool.end()` pair in `lib/db/index.integration.test.ts`. No
+replacement per-run teardown was added — first attempted a Vitest `globalSetup`
+teardown hook, but confirmed via Vitest's own docs that `globalSetup` runs in a
+separate process from the workers that actually execute test files, so it can't reach
+the real pool object being torn down (would've silently closed a disconnected, useless
+pool instance instead). Verified empirically instead: ran the full integration suite
+locally against the dev branch with no per-file `pool.end()` at all — **206/206 tests
+passed across all 20 files, and the process exited cleanly on its own**, confirming
+Vitest's own worker teardown releases the connections without any test-owned close
+needed. Also reran full local lint, `tsc --noEmit`, unit tests+coverage (353/353,
+98%+), and `npm run build` — all clean — before pushing.
+
+Also re-confirms the earlier resource-contention theory was a real, separate
+phenomenon too (documented in the cross-phase cleanup pass above) — just not what
+caused *this* failure. Both can be true: CI push cadence can still leave orphaned
+`ci`-branch households (that's what `db:clean-e2e-debris` exists for), independently of
+this pool-lifecycle bug.
+
+---

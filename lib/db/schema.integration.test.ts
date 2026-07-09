@@ -1,6 +1,6 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { db, pool } from './index';
+import { db } from './index';
 import {
   households,
   users,
@@ -10,10 +10,6 @@ import {
   recurringSchedule,
   monthlyEntries,
 } from './schema';
-
-afterAll(async () => {
-  await pool.end();
-});
 
 // Deleting the household is enough cleanup for most of these tests — every other table
 // here references households.id with onDelete: 'cascade', so removing the household

@@ -1,6 +1,6 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { db, pool } from '../../lib/db';
+import { db } from '../../lib/db';
 import { households, users, loginAttempts } from '../../lib/db/schema';
 import { hashPassword } from '../../lib/auth/password';
 import { formData } from './test-helpers';
@@ -24,10 +24,6 @@ vi.mock('next/headers', () => ({
     delete: vi.fn(),
   }),
 }));
-
-afterAll(async () => {
-  await pool.end();
-});
 
 afterEach(() => {
   mockForwardedFor = undefined;

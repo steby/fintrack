@@ -1,6 +1,6 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { db, pool } from '../../lib/db';
+import { db } from '../../lib/db';
 import { users } from '../../lib/db/schema';
 import { makeHouseholdWithUser, formData, cleanup } from './test-helpers';
 
@@ -18,10 +18,6 @@ vi.mock('next/headers', () => ({
     delete: vi.fn(),
   }),
 }));
-
-afterAll(async () => {
-  await pool.end();
-});
 
 afterEach(() => {
   mockToken = undefined;

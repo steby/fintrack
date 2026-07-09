@@ -1,15 +1,20 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { pingDb, pool, healthCheckPool } from './index';
 
 // Proves the real integration-test harness works end to end against a live Postgres
 // branch (see vitest.setup.integration.ts for how DATABASE_URL gets here) before any
 // domain schema exists. Phase 1+ integration tests build on this same pattern.
+//
+// No afterAll(pool.end()) here, deliberately: pool and healthCheckPool are shared
+// singletons (lib/db/index.ts's globalForDb cache), and this file isn't guaranteed to
+// be the last one to run — with fileParallelism: false, every *.integration.test.ts
+// file's afterAll used to call pool.end() on that SAME shared pool, so whichever file
+// happened to finish first closed it out from under every file still queued to run
+// after it ("Cannot use a pool after calling end on the pool"). No individual
+// integration test file closes pool/healthCheckPool anymore; Vitest tears down its own
+// worker process once the whole run completes, which is enough to release the
+// connections without any test-owned teardown racing against file order.
 describe('database connectivity', () => {
-  afterAll(async () => {
-    await pool.end();
-    await healthCheckPool.end();
-  });
-
   it('pings the real database successfully', async () => {
     await expect(pingDb(5000)).resolves.toBe(true);
   });

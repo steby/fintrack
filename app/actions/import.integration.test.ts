@@ -1,6 +1,6 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { eq, and } from 'drizzle-orm';
-import { db, pool } from '../../lib/db';
+import { db } from '../../lib/db';
 import { categories, bankAccounts, monthlyEntries } from '../../lib/db/schema';
 import { setFlag } from '../../lib/flags';
 import type { ColumnMapping } from '../../lib/domain/csv';
@@ -15,10 +15,6 @@ vi.mock('next/headers', () => ({
     delete: vi.fn(),
   }),
 }));
-
-afterAll(async () => {
-  await pool.end();
-});
 
 afterEach(() => {
   mockToken = undefined;
