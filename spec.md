@@ -384,6 +384,19 @@ send — dedup ledger); no upcoming bills (no empty email); Resend down/timeout 
 backoff, then log + degrade); kill-switch off mid-cycle. Trust boundaries: cron requests
 (`CRON_SECRET` bearer check), Resend API responses (validated).
 
+**Required pre-decision, before step 1:** "due in ≤3 days" needs an explicit answer to "what
+does 'today' mean for this household" — the app has been UTC-only-by-convention everywhere
+else (every stored date is a bare `numeric`/integer month, never a timestamp compared against
+"now"), and Phase 4's goal `isOverdue`/`projectedCompletionDate` already hit this exact
+question and was deliberately left unresolved rather than patched narrowly (see PROGRESS.md's
+Phase 4 hardening pass and the cross-phase cleanup pass) specifically so it could be decided
+once, here, instead of twice inconsistently. Decide: (a) stay UTC-only — simplest, but a
+household in SGT (UTC+8) can see a reminder fire up to ~16 hours off from local midnight, or
+(b) add a real household-timezone concept (a column + a shared "what is today for this
+household" helper) — more correct, more surface area for a Tier-2 app. Whichever is chosen,
+retrofit Phase 4's goal-overdue logic to use the same helper rather than leaving it as a
+second, inconsistent implementation.
+
 1. **Pure logic:** upcoming-bill selection (due in ≤3 days from `actual_date_day`, month-end
    clamping for day 29–31), recap aggregation reuse from Phase 3. Unit tests incl. Feb/short
    months.

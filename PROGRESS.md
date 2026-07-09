@@ -1994,4 +1994,39 @@ targets exactly one real row, not zero, before trusting the post-fill assertion 
 anything). Re-verified: full suite green under `CI=true` locally (36/36, no retries
 needed), then pushed and confirmed green on the actual CI run.
 
+**Follow-up, same session, user-directed triage of what's left:** of the remaining
+"still correctly deferred" items above, asked directly which ones warranted action.
+Two:
+
+- **`getClientIp()`'s test-coverage gap, closed.** The last-hop-trust fix itself was
+  already correct (live-verified by hand during the Phase 1 hardening pass) but had
+  zero automated regression coverage — a security-relevant function (defeats the login
+  rate limiter's IP-spoofing bypass) resting on a one-time manual check. Added
+  `app/actions/auth.integration.test.ts` (new file — no prior test exercised
+  `loginAction` directly; the existing `lib/auth/auth.integration.test.ts` only covers
+  pure `lib/auth/*` modules), 4 tests against the real DB: last-hop trusted over a
+  spoofed first hop, `X-Forwarded-For` entirely absent falls back to `'unknown'`, a
+  malformed header with an empty trailing segment (`'real-ip,'`) also falls back to
+  `'unknown'`, and — the actual attack scenario — rotating the spoofed first hop on
+  every attempt does NOT reset the 5-attempt lockout, since all attempts still key on
+  the same real last hop.
+- **Goal-overdue timezone handling — NOT fixed now, deliberately turned into an
+  explicit pre-decision for Phase 6 instead of either fixing narrowly here (rejected
+  twice already, for the same reason) or leaving it purely implicit for Phase 6 to
+  maybe rediscover.** Phase 6's reminder logic ("due in ≤3 days") needs the exact same
+  "what does 'today' mean for this household" answer the goals code sidesteps today.
+  Added a "Required pre-decision, before step 1" note to `spec.md`'s Phase 6 section:
+  decide once whether the app stays UTC-only-by-convention or gains a real
+  household-timezone concept, and retrofit the goals logic to use whatever Phase 6
+  builds rather than maintaining a second, inconsistent implementation.
+
+Everything else from the deferred list was reconsidered and left exactly as
+reasoned — including one explicit reclassification: `household_invitations` rows
+never being cleaned up isn't actually a gap on reflection, it's a legitimate audit
+trail (who invited whom, when), so it was dropped from the deferred list rather than
+carried forward as if it were still pending.
+
+Re-verified: unit 311/311 unchanged, integration 161/161 (up from 157 — the 4 new
+`auth.integration.test.ts` tests), lint/typecheck/format clean.
+
 ---
