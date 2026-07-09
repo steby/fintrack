@@ -2245,4 +2245,37 @@ directly (same `vi.doMock` pattern used throughout this codebase for flag-gated 
 rather than depending on real ambient env. They'll need to be added as real _Vercel_
 env vars at actual deploy time, not as CI secrets.
 
+**Two more real bugs, found only by CI, not local runs** (three failed pushes before
+green — see git log around this entry): local `CI=true` E2E runs and the full local
+unit/integration/build suite were all green before the first push, but CI still caught
+two genuine issues local runs couldn't have, both a direct consequence of this being
+the codebase's first ever unscoped-across-all-households query:
+
+- **gitleaks flagged the fake `CRON_SECRET` test fixture**
+  (`'test-cron-secret-with-enough-length-1234'`) as a `generic-api-key` match on
+  entropy, across all three cron integration test files. Fixed by switching to a
+  low-entropy repeated-character value (`'a'.repeat(40)`), matching
+  `lib/auth/cron.test.ts`'s existing convention for the same purpose — confirmed
+  empirically: that file's identical pattern was never flagged. Since gitleaks scans
+  full git history, not just HEAD, the already-pushed superseded commit still needed a
+  fingerprint-pinned `.gitleaksignore` entry (same pattern as the two prior instances
+  of this exact issue, documented there).
+- **`api/cron/generate`'s new integration tests timed out at exactly 15s in CI** (not
+  locally) — the first code in this project to ever call `getAllHouseholds()` and do
+  real per-household work, exposing months of orphaned households silently
+  accumulated on the shared `ci` Neon branch (this workflow's own
+  `concurrency: cancel-in-progress` cancels an in-flight run before its own test
+  cleanup executes — a mechanism `lib/db/clean-e2e-debris.ts` already documented for
+  E2E-prefixed rows, just never extended to catch generic integration-test leaks).
+  Every other query in this codebase is household-scoped, so the leak was invisible to
+  correctness for the whole project's history until now. Fixed with a second,
+  age-based cleanup pass in that same script (households >1h old, excluding the real
+  seeded owner by exact id) — flagged by the auto-mode safety classifier as a real
+  decision point (an automated, unattended `DELETE` with a broad predicate against a
+  shared DB) and explicitly confirmed before committing, not just self-approved.
+  Verified safe against real local data before running: anchored the new function's own
+  integration test at a 2020 `now` specifically so it could never coincide with this
+  machine's real 2026-dated households (confirmed 54 households, oldest 2026-07-08,
+  untouched before and after).
+
 ---
