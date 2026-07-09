@@ -176,7 +176,7 @@ _Kill-switch_ = runtime-toggleable without redeploy, required for risky/external
 | `category_budgets`  | Per-category caps + progress                          | config (env)         | on      |
 | `savings_goals`     | Goals progress                                        | config (env)         | on      |
 | `net_worth`         | Balances + net-worth trend                            | config (env)         | on      |
-| `entry_attribution` | `paid_by` tagging + per-person view                   | config (env)         | on      |
+| `entry_attribution` | `paid_by` tagging on ad-hoc entries                   | config (env)         | on      |
 | `pwa`               | Installable PWA                                       | config (env)         | on      |
 | `auto_generate`     | Rolling materialize next N months (cron mutates data) | **kill-switch (DB)** | on      |
 | `csv_import`        | Statement import (uploaded file, bulk mutation)       | **kill-switch (DB)** | **off** |

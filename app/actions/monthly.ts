@@ -5,7 +5,8 @@ import { revalidatePath } from 'next/cache';
 import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { monthlyEntries, categories, bankAccounts, users } from '../../lib/db/schema';
-import { requireRole } from '../../lib/auth/guards';
+import { requireRole, requireConfigFlag } from '../../lib/auth/guards';
+import { env } from '../../lib/env';
 import { moneyInputSchema, optionalMoneyInputSchema, centsToAmount } from '../../lib/money';
 import { isValidCalendarDate } from '../../lib/domain/month-params';
 
@@ -181,6 +182,16 @@ export async function addAdhocAction(
   const actual = optionalMoneyInputSchema.safeParse(parsed.data.actualAmount || '');
   if (!actual.success) {
     return { error: 'Enter a valid, non-negative actual amount.' };
+  }
+  // Rejected server-side regardless of whether the UI hides the field when the flag is
+  // off (same pattern as categories.ts's monthlyBudget gate) — a forged form submission
+  // can't tag an entry with a "who paid" attribution the household hasn't enabled.
+  if (parsed.data.paidByUserId) {
+    const flagError = requireConfigFlag(
+      env.FEATURE_ENTRY_ATTRIBUTION,
+      'Entry attribution is not enabled.',
+    );
+    if (flagError) return { error: flagError };
   }
 
   const category = await resolveOptionalRef(

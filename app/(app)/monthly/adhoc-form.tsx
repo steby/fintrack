@@ -16,12 +16,14 @@ export function AdhocForm({
   categories,
   accounts,
   members,
+  entryAttributionEnabled,
 }: {
   year: number;
   month: number;
   categories: (Option & { direction: 'income' | 'expense' })[];
   accounts: Option[];
   members: Option[];
+  entryAttributionEnabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [state, action, pending] = useActionState(addAdhocAction, undefined);
@@ -96,17 +98,19 @@ export function AdhocForm({
           ))}
         </select>
       </label>
-      <label className="flex flex-col gap-1 text-xs">
-        Paid by
-        <select name="paidByUserId" className="h-8 rounded-md border bg-background px-2 text-sm">
-          <option value="">Unspecified</option>
-          {members.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
-        </select>
-      </label>
+      {entryAttributionEnabled && (
+        <label className="flex flex-col gap-1 text-xs">
+          Paid by
+          <select name="paidByUserId" className="h-8 rounded-md border bg-background px-2 text-sm">
+            <option value="">Unspecified</option>
+            {members.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="ml-auto flex gap-1">
         <Button type="button" variant="ghost" size="sm" onClick={() => setOpen(false)}>
           Cancel

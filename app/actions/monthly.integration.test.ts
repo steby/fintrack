@@ -380,6 +380,54 @@ describe('addAdhocAction', () => {
 
     await cleanup(member.household.id);
   });
+
+  it('rejects a paidByUserId when FEATURE_ENTRY_ATTRIBUTION is disabled (server-side, not just hidden UI)', async () => {
+    vi.doMock('../../lib/env', () => ({ env: { FEATURE_ENTRY_ATTRIBUTION: false } }));
+    vi.resetModules();
+    try {
+      const { addAdhocAction } = await import('./monthly');
+      const member = await makeHouseholdWithUser('member', 'Monthly adhoc E');
+      mockToken = member.token;
+
+      const result = await addAdhocAction(
+        undefined,
+        formData({ year: '2026', month: '3', item: 'Groceries', paidByUserId: member.user.id }),
+      );
+      expect(result).toEqual({ error: 'Entry attribution is not enabled.' });
+
+      const rows = await db
+        .select()
+        .from(monthlyEntries)
+        .where(eq(monthlyEntries.householdId, member.household.id));
+      expect(rows).toHaveLength(0);
+
+      await cleanup(member.household.id);
+    } finally {
+      vi.doUnmock('../../lib/env');
+      vi.resetModules();
+    }
+  });
+
+  it('still allows an ad-hoc entry with no paidByUserId when FEATURE_ENTRY_ATTRIBUTION is disabled', async () => {
+    vi.doMock('../../lib/env', () => ({ env: { FEATURE_ENTRY_ATTRIBUTION: false } }));
+    vi.resetModules();
+    try {
+      const { addAdhocAction } = await import('./monthly');
+      const member = await makeHouseholdWithUser('member', 'Monthly adhoc F');
+      mockToken = member.token;
+
+      const result = await addAdhocAction(
+        undefined,
+        formData({ year: '2026', month: '3', item: 'Groceries' }),
+      );
+      expect(result).toEqual({ success: true });
+
+      await cleanup(member.household.id);
+    } finally {
+      vi.doUnmock('../../lib/env');
+      vi.resetModules();
+    }
+  });
 });
 
 describe('deleteEntryAction', () => {

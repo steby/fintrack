@@ -5,13 +5,16 @@ import { logoutAction } from '../actions/auth';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { YearNav } from './year-nav';
+import { BottomNav } from './bottom-nav';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
 
   return (
     <div className="flex min-h-screen">
-      <aside className="flex w-56 shrink-0 flex-col gap-4 border-r p-4">
+      {/* md:hidden below — BottomNav (mobile-only) is this sidebar's replacement below
+          the md breakpoint, not an addition alongside it; see bottom-nav.tsx. */}
+      <aside className="hidden w-56 shrink-0 flex-col gap-4 border-r p-4 md:flex">
         <div className="flex items-center justify-between">
           <div className="font-heading text-lg font-semibold">FinTrack</div>
           <ThemeToggle />
@@ -70,7 +73,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </form>
         </div>
       </aside>
-      <main className="flex-1 p-6">{children}</main>
+      {/* min-w-0 overrides a flex item's default min-width:auto — without it, a wide
+          descendant (e.g. calendar-view.tsx's min-w-[800px] grid) forces this whole
+          flex item to grow past the viewport instead of scrolling internally via its
+          own overflow-x-auto wrapper, which on mobile expands the layout viewport
+          itself and breaks BottomNav's position:fixed (it ends up pinned to the
+          bottom of the oversized page, not the visible screen). */}
+      <main className="min-w-0 flex-1 p-6 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-6">
+        {children}
+      </main>
+      <BottomNav />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { eq, and, sql } from 'drizzle-orm';
 import { requireUser } from '../../../lib/auth/guards';
 import { can } from '../../../lib/auth/rbac';
+import { env } from '../../../lib/env';
 import { db } from '../../../lib/db';
 import {
   monthlyEntries,
@@ -164,6 +165,7 @@ export default async function MonthlyPage({
             categories={allCategories}
             accounts={allAccounts}
             members={members}
+            entryAttributionEnabled={env.FEATURE_ENTRY_ATTRIBUTION}
           />
         )}
       </div>

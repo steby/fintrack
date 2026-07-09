@@ -43,6 +43,10 @@ export default defineConfig({
         // shadcn/ui-generated helper (clsx + tailwind-merge one-liner) — vendor
         // boilerplate, not application logic; clsx/tailwind-merge have their own tests.
         'lib/utils.ts',
+        // Presentational JSX (a static glyph for the generated app icons — see
+        // app/icon.tsx etc.), not business logic — verified visually and via
+        // e2e/pwa.spec.ts's real icon-route fetches, not meaningfully unit-testable.
+        'lib/pwa/icon.tsx',
       ],
       thresholds: {
         lines: 80,

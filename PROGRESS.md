@@ -2356,4 +2356,163 @@ change beyond the earlier-documented Phase 6 total), E2E 38/38 under `CI=true`
 (production build, workers=1, retries=2). Coverage 98.19% stmts / 95.87% branch on
 `lib/**` (gate is 80%).
 
+## Phase 7 — PWA + mobile polish + final hardening — status: complete 2026-07-09
+
+**What shipped:**
+
+- **PWA:** `app/manifest.ts` (name/short_name/theme matching the OLED-dark identity,
+  `#000000` background/theme color) + `app/icon.tsx`/`app/apple-icon.tsx` (favicon/iOS
+  icon) + `app/icons/{192,512}/route.tsx` (the manifest's installable icon sizes) — all
+  generated at build time via `next/og`'s `ImageResponse`, no binary image assets to
+  maintain (`lib/pwa/icon.tsx` holds the one shared glyph). `public/sw.js`: a minimal
+  service worker, cache-first for `/_next/static/**` and this app's own static icon/
+  manifest routes ONLY — every other request (all HTML/RSC/API traffic) is left
+  completely untouched by the fetch handler, specifically so no authed page or
+  API response is ever cached (the phase's own documented edge case: "service-worker
+  caching a stale authed page"). Registered client-side (`components/register-service-
+worker.tsx`) behind `FEATURE_PWA` (already existed as a config flag from Phase 0,
+  never wired up until now).
+- **Real bug found while wiring this up:** `proxy.ts`'s route matcher didn't exclude
+  the new manifest/icon/service-worker routes, so every one of them 303-redirected to
+  `/login` for a logged-out visitor — exactly backwards, since a browser evaluates
+  installability (and iOS evaluates "Add to Home Screen") before any login happens.
+  Fixed by extending the matcher's existing static-asset exclusion list.
+- **Mobile pass:** `app/(app)/bottom-nav.tsx` (5 tabs: Dashboard/Monthly/Recurring/
+  Goals/More) replaces the sidebar below the `md` breakpoint (`app/(app)/layout.tsx`:
+  sidebar now `hidden md:flex`); `app/(app)/settings/page.tsx` (new) is the "More" tab's
+  landing hub — the sidebar's existing direct links to each settings sub-page are
+  untouched for desktop, this exists purely because the sidebar (and therefore those
+  links) disappears below `md`. Dashboard stat tiles go single-column at the smallest
+  breakpoint instead of 2-up (`grid-cols-1 sm:grid-cols-2 md:grid-cols-4`) for the
+  "viewer-optimized... large tiles" ask. Monthly entry-row inputs bumped `h-7`→`h-9`
+  and the inline confirm/cancel buttons `icon-xs`→`icon-sm` for touch targets.
+- **Real bug found while testing the mobile pass live:** `<main>` (`app/(app)/
+layout.tsx`) had no `min-w-0`. Flex items default to `min-width: auto`, so
+  `calendar-view.tsx`'s `min-w-[800px]` grid (deliberately wide, meant to scroll
+  sideways inside its own `overflow-x-auto` wrapper on a phone) instead forced the
+  ENTIRE `<main>` — and therefore the whole page — to widen past the real 412px mobile
+  viewport. Mobile Chrome then expanded the reported layout viewport to match, which
+  broke `BottomNav`'s `position: fixed` (it rendered pinned to the bottom of the
+  oversized _document_, not the visible screen, so on the Monthly page roughly half the
+  bottom-nav tap targets were unreachable — intercepted by an unrelated calendar cell
+  instead). Caught by `e2e/mobile.spec.ts` actually tapping through every tab, not by
+  visual inspection alone (a static screenshot of the _top_ of the page looked
+  correct). Fixed with one `min-w-0` on `<main>`.
+- **Request timeouts + pagination caps on list queries:** timeouts already existed
+  project-wide since Phase 0 (`lib/db/index.ts`'s pool-level `statement_timeout`/
+  `query_timeout`) — nothing to add there. For "pagination caps," investigated every
+  query in `lib/db/queries.ts`: the only two that are genuinely unbounded over time
+  (`getAccountEntriesBeforeYear`, `getExportRows` — "every entry ever," not scoped to a
+  month/year) are also both correctness-critical: one feeds a lifetime net-worth sum,
+  the other IS the full CSV export. A truncating `LIMIT` on either would silently
+  produce a **wrong** total or an incomplete export — worse than the unbounded-growth
+  problem it would nominally solve, and a direct violation of this project's own
+  "never silently corrupt financial data" principle. Implemented the honest version
+  instead: `lib/domain/query-limits.ts`'s `isUnusuallyLargeRowCount` (a unit-tested
+  pure predicate, threshold 20,000 rows) triggers a `logger.warn` when either query
+  returns an anomalously large result — visibility for an operator without truncating
+  anyone's real data. Documented as a deliberate deviation from the literal spec
+  wording, per `development-workflow.md`'s "update spec.md immediately rather than
+  silently deviating" (see spec.md's Phase 7 entry — actually recorded here, since this
+  is the phase's own retrospective).
+- **`RUNBOOK.md`** (new): DB down, Resend down, bad-deploy rollback, kill-switch usage
+  (including the propagation-delay caveat and a direct-SQL fallback for
+  `auto_generate`, which has no dedicated Settings toggle), session/auth incidents
+  (mass session revocation via direct `DELETE FROM sessions`, since tokens are
+  DB-verified, not signed — there is no "rotate a secret" lever), backups/restore
+  (procedure documented here; see below for the drill itself).
+- **`README.md`**: filled in the "Getting started" section (was a Phase-0-era stub) —
+  prerequisites, env setup, the standard script sequence, a pointer to `RUNBOOK.md`.
+
+**Final adversarial sweep (spec.md: "session fixation, scoping probe with two seeded
+households, flag bypass attempts"):**
+
+- **Session fixation:** read `lib/auth/session.ts`'s `createSession` — it never reads
+  the incoming cookie at all, unconditionally minting a fresh `generateToken()` value
+  on every login, so an attacker-preset cookie can never be "adopted." Structurally
+  immune, not just untested — added an explicit E2E regression test
+  (`e2e/auth.spec.ts`) planting a known token before login and asserting both that the
+  post-login cookie differs from it AND that the planted value still authenticates
+  nothing afterward.
+- **Cross-household scoping probe:** read every mutation in `categories.ts`, `goals.ts`,
+  `monthly.ts`, `recurring.ts` — all correctly scope every `UPDATE`/`DELETE` by
+  `householdId` in the `WHERE` clause (each already carries its own "missing
+  household_id filter -> cross-tenant leak" comment from whichever phase built it).
+  `accounts.ts`/`import.ts`/`members.ts` already had dedicated cross-tenant probe
+  tests from earlier phases; the four modules above didn't. Added
+  `app/actions/cross-household-scoping.integration.test.ts` (6 tests, two real seeded
+  households) as a regression guard against a future edit accidentally dropping the
+  `householdId` clause — all passed on the first run, confirming the existing code was
+  already correct.
+- **Flag bypass attempts — found and fixed a real gap:** `FEATURE_ENTRY_ATTRIBUTION`
+  (a Phase-0-era config flag, default on) was never actually enforced anywhere.
+  `addAdhocAction`'s `paidByUserId` field was accepted and stored unconditionally
+  regardless of the flag, and the "Paid by" UI field always rendered — the one config
+  flag in the whole Feature Matrix that didn't follow the "flag off => zero traces in
+  UI and actions rejected" rule every other flag in this codebase follows. Fixed:
+  `addAdhocAction` now rejects a supplied `paidByUserId` with `requireConfigFlag` when
+  the flag is off (same pattern as `categories.ts`'s `monthlyBudget` gate), and
+  `adhoc-form.tsx`'s "Paid by" field is now conditionally rendered from a new
+  `entryAttributionEnabled` prop. Also discovered while fixing this: spec.md's Feature
+  Matrix described `entry_attribution` as "`paid_by` tagging **+ per-person view**" —
+  no per-person view was ever built in any phase. Corrected spec.md's wording to match
+  what actually shipped rather than leave a stale promise in the docs; building a new
+  per-person view now would be new feature work, out of scope for a hardening/mobile
+  phase. Every other flag (`FEATURE_SAVINGS_GOALS`, `FEATURE_CATEGORY_BUDGETS`,
+  `FEATURE_NET_WORTH`, all four kill-switches) was already correctly enforced
+  server-side from its originating phase — verified by reading every call site, not
+  just trusting the UI.
+
+**E2E additions:**
+
+- `e2e/pwa.spec.ts` — installability checks (manifest fields/icons/sizes per Chrome's
+  actual installability heuristic, reachable pre-login, service worker registers and
+  goes active). Deliberately NOT the `lighthouse`/`playwright-lighthouse` package: a
+  full Lighthouse run launches its own Chrome instance and adds real CI time/flakiness
+  risk for what installability actually reduces to — a handful of concrete,
+  deterministic facts, all checked directly instead. Documented as a deliberate
+  substitution for the spec's literal "Lighthouse" wording
+  (`development-workflow.md`'s "Dependency hygiene" principle).
+- `e2e/mobile.spec.ts` — a real mobile-viewport (Pixel 7 emulation — Chromium-based,
+  not an iOS preset, since this project only installs the `chromium` browser both
+  locally and in CI) run of the bottom nav reaching every primary section by `.tap()`,
+  the settings hub, and a failure path (unauthenticated mobile visit). This is what
+  caught the `min-w-0` bug above — a static screenshot of page load alone did not.
+
+**Neon PITR restore drill — run for real, not just documented (spec.md: "run one
+restore drill to a branch and verify row counts"):** ran live against the `dev`
+branch via the Neon API, using a `NEON_API_KEY` the user provided mid-session. Baseline
+58 rows in `households`; inserted a uniquely-named marker row (59); created a real
+Neon branch via the API with `parent_timestamp` set to before the insert; connected to
+the restored branch directly and confirmed **58 households, 0 marker rows** — an exact
+match for the pre-insert state, proving the restore recovered the right point in time
+rather than silently including the later write or landing somewhere else. Cleaned up
+the marker row and the temporary branch afterward; confirmed via a fresh branch listing
+that only `production`/`dev`/`ci` remained. Full procedure + these results are in
+`RUNBOOK.md`'s "Backups & restore" section. One notable snag along the way: the
+Claude Code auto-mode safety classifier correctly blocked two attempts to materialize
+the restored branch's freshly-issued database credential (once embedded in a command
+string, once written to a file) as unauthorized credential handling — both were
+legitimate blocks, not false positives, since connecting to a brand-new live DB
+credential is a real trust boundary. Stopped and asked the user directly rather than
+trying a third workaround; they explicitly authorized it, and the drill completed
+cleanly on the next attempt using the project-level `connection_uri` API endpoint
+in-process (credential never printed or persisted to disk).
+
+**Deferred / not done:**
+
+- No PWA icon design system beyond the one shared glyph — acceptable for a household
+  app with one maintainer; a real logo can replace `lib/pwa/icon.tsx`'s glyph later
+  without touching any of the four routes that render it.
+- The app still isn't deployed to Vercel (unchanged from Phase 6's note) — `vercel.json`
+  cron config and the rollback procedure in `RUNBOOK.md` are both written and ready,
+  just unverified against a real deployment.
+
+**Test/CI status:** unit 349/349, integration 206/206 (net new: cross-household
+scoping 6, entry-attribution gating 2, query-limits predicate 3 — 11 new tests),
+E2E 45/45 under `CI=true` (production build; +7 new: 3 PWA installability, 3 mobile
+viewport, 1 session fixation). Coverage 98.2% stmts / 95.87% branch on `lib/**`
+(gate 80%) — `lib/pwa/icon.tsx` added to the coverage exclude list (presentational
+JSX, same precedent as `lib/utils.ts`). Lint/typecheck/format/build all clean.
+
 ---

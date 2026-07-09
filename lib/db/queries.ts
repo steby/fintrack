@@ -1,5 +1,7 @@
 import { and, eq, lt, or } from 'drizzle-orm';
 import { db } from './index';
+import { logger } from '../log';
+import { isUnusuallyLargeRowCount } from '../domain/query-limits';
 import {
   monthlyEntries,
   categories,
@@ -20,6 +22,17 @@ import type { YearMonth } from '../domain/recurring';
 // derived from the pgEnum, since Drizzle doesn't export a ready-made TS type for enum
 // columns and this is only ever used at these two call sites.
 export type EmailType = 'reminder' | 'recap';
+
+// Warning (not truncating) ceiling for the two "every entry ever" queries below
+// (getAccountEntriesBeforeYear, getExportRows) — spec.md Phase 7 calls for "pagination
+// caps on list queries", but both of these are correctness-critical: one feeds a
+// lifetime running balance, the other IS the full export. Silently truncating past a
+// LIMIT would produce a wrong net-worth total or an incomplete export — worse than the
+// unbounded-growth problem a cap is meant to solve. The connection pool's own
+// statement_timeout (lib/db/index.ts) is the real hard backstop against pathological
+// growth; this just logs loudly long before that ever fires (see
+// lib/domain/query-limits.ts for the threshold and why it's a pure, unit-tested
+// predicate rather than inlined here).
 
 // Dashboard row fetch (spec.md Phase 3) — one scoped query per year, left-joined for
 // category direction/name/color and bank account name. Deliberately fetches
@@ -119,6 +132,13 @@ export async function getAccountEntriesBeforeYear(
     .from(monthlyEntries)
     .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
     .where(and(eq(monthlyEntries.householdId, householdId), lt(monthlyEntries.year, year)));
+
+  if (isUnusuallyLargeRowCount(rows.length)) {
+    logger.warn(
+      { householdId, rowCount: rows.length },
+      'getAccountEntriesBeforeYear returned an unusually large row count',
+    );
+  }
 
   return rows.map((row) => ({
     bankAccountId: row.bankAccountId,
@@ -236,6 +256,13 @@ export async function getExportRows(householdId: string): Promise<ExportRow[]> {
     .leftJoin(recurringSchedule, eq(monthlyEntries.recurringScheduleId, recurringSchedule.id))
     .where(eq(monthlyEntries.householdId, householdId))
     .orderBy(monthlyEntries.year, monthlyEntries.month, monthlyEntries.item);
+
+  if (isUnusuallyLargeRowCount(rows.length)) {
+    logger.warn(
+      { householdId, rowCount: rows.length },
+      'getExportRows returned an unusually large row count',
+    );
+  }
 
   return rows;
 }

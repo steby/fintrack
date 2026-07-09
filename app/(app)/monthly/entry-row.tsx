@@ -72,15 +72,15 @@ export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canMana
               step="0.01"
               min="0"
               defaultValue={entry.budgetedAmount}
-              className="h-7 w-24 rounded border bg-background px-1.5 text-right text-sm"
+              className="h-9 w-24 rounded border bg-background px-1.5 text-right text-sm"
               autoFocus
             />
-            <Button type="submit" size="icon-xs" variant="ghost" disabled={budgetPending}>
+            <Button type="submit" size="icon-sm" variant="ghost" disabled={budgetPending}>
               ✓
             </Button>
             <Button
               type="button"
-              size="icon-xs"
+              size="icon-sm"
               variant="ghost"
               onClick={() => setEditingBudget(false)}
             >
@@ -112,7 +112,7 @@ export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canMana
               placeholder="—"
               defaultValue={entry.actualAmount ?? ''}
               disabled={actualPending}
-              className="h-7 w-24 rounded border bg-background px-1.5 text-right text-sm tabular-nums"
+              className="h-9 w-24 rounded border bg-background px-1.5 text-right text-sm tabular-nums"
               // Commit on blur, not on every keystroke — React's onChange fires per
               // character (it's wired to the native "input" event), which combined with
               // disabled={actualPending} would submit mid-typing and eat keystrokes typed
@@ -135,7 +135,7 @@ export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canMana
               defaultValue={entry.actualDate ?? ''}
               disabled={actualPending}
               aria-label="Actual date"
-              className="h-7 w-32 rounded border bg-background px-1.5 text-right text-xs tabular-nums"
+              className="h-9 w-32 rounded border bg-background px-1.5 text-right text-xs tabular-nums"
               onBlur={(e) => e.currentTarget.form?.requestSubmit()}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {

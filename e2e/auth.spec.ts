@@ -113,6 +113,50 @@ test.describe('auth', () => {
     await expect(page.getByText('Only the household owner can manage members.')).toBeVisible();
   });
 
+  test('login never adopts an attacker-preset session cookie (session fixation)', async ({
+    page,
+    context,
+  }) => {
+    // Classic session fixation: an attacker gets a victim's browser to carry a session
+    // ID the attacker already knows (e.g. via a link with a preset cookie), hoping login
+    // "upgrades" that known ID to an authenticated session the attacker can then reuse.
+    // Plant one here before logging in.
+    const plantedToken = 'attacker-planted-session-token-value';
+    await context.addCookies([
+      { name: 'session', value: plantedToken, url: 'http://localhost:3000' },
+    ]);
+
+    await page.goto('/login');
+    await page.getByLabel('Email').fill(OWNER_EMAIL);
+    await page.getByLabel('Password').fill(OWNER_PASSWORD);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL('/');
+
+    // createSession (lib/auth/session.ts) always mints a fresh token via
+    // generateToken() and never reads the incoming cookie — this asserts that
+    // structural guarantee holds end-to-end, not just at the unit level.
+    const cookies = await context.cookies();
+    const sessionCookie = cookies.find((c) => c.name === 'session');
+    expect(sessionCookie?.value).toBeDefined();
+    expect(sessionCookie?.value).not.toBe(plantedToken);
+
+    // The attacker's pre-chosen value was never turned into a valid session, so it
+    // still doesn't authenticate anything.
+    const probeContext = await page.context().browser()!.newContext();
+    try {
+      await probeContext.addCookies([
+        { name: 'session', value: plantedToken, url: 'http://localhost:3000' },
+      ]);
+      const probePage = await probeContext.newPage();
+      await probePage.goto('/settings/members');
+      await expect(probePage).toHaveURL(/\/login$/);
+    } finally {
+      await probeContext.close();
+    }
+
+    await page.getByRole('button', { name: 'Sign out' }).click();
+  });
+
   test('a tampered/garbage session cookie is treated as unauthenticated, not a crash', async ({
     page,
     context,

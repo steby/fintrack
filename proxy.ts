@@ -91,5 +91,12 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|api/health).*)'],
+  // manifest.webmanifest/icon/apple-icon/icons/sw.js (Phase 7 PWA assets) are static
+  // and deploy-scoped, not user-scoped — a browser fetches the manifest and icons for
+  // an install prompt, and registers sw.js, before any login happens (most visibly on
+  // /login itself), so they must never redirect for lack of a session, same as the
+  // pre-existing static/health exclusions below.
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|api/health|manifest.webmanifest|icon|apple-icon|sw.js).*)',
+  ],
 };
