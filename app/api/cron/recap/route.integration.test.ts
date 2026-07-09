@@ -7,7 +7,10 @@ import { addMonths } from '../../../../lib/domain/recurring';
 
 vi.mock('server-only', () => ({}));
 
-const CRON_SECRET = 'test-cron-secret-with-enough-length-1234';
+// Low-entropy repeated-character value, not an English-phrase-like string — matches
+// lib/auth/cron.test.ts's convention, deliberately chosen so gitleaks' generic-api-key
+// entropy heuristic doesn't flag an obviously-fake test fixture as a real secret.
+const CRON_SECRET = 'a'.repeat(40);
 
 function targetPeriod() {
   const now = new Date();
