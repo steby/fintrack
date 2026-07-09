@@ -54,23 +54,20 @@ import {
 // must never touch — the real seeded owner's, looked up by SEED_OWNER_EMAIL exactly
 // like lib/db/seed.ts does — is excluded explicitly, not just "hopefully old enough."
 //
-// Briefly lowered to 5 minutes on 2026-07-10 for a one-time remediation run, after
-// months of accumulated debris (see the comment above) finally tipped
-// getAllHouseholds()-driven cron route tests (reminders/recap/generate) into hanging
-// for their full 15s test timeout — confirmed fixed by a subsequent clean CI run, then
-// reverted back to the original 1-hour threshold here.
-//
-// Lowered to 5 minutes AGAIN, same day, same night even: a burst of ~10 CI runs within
-// about an hour (several Dependabot PR rebases + reruns + merges in quick succession)
-// produced enough of its OWN fresh failed-test debris that it re-bloated the household
-// count before the 1-hour sweep ever got a chance to clear any of it — the exact
-// "debris accumulates faster than the hourly sweep clears it" failure mode, just
-// triggered by a burst of CI activity in one sitting rather than months of drift. A
-// full hour is far more headroom than any legitimate test needs (observed tonight:
-// even a 21-test file finishes in under 50s) — worth revisiting whether 5 minutes
-// should just be the permanent value instead of reverting again, but leaving that
-// call for a deliberate follow-up rather than deciding it here at 3am.
-const ORPHAN_HOUSEHOLD_AGE_MS = 5 * 60 * 1000;
+// Twice lowered to 5 minutes and reverted back on 2026-07-10 for one-time remediation
+// runs: first after months of accumulated debris finally tipped getAllHouseholds()-
+// driven cron route tests (reminders/recap/generate) into hanging for their full 15s
+// test timeout; then again the same night after a burst of ~10 CI runs within about an
+// hour (several Dependabot PR rebases/reruns/merges in quick succession) produced
+// enough of its OWN fresh failed-test debris to re-bloat the household count before
+// the 1-hour sweep ever got a chance to clear any of it — same "debris accumulates
+// faster than the hourly sweep clears it" failure mode both times, just triggered by a
+// burst of CI activity in one sitting the second time instead of months of drift. Both
+// remediations confirmed fixed by a subsequent clean CI run, then reverted back to the
+// original 1-hour threshold here. Worth a deliberate follow-up on whether 5 minutes
+// should just become the permanent value, given it's now happened twice — not decided
+// here.
+const ORPHAN_HOUSEHOLD_AGE_MS = 60 * 60 * 1000;
 
 // Extracted from main() so it's testable against a real (local/dev) DB without going
 // through this file's hard CI-only guard or its dynamic ./index import — see
