@@ -2632,4 +2632,88 @@ build confirms `/icons/192`/`/icons/512` now show `○` static, matching `/icon`
 de-duplicated fixtures), E2E 45/45 under `CI=true` (production build). Coverage
 98.2% stmts / 95.87% branch on `lib/**` (gate 80%), unchanged.
 
+## `/code-review` pass #2 — reviewing the review's own fixes
+
+Ran a second full xhigh-effort review, this time against the previous pass's fix
+commit itself — the fixes from a code review are exactly the kind of change most
+likely to introduce a NEW bug (touching security-sensitive matching logic, a
+mechanical 10-file refactor) while everyone's attention is on the findings just
+closed. That instinct paid off: this pass found a real, verified bug the first
+pass's own fixes introduced, plus real gaps in how completely those fixes closed
+what they claimed to.
+
+**Fixed — real bugs, found and independently confirmed:**
+
+- **`<YearNav />` in the new mobile settings hub duplicated the sidebar's own
+  copy.** The sidebar in `app/(app)/layout.tsx` renders `YearNav` on every `(app)`
+  route including `/settings` — only CSS-hidden below `md`, never removed from the
+  DOM. Verified live: a desktop-width visit to `/settings` visibly showed the
+  "Dashboard year" widget twice (screenshot), and
+  `page.getByTestId('year-nav-link').count()` returned 6, not 3. Fixed by wrapping
+  the hub's copy in `<div className="md:hidden">` — re-verified live at both
+  desktop and mobile widths: exactly 3 _visible_ links each time (DOM still holds
+  6, by design, same as the sidebar/bottom-nav relationship elsewhere in this
+  app — documented inline with a note that a future test targeting
+  `year-nav-link` on this specific route needs to scope its locator, not use a
+  bare `getByTestId`).
+- **The `proxy.ts` matcher fix from pass #1 didn't fully close the bug class it
+  claimed to.** Verified by compiling and testing the actual regex:
+  `favicon.ico`/`manifest.webmanifest`/the just-added `sw.js$` all had unescaped
+  literal dots (`.` matches ANY character in regex — `/faviconXico`,
+  `/manifestXwebmanifest`, `/swXjs` all still bypassed the session check), and
+  `api/health` was never anchored at all (`/api/health-check` also bypassed).
+  Escaped every literal dot and anchored `api/health$`; `_next/static`/
+  `_next/image` deliberately left as unanchored prefixes (Next reserves that whole
+  namespace, so no app route can ever collide there). Re-verified against a real
+  production server: all 8 real public paths still return `200`, all 8
+  hypothetical/previously-vulnerable collision paths now correctly `303` to
+  `/login`.
+- **The `sw.js` `cache.put()` fix from pass #1 was correct but introduced two new
+  problems of its own.** Awaiting the write inline before `return response` (1)
+  blocks every cache-miss response on the Cache API write finishing, and (2) lets
+  a `cache.put()` rejection (e.g. `QuotaExceededError`) propagate into
+  `event.respondWith()`'s promise — which the Service Worker spec treats as a hard
+  network failure, discarding a response that was already fetched successfully.
+  Fixed with `event.waitUntil(cache.put(...).catch(() => {}))` after
+  `return response`: the write still can't be silently cut off (waitUntil extends
+  the worker's own lifetime independently), without coupling its outcome to what
+  the page actually receives.
+- **A claim in `app/actions/test-helpers.ts`'s own comment was factually wrong.**
+  It said `vi.mock('server-only'/'next/cache'/'next/headers')` "must stay local to
+  each test file per Vitest's hoisting requirements" — true for `next/headers`
+  (reads each file's own `mockToken`/`mockForwardedFor`), false for the other two.
+  Verified empirically: moved both into `vitest.setup.integration.ts` (which
+  already existed, already wired into `setupFiles`, previously only loading
+  `dotenv/config`), removed the two local lines from one file, ran its tests —
+  unchanged pass. Removed from all 14 files that had `server-only` (11 in
+  `app/actions/*`, 3 in `app/api/cron/*`) and all 9 that had `next/cache` — the
+  exact "3+ instances" pattern this project extracts elsewhere, in a comment that
+  itself argued against extracting it.
+- **`auth.integration.test.ts` still hand-rolled a `formData()` helper**
+  byte-for-byte identical to the one pass #1 already extracted to
+  `test-helpers.ts` — its `makeHouseholdWithUser`/`cleanup` are genuinely
+  different (real hashed password, no session) and correctly stayed local, but
+  `formData` had no reason to. Now imports it.
+
+**Deliberately not fixed, with reasoning:**
+
+- Moving the PWA path exemptions from `proxy.ts`'s regex matcher into its existing
+  plain-JS `isPublicRoute()` mechanism (a real, well-reasoned suggestion — the file
+  already has a non-regex path for exactly this "must never redirect" category).
+  Deferred: a larger, more invasive change to a security-critical file already
+  touched twice this session, now that the concrete regex gaps are closed. Worth
+  revisiting later, not urgent.
+- `lib/db/queries.ts`'s `warnIfUnusuallyLarge` helper remains untested — matches
+  that file's existing "DB-bound, excluded from the coverage gate" precedent.
+- The minor overlap between `test-helpers.ts`'s `cleanup()` and the cron module's
+  `cleanupHousehold()` (both a one-line household delete) — not worth cross-module
+  coupling for one line.
+
+Re-verified end to end: lint/typecheck/format/build clean, unit 349/349 and
+integration 206/206 unchanged (same tests — the `vi.mock` consolidation touched 14
+files' setup code, not test count), E2E 45/45 under `CI=true` (production build).
+Coverage unchanged. Live-verified (not just compiled/read): the proxy.ts matcher
+against a real running server, and the YearNav fix via real Playwright screenshots
+and DOM queries at both viewport widths.
+
 ---

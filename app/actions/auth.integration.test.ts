@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db, pool } from '../../lib/db';
 import { households, users, loginAttempts } from '../../lib/db/schema';
 import { hashPassword } from '../../lib/auth/password';
+import { formData } from './test-helpers';
 
 // Same Next-runtime-plumbing-replacement pattern as members.integration.test.ts —
 // real DB, real loginAction/rate-limit logic, only server-only/next/navigation/
@@ -12,7 +13,6 @@ import { hashPassword } from '../../lib/auth/password';
 // regardless, so it still needs a mock to avoid a real "next/navigation" resolution
 // outside a request context.
 let mockForwardedFor: string | undefined;
-vi.mock('server-only', () => ({}));
 vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
 vi.mock('next/headers', () => ({
   headers: async () => ({
@@ -44,12 +44,6 @@ async function makeHouseholdWithUser(label: string) {
     role: 'owner',
   });
   return { household, email };
-}
-
-function formData(fields: Record<string, string>): FormData {
-  const fd = new FormData();
-  for (const [key, value] of Object.entries(fields)) fd.set(key, value);
-  return fd;
 }
 
 async function cleanup(householdId: string, email: string) {

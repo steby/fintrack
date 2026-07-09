@@ -36,7 +36,18 @@ export default async function SettingsHubPage() {
         <ThemeToggle />
       </div>
 
-      <YearNav />
+      {/* md:hidden: the sidebar (app/(app)/layout.tsx) renders its own <YearNav />
+          unconditionally on every (app) route, including this one — only CSS-hidden
+          below md, not removed from the DOM. Without this wrapper, a desktop-width
+          visit to /settings shows the "Dashboard year" widget twice (verified: without
+          it, page.getByTestId('year-nav-link').count() returns 6, not 3, on this
+          route). Both copies remain in the DOM regardless of viewport either way — a
+          future test targeting year-nav-link on THIS route specifically should scope
+          the locator to a container (this wrapper or the sidebar's <aside>), not use a
+          bare page.getByTestId(), or it will hit a Playwright strict-mode violation. */}
+      <div className="md:hidden">
+        <YearNav />
+      </div>
 
       <nav className="flex flex-col divide-y rounded-md border">
         {links.map((link) => (

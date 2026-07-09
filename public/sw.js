@@ -83,10 +83,20 @@ self.addEventListener('fetch', (event) => {
       if (cached) return cached;
 
       const response = await fetch(event.request);
-      // Awaited, not fired-and-forgotten: event.respondWith() only keeps the worker
-      // alive until ITS promise settles, so returning before the cache write finishes
-      // risks the write getting silently cut off if the worker is suspended right after.
-      if (response.ok) await cache.put(event.request, response.clone());
+      // event.waitUntil(), not an inline await: respondWith()'s own promise controls
+      // how long the browser waits for the RESPONSE, so awaiting the cache write here
+      // would (a) add its latency to every cache-miss request, and (b) let a rejected
+      // write (e.g. QuotaExceededError) reject respondWith()'s promise too — which the
+      // Service Worker spec treats as a hard network failure, discarding a response
+      // that was already fetched successfully. waitUntil() extends the WORKER's
+      // lifetime independently, so the write still can't be silently cut off, without
+      // coupling its outcome to the response the page actually receives. The `.catch`
+      // is required for the same reason: an uncaught rejection inside waitUntil() is
+      // reported as an unhandled rejection but doesn't affect the response — the only
+      // thing worth doing on failure here is not crashing.
+      if (response.ok) {
+        event.waitUntil(cache.put(event.request, response.clone()).catch(() => {}));
+      }
       return response;
     })(),
   );

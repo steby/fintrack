@@ -5,20 +5,11 @@ import { users } from '../../lib/db/schema';
 import { makeHouseholdWithUser, formData, cleanup } from './test-helpers';
 
 // Server Actions call next/headers's cookies() (which throws outside a real Next.js
-// request context) and lib/auth/session.ts/guards.ts import the `server-only` guard
-// package (which, by design, always throws when imported outside Next's own bundler —
-// that's its literal implementation, the mechanism it uses to catch an accidental
-// client-component import at build time). Mocking cookies() to read from a plain,
-// per-test-settable variable, and no-op-ing server-only, lets these actions run against
-// a REAL database with only the Next-runtime-specific plumbing replaced — the same
-// pattern Phase 0's lib/observability.test.ts already uses for Next-adjacent modules.
+// request context). Mocking it to read from a plain, per-test-settable variable lets
+// these actions run against a REAL database with only the Next-runtime-specific
+// plumbing replaced. (server-only/next/cache are also mocked — for every
+// *.integration.test.ts file, not just this one — in vitest.setup.integration.ts.)
 let mockToken: string | undefined;
-vi.mock('server-only', () => ({}));
-// revalidatePath needs Next's request-scoped static-generation store, which doesn't
-// exist outside a real request — mocked to a no-op so the actions' real cache-
-// invalidation call doesn't crash the test run; the call itself (that it fires with
-// the right path) isn't what these tests are verifying.
-vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/headers', () => ({
   cookies: async () => ({
     get: (name: string) =>

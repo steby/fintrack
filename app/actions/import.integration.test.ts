@@ -7,8 +7,6 @@ import type { ColumnMapping } from '../../lib/domain/csv';
 import { makeHouseholdWithUser, cleanup } from './test-helpers';
 
 let mockToken: string | undefined;
-vi.mock('server-only', () => ({}));
-vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/headers', () => ({
   cookies: async () => ({
     get: (name: string) =>

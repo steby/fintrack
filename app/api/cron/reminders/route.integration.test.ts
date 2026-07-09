@@ -11,8 +11,6 @@ import {
   mockCronEnv,
 } from '../test-helpers';
 
-vi.mock('server-only', () => ({}));
-
 afterAll(async () => {
   await pool.end();
 });

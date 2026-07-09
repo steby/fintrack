@@ -20,8 +20,6 @@ import { makeHouseholdWithUser, formData, cleanup } from './test-helpers';
 // dropping the householdId clause.
 
 let mockToken: string | undefined;
-vi.mock('server-only', () => ({}));
-vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/headers', () => ({
   cookies: async () => ({
     get: (name: string) =>

@@ -103,10 +103,19 @@ export const config = {
   // (e.g. a hypothetical `/icon-editor`) and silently exempt it from the session check
   // entirely, the exact class of gap this file's own comment above warns about.
   //
+  // A code-review pass caught the same class of gap still open on the entries this
+  // anchoring didn't originally touch: `favicon.ico`/`manifest.webmanifest`/`sw.js`
+  // had unescaped literal dots (`.` matches ANY character in regex, so e.g. `/swXjs`
+  // or `/faviconXico` also silently bypassed the session check), and `api/health` was
+  // never anchored at all (so `/api/health-check` did too) — verified by compiling
+  // and testing the actual matcher regex, not just reading it. `_next/static`/
+  // `_next/image` are deliberately left as unanchored prefixes: Next reserves the
+  // entire `_next/*` namespace for itself, so no app route can ever collide there.
+  //
   // This same set of paths is ALSO hardcoded in public/sw.js's isCacheableStatic() —
   // kept in sync by hand (see that file's comment for why the two can't share a
   // literal module). Adding a new static PWA route means updating both lists.
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|api/health|manifest.webmanifest|icon$|icons/|apple-icon$|sw.js$).*)',
+    '/((?!_next/static|_next/image|favicon\\.ico$|api/health$|manifest\\.webmanifest$|icon$|icons/|apple-icon$|sw\\.js$).*)',
   ],
 };

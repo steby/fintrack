@@ -12,8 +12,6 @@ import {
   mockCronEnv,
 } from '../test-helpers';
 
-vi.mock('server-only', () => ({}));
-
 function targetPeriod() {
   const now = new Date();
   const currentYM = { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };

@@ -5,8 +5,6 @@ import { categories, recurringSchedule, monthlyEntries } from '../../../../lib/d
 import { setFlag } from '../../../../lib/flags';
 import { CRON_SECRET, makeHousehold, cleanupHousehold, mockCronEnv } from '../test-helpers';
 
-vi.mock('server-only', () => ({}));
-
 afterAll(async () => {
   await pool.end();
 });

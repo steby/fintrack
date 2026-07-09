@@ -7,12 +7,12 @@ import { inviteExpiry } from '../../lib/auth/invite-rules';
 import { makeHouseholdWithUser, formData, cleanup } from './test-helpers';
 
 // Same mocking strategy as app/actions/members.integration.test.ts: mock next/headers
-// (cookies) and server-only so these Server Actions run against a REAL database with
-// only the Next-runtime-specific plumbing replaced. redirect() is additionally mocked
-// here (members.ts's actions never redirect; invites.ts's acceptInviteAction does on
-// success) to throw a catchable marker instead of crashing the test process.
+// (cookies) so these Server Actions run against a REAL database with only the
+// Next-runtime-specific plumbing replaced (server-only/next/cache are mocked globally
+// in vitest.setup.integration.ts). redirect() is additionally mocked here (members.ts's
+// actions never redirect; invites.ts's acceptInviteAction does on success) to throw a
+// catchable marker instead of crashing the test process.
 let mockToken: string | undefined;
-vi.mock('server-only', () => ({}));
 vi.mock('next/headers', () => ({
   cookies: async () => ({
     get: (name: string) =>

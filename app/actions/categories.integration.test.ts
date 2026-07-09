@@ -6,8 +6,6 @@ import { makeHouseholdWithUser, formData, cleanup } from './test-helpers';
 
 // Same mocking strategy as app/actions/members.integration.test.ts.
 let mockToken: string | undefined;
-vi.mock('server-only', () => ({}));
-vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/headers', () => ({
   cookies: async () => ({
     get: (name: string) =>
