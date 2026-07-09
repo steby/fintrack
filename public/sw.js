@@ -11,12 +11,33 @@
 // strategy risks serving one user's page (or a stale permission/error state) to the
 // next person on a shared device after logout. A future edit that "simplifies" this
 // into caching navigation requests would reintroduce that bug — don't.
+//
+// KNOWN LIMITATION, not auto-fixed: this file is served verbatim from public/ (no
+// build step touches it), so CACHE_NAME can't be derived from a build id/content hash
+// the way /_next/static/* asset URLs are. If a static PWA asset actually changes
+// (e.g. lib/pwa/icon.tsx's glyph, or app/manifest.ts's fields), a browser that already
+// cached the old response under this same name will keep serving it until this string
+// is bumped by hand (e.g. 'fintrack-static-v2') in the same commit — activate()'s
+// cleanup below only clears caches whose name differs from the CURRENT one, so nothing
+// happens automatically otherwise. A real fix (deriving this from something that
+// changes every deploy) needs a codegen/templating step this app doesn't have; that's
+// more build-pipeline complexity than a household app's static icon caching warrants
+// today (see PROGRESS.md's Phase 7 code-review entry for the full reasoning).
 const CACHE_NAME = 'fintrack-static-v1';
 
 // /_next/static/* is content-hashed and immutable per build (safe to cache forever).
 // The rest are this app's own generated icon/manifest routes (app/icon.tsx,
 // app/apple-icon.tsx, app/icons/{192,512}/route.tsx, app/manifest.ts) — deterministic
 // per deploy, not per user, so equally safe to cache-first.
+//
+// Kept in sync BY HAND with proxy.ts's matcher exclusion list (same underlying set of
+// "static PWA asset" paths, described independently in two files that run in
+// completely different runtimes — this one's a plain browser-side script Next never
+// bundles, proxy.ts is compiled Node/Edge code — so they can't share one literal
+// module without adding a codegen step). If you add a new static PWA route, add it to
+// BOTH lists, or it either silently stops being cached (forgotten here) or silently
+// bypasses the session check (forgotten in proxy.ts, the "manifest.webmanifest"
+// 404-behind-login bug from earlier in this same phase, in miniature).
 function isCacheableStatic(url) {
   if (url.origin !== self.location.origin) return false;
   return (
@@ -62,7 +83,10 @@ self.addEventListener('fetch', (event) => {
       if (cached) return cached;
 
       const response = await fetch(event.request);
-      if (response.ok) cache.put(event.request, response.clone());
+      // Awaited, not fired-and-forgotten: event.respondWith() only keeps the worker
+      // alive until ITS promise settles, so returning before the cache write finishes
+      // risks the write getting silently cut off if the worker is suspended right after.
+      if (response.ok) await cache.put(event.request, response.clone());
       return response;
     })(),
   );

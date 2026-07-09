@@ -1,10 +1,10 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db, pool } from '../../lib/db';
-import { households, users, sessions, householdInvitations } from '../../lib/db/schema';
+import { users, sessions, householdInvitations } from '../../lib/db/schema';
 import { generateToken } from '../../lib/auth/token';
-import { newExpiry } from '../../lib/auth/session-rules';
 import { inviteExpiry } from '../../lib/auth/invite-rules';
+import { makeHouseholdWithUser, formData, cleanup } from './test-helpers';
 
 // Same mocking strategy as app/actions/members.integration.test.ts: mock next/headers
 // (cookies) and server-only so these Server Actions run against a REAL database with
@@ -34,35 +34,6 @@ afterAll(async () => {
 afterEach(() => {
   mockToken = undefined;
 });
-
-async function makeHouseholdWithUser(role: 'owner' | 'member' | 'viewer', label: string) {
-  const [household] = await db.insert(households).values({ name: label }).returning();
-  const [user] = await db
-    .insert(users)
-    .values({
-      householdId: household.id,
-      email: `${label.replace(/\s+/g, '-')}-${Date.now()}-${Math.random()}@example.com`,
-      passwordHash: 'x',
-      name: role,
-      role,
-    })
-    .returning();
-  const token = generateToken();
-  await db.insert(sessions).values({ id: token, userId: user.id, expiresAt: newExpiry() });
-  return { household, user, token };
-}
-
-function formData(fields: Record<string, string>): FormData {
-  const fd = new FormData();
-  for (const [key, value] of Object.entries(fields)) fd.set(key, value);
-  return fd;
-}
-
-async function cleanup(...householdIds: string[]) {
-  for (const id of householdIds) {
-    await db.delete(households).where(eq(households.id, id));
-  }
-}
 
 function isRedirect(reason: unknown): boolean {
   return reason instanceof Error && reason.message.startsWith('NEXT_REDIRECT');

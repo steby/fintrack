@@ -2508,11 +2508,128 @@ in-process (credential never printed or persisted to disk).
   cron config and the rollback procedure in `RUNBOOK.md` are both written and ready,
   just unverified against a real deployment.
 
-**Test/CI status:** unit 349/349, integration 206/206 (net new: cross-household
-scoping 6, entry-attribution gating 2, query-limits predicate 3 — 11 new tests),
-E2E 45/45 under `CI=true` (production build; +7 new: 3 PWA installability, 3 mobile
-viewport, 1 session fixation). Coverage 98.2% stmts / 95.87% branch on `lib/**`
+**Test/CI status:** unit 349/349 (net new: query-limits predicate 3, on top of Phase
+6's 346), integration 206/206 (net new: cross-household scoping 6, entry-attribution
+gating 2 — 8 new tests; the pre-Phase-7 baseline was actually 198, not the 188 several
+earlier Phase 6 entries in this doc state — that count was already stale before this
+phase started, caught while fact-checking this line during `/code-review`'s gap-sweep
+pass, not something Phase 7 itself broke), E2E 45/45 under `CI=true` (production
+build; +7 new: 3 PWA installability, 3 mobile viewport, 1 session fixation). Coverage
+98.2% stmts / 95.87% branch on `lib/**`
 (gate 80%) — `lib/pwa/icon.tsx` added to the coverage exclude list (presentational
 JSX, same precedent as `lib/utils.ts`). Lint/typecheck/format/build all clean.
+
+## `/code-review` pass on the full Phase 7 diff (10 angles, verified, swept)
+
+Full xhigh-effort review against `HEAD~1...HEAD` (the complete Phase 7 diff, 32 files,
+~1293 insertions). 10 parallel finder angles → 1-vote verification per surviving
+candidate → one gap-sweep pass. `proxy.ts`'s matcher precision gap was independently
+found by 5 of the 10 finder angles — the strongest cross-angle signal of this project's
+code reviews so far. 10 findings reported after verification (1 REFUTED and dropped:
+a claimed touch-target gap in other row components turned out not to exist — those
+files use labeled text buttons, not icon-only ones). Fixed 7; deferred 3 with reasoning.
+
+**Fixed — real correctness bugs:**
+
+- **`proxy.ts`'s matcher used unanchored substrings** (`icon`, `apple-icon`) in its
+  negative lookahead, confirmed by directly compiling and testing the regex: a future
+  route merely starting with those letters (`/icon-editor`, `/iconography`) would
+  silently bypass the session check entirely — no live exploit today (only the 4
+  intended PWA routes exist), but exactly the failure class the file's own comment
+  warns about. Fixed by anchoring each exclusion (`icon$`, `icons/`, `apple-icon$`,
+  `sw.js$`) to an exact path or directory boundary; verified against both the 4 real
+  routes and 4 hypothetical collision routes before and after.
+- **`public/sw.js`'s `cache.put()` wasn't awaited** before the fetch handler returned
+  its response — `event.respondWith()` only keeps the worker alive until ITS promise
+  settles, so the cache write could be silently cut off if the worker suspended right
+  after returning. Fixed with one `await`.
+- **`app/icons/192/route.tsx` and `/512/route.tsx` were dynamically re-rendered on
+  every request**, unlike sibling `icon.tsx`/`apple-icon.tsx` (confirmed via a real
+  production build: `○` static vs `ƒ` dynamic) — plain Route Handlers aren't
+  statically optimized by default the way the special icon-file convention is. Fixed
+  with `export const dynamic = 'force-static'` on both.
+- **The shared icon glyph's `fontSize` was hand-computed separately in 4 files**, and
+  `apple-icon.tsx`'s ratio (110/180 = 0.611) had already drifted from the other
+  three's (0.625) — a real, verified inconsistency. Fixed by having `appIconGlyph`
+  take the icon's pixel `size` and derive `fontSize` internally
+  (`Math.round(size * 0.625)`), so every call site just passes its own size and can't
+  drift again; `apple-icon.tsx` now renders at the corrected 113.
+- **Hiding the sidebar below `md` also hid `YearNav`** (the one-tap dashboard-year
+  quick-jump) with nothing replacing it — confirmed as a real functionality loss on
+  mobile for every non-dashboard page (the dashboard's own `YearPicker` is ±1-year-only
+  and doesn't exist elsewhere). Fixed by rendering `<YearNav />` in the new mobile
+  settings hub (`app/(app)/settings/page.tsx`), alongside the other sidebar-only
+  affordances (theme toggle, sign-out) already relocated there.
+
+**Fixed — cleanup/duplication:**
+
+- `lib/db/queries.ts` had the same 3-line "warn if unusually large row count" block
+  copy-pasted in `getAccountEntriesBeforeYear` and `getExportRows`. Extracted into a
+  local `warnIfUnusuallyLarge(queryName, householdId, rowCount)` helper — kept in
+  `lib/db/queries.ts` itself rather than `lib/domain/query-limits.ts`, per the
+  verifier's correct observation that the domain module is deliberately
+  side-effect-free (no other `lib/domain/*.ts` file imports the logger) and a warn
+  call would break that.
+- **`app/actions/cross-household-scoping.integration.test.ts` turned out to be the
+  11th hand-copied instance** of the `makeHouseholdWithUser`/`formData`/`cleanup`
+  fixture trio across `app/actions/*.integration.test.ts` — nearly 4x this project's
+  own documented "3+ instances" extraction threshold (the same threshold that
+  triggered extracting `app/api/cron/test-helpers.ts` at exactly 3 instances during
+  the Phase 6 review). Extracted `app/actions/test-helpers.ts` and updated all 10
+  eligible files (`accounts`, `categories`, `goals`, `monthly`, `recurring`, `invites`,
+  `notifications`, `import`, `members`, and the new `cross-household-scoping` file) to
+  import from it — removing now-unused per-file imports (`generateToken`, `newExpiry`,
+  and the `households`/`users`/`sessions` schema tables where nothing else in that
+  file used them) along the way. `members.integration.test.ts`'s local variant lacked
+  a `label` parameter (auto-generating `Test ${role} household`); its 11 call sites
+  were each given an explicit, distinctive label instead, matching the other 10
+  files' convention. `auth.integration.test.ts` was deliberately left alone — it needs
+  a real hashed password and no pre-existing session (it tests login itself), a
+  genuinely different fixture shape, not copy-paste duplication of the same one.
+  Integration suite re-ran clean at exactly 206/206 afterward — same count, same
+  tests, just no longer duplicated 11 times over.
+- **Found and fixed a documentation bug while fact-checking, not a code bug:** this
+  same Phase 7 entry's own "Test/CI status" line miscounted its breakdown (folded
+  `query-limits`'s 3 _unit_ tests into the _integration_ 206 total's "net new" list).
+  Investigating it turned up a second, older inaccuracy: several earlier Phase 6
+  entries in this document claimed an integration baseline of "188/188," but counting
+  `it(` occurrences in every `*.integration.test.ts` file at that exact commit
+  (`HEAD~1`) shows the real count was already 198 — stale even before Phase 7 started.
+  198 + 8 real new tests (6 cross-household scoping + 2 entry-attribution gating) = the
+  206 actually observed, which resolves the discrepancy. Corrected the line rather than
+  leave a doc that doesn't reconcile with its own numbers.
+
+**Deliberately deferred, with reasoning (all documented inline at the point of the
+tradeoff, not just here):**
+
+- **`public/sw.js`'s `CACHE_NAME` never auto-bumps per deploy**, so a changed static
+  PWA asset (e.g. the icon glyph) could be served stale indefinitely to a browser that
+  already cached the old response. Real, but `public/*` files are served verbatim with
+  no build step — a proper fix needs a codegen/templating step to inject something
+  that changes every deploy (a content hash, a build id), which is more build-pipeline
+  complexity than a household app's static-icon caching warrants today. Documented
+  with the manual-bump instruction directly in `public/sw.js`.
+- **`public/sw.js`'s `isCacheableStatic()` and `proxy.ts`'s matcher independently
+  hardcode overlapping "static PWA asset path" lists**, with no shared source of
+  truth — the two files run in genuinely different runtimes (a plain unbundled
+  browser script vs. compiled Node/Edge code), so sharing one literal module isn't
+  straightforward without adding a codegen step. Cross-referenced both files with a
+  comment pointing at the other, so a future route addition is at least flagged as
+  needing both lists updated, even without automated enforcement.
+- **Navigation link lists are hand-duplicated across the sidebar, `BottomNav`'s
+  `TABS`, and the settings hub's `links`.** The verifier came back genuinely split:
+  real drift risk, but this project has a repeatedly-documented preference for
+  tolerating small, non-mechanical duplication over speculative shared abstractions,
+  and the three lists aren't true 1:1 duplicates (full sidebar vs. condensed 5-tab set
+  vs. hub leftovers) — a literal shared array would need per-surface visibility
+  metadata, risking exactly the kind of premature abstraction this project avoids.
+  Left as three separate lists, with a comment on `BottomNav`'s `TABS` explaining the
+  reasoning and flagging what to remember when adding a new page.
+
+Re-verified end to end after every fix: lint/typecheck/format/build clean (production
+build confirms `/icons/192`/`/icons/512` now show `○` static, matching `/icon`/
+`/apple-icon`), unit 349/349 unchanged, integration 206/206 unchanged (same tests,
+de-duplicated fixtures), E2E 45/45 under `CI=true` (production build). Coverage
+98.2% stmts / 95.87% branch on `lib/**` (gate 80%), unchanged.
 
 ---

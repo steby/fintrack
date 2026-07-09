@@ -1,18 +1,10 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { eq, and } from 'drizzle-orm';
 import { db, pool } from '../../lib/db';
-import {
-  households,
-  users,
-  sessions,
-  categories,
-  bankAccounts,
-  monthlyEntries,
-} from '../../lib/db/schema';
-import { generateToken } from '../../lib/auth/token';
-import { newExpiry } from '../../lib/auth/session-rules';
+import { categories, bankAccounts, monthlyEntries } from '../../lib/db/schema';
 import { setFlag } from '../../lib/flags';
 import type { ColumnMapping } from '../../lib/domain/csv';
+import { makeHouseholdWithUser, cleanup } from './test-helpers';
 
 let mockToken: string | undefined;
 vi.mock('server-only', () => ({}));
@@ -33,23 +25,6 @@ afterAll(async () => {
 afterEach(() => {
   mockToken = undefined;
 });
-
-async function makeHouseholdWithUser(role: 'owner' | 'member' | 'viewer', label: string) {
-  const [household] = await db.insert(households).values({ name: label }).returning();
-  const [user] = await db
-    .insert(users)
-    .values({
-      householdId: household.id,
-      email: `${label.replace(/\s+/g, '-')}-${Date.now()}-${Math.random()}@example.com`,
-      passwordHash: 'x',
-      name: role,
-      role,
-    })
-    .returning();
-  const token = generateToken();
-  await db.insert(sessions).values({ id: token, userId: user.id, expiresAt: newExpiry() });
-  return { household, user, token };
-}
 
 // Every fixture CSV in this file uses the header `Date,Item,Amount` — column
 // positions 0/1/2 — since app/actions/import.ts's ColumnMapping is index-based, not
@@ -81,12 +56,6 @@ function importFormData(
   fd.set('mappingAccount', mapping.account);
   for (const [key, value] of Object.entries(extra)) fd.set(key, value);
   return fd;
-}
-
-async function cleanup(...householdIds: string[]) {
-  for (const id of householdIds) {
-    await db.delete(households).where(eq(households.id, id));
-  }
 }
 
 describe('previewImportAction', () => {

@@ -2,17 +2,13 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db, pool } from '../../lib/db';
 import {
-  households,
-  users,
-  sessions,
   categories,
   goals,
   monthlyEntries,
   recurringSchedule,
   bankAccounts,
 } from '../../lib/db/schema';
-import { generateToken } from '../../lib/auth/token';
-import { newExpiry } from '../../lib/auth/session-rules';
+import { makeHouseholdWithUser, formData, cleanup } from './test-helpers';
 
 // Final Phase 7 adversarial-sweep pass (spec.md: "scoping probe with two seeded
 // households"). Every action module already scopes its mutations by householdId in the
@@ -42,35 +38,6 @@ afterAll(async () => {
 afterEach(() => {
   mockToken = undefined;
 });
-
-async function makeHouseholdWithUser(role: 'owner' | 'member' | 'viewer', label: string) {
-  const [household] = await db.insert(households).values({ name: label }).returning();
-  const [user] = await db
-    .insert(users)
-    .values({
-      householdId: household.id,
-      email: `${label.replace(/\s+/g, '-')}-${Date.now()}-${Math.random()}@example.com`,
-      passwordHash: 'x',
-      name: role,
-      role,
-    })
-    .returning();
-  const token = generateToken();
-  await db.insert(sessions).values({ id: token, userId: user.id, expiresAt: newExpiry() });
-  return { household, user, token };
-}
-
-function formData(fields: Record<string, string>): FormData {
-  const fd = new FormData();
-  for (const [key, value] of Object.entries(fields)) fd.set(key, value);
-  return fd;
-}
-
-async function cleanup(...householdIds: string[]) {
-  for (const id of householdIds) {
-    await db.delete(households).where(eq(households.id, id));
-  }
-}
 
 describe('cross-household scoping probes', () => {
   it('cannot update or delete a category belonging to a different household', async () => {

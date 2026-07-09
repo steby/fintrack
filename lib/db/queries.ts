@@ -32,7 +32,14 @@ export type EmailType = 'reminder' | 'recap';
 // statement_timeout (lib/db/index.ts) is the real hard backstop against pathological
 // growth; this just logs loudly long before that ever fires (see
 // lib/domain/query-limits.ts for the threshold and why it's a pure, unit-tested
-// predicate rather than inlined here).
+// predicate rather than inlined here). This helper stays here rather than in
+// lib/domain/query-limits.ts — that module is deliberately pure/side-effect-free (no
+// other lib/domain/*.ts file imports the logger), and a warn call would break that.
+function warnIfUnusuallyLarge(queryName: string, householdId: string, rowCount: number) {
+  if (isUnusuallyLargeRowCount(rowCount)) {
+    logger.warn({ householdId, rowCount }, `${queryName} returned an unusually large row count`);
+  }
+}
 
 // Dashboard row fetch (spec.md Phase 3) — one scoped query per year, left-joined for
 // category direction/name/color and bank account name. Deliberately fetches
@@ -133,12 +140,7 @@ export async function getAccountEntriesBeforeYear(
     .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
     .where(and(eq(monthlyEntries.householdId, householdId), lt(monthlyEntries.year, year)));
 
-  if (isUnusuallyLargeRowCount(rows.length)) {
-    logger.warn(
-      { householdId, rowCount: rows.length },
-      'getAccountEntriesBeforeYear returned an unusually large row count',
-    );
-  }
+  warnIfUnusuallyLarge('getAccountEntriesBeforeYear', householdId, rows.length);
 
   return rows.map((row) => ({
     bankAccountId: row.bankAccountId,
@@ -257,12 +259,7 @@ export async function getExportRows(householdId: string): Promise<ExportRow[]> {
     .where(eq(monthlyEntries.householdId, householdId))
     .orderBy(monthlyEntries.year, monthlyEntries.month, monthlyEntries.item);
 
-  if (isUnusuallyLargeRowCount(rows.length)) {
-    logger.warn(
-      { householdId, rowCount: rows.length },
-      'getExportRows returned an unusually large row count',
-    );
-  }
+  warnIfUnusuallyLarge('getExportRows', householdId, rows.length);
 
   return rows;
 }

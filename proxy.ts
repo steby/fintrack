@@ -96,7 +96,17 @@ export const config = {
   // an install prompt, and registers sw.js, before any login happens (most visibly on
   // /login itself), so they must never redirect for lack of a session, same as the
   // pre-existing static/health exclusions below.
+  //
+  // `icon$`/`apple-icon$`/`sw.js$` are anchored to the end of the path (not bare
+  // substrings) and `icons/` requires the trailing slash — a bare `icon`/`apple-icon`
+  // alternative would also match any FUTURE route merely starting with those letters
+  // (e.g. a hypothetical `/icon-editor`) and silently exempt it from the session check
+  // entirely, the exact class of gap this file's own comment above warns about.
+  //
+  // This same set of paths is ALSO hardcoded in public/sw.js's isCacheableStatic() —
+  // kept in sync by hand (see that file's comment for why the two can't share a
+  // literal module). Adding a new static PWA route means updating both lists.
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|api/health|manifest.webmanifest|icon|apple-icon|sw.js).*)',
+    '/((?!_next/static|_next/image|favicon.ico|api/health|manifest.webmanifest|icon$|icons/|apple-icon$|sw.js$).*)',
   ],
 };

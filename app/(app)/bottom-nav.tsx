@@ -5,6 +5,14 @@ import { usePathname } from 'next/navigation';
 import { Home, Calendar, Repeat, Target, Menu } from 'lucide-react';
 import type { ComponentType } from 'react';
 
+// Deliberately a separate, hand-written list from the sidebar's <Link> list
+// (app/(app)/layout.tsx) and the settings hub's `links` array
+// (app/(app)/settings/page.tsx), not a single shared source of truth — the three
+// aren't 1:1 duplicates (full desktop sidebar vs. this condensed 5-tab set vs. the
+// hub's "everything else" leftovers), and this project's own established convention
+// (see PROGRESS.md) tolerates small, non-mechanical duplication like this over a
+// speculative shared-nav-model abstraction. Adding a page: remember it needs a home on
+// at least one of the three surfaces, or it becomes unreachable on mobile/desktop.
 const TABS: {
   href: string;
   label: string;

@@ -4,12 +4,14 @@ import { can } from '../../../lib/auth/rbac';
 import { logoutAction } from '../../actions/auth';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { YearNav } from '../year-nav';
 
 // The sidebar in app/(app)/layout.tsx already links every one of these pages directly
 // and is always visible at md+, so a desktop user never needs this hub. It exists for
 // the mobile bottom nav's "More" tab (app/(app)/bottom-nav.tsx): the sidebar is hidden
 // below md, so this is the only reachable landing spot for settings, import, sign-out,
-// and theme — everything that didn't fit as its own bottom-nav tab.
+// theme, and (below) the dashboard year quick-jump — everything that didn't fit as its
+// own bottom-nav tab or that the sidebar carried but BottomNav's 5 tabs don't.
 export default async function SettingsHubPage() {
   const user = await requireUser();
 
@@ -33,6 +35,8 @@ export default async function SettingsHubPage() {
         </div>
         <ThemeToggle />
       </div>
+
+      <YearNav />
 
       <nav className="flex flex-col divide-y rounded-md border">
         {links.map((link) => (
