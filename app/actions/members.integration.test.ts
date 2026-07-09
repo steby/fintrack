@@ -73,8 +73,10 @@ describe('changeMemberRoleAction / removeMemberAction — role and cross-househo
   it('an owner can change another member’s role within their own household', async () => {
     const { changeMemberRoleAction } = await import('./members');
     const owner = await makeHouseholdWithUser('owner');
-    const { user: target } = await makeHouseholdWithUser('viewer');
-    // Re-home the target into the owner's household for this test.
+    const { user: target, household: targetHousehold } = await makeHouseholdWithUser('viewer');
+    // Re-home the target into the owner's household for this test. targetHousehold is
+    // now empty (no user references it) but the row itself still exists and must be
+    // cleaned up separately from owner.household.id.
     await db.update(users).set({ householdId: owner.household.id }).where(eq(users.id, target.id));
 
     mockToken = owner.token;
@@ -87,13 +89,13 @@ describe('changeMemberRoleAction / removeMemberAction — role and cross-househo
     const [updated] = await db.select().from(users).where(eq(users.id, target.id));
     expect(updated.role).toBe('member');
 
-    await cleanup(owner.household.id);
+    await cleanup(owner.household.id, targetHousehold.id);
   });
 
   it('a member cannot change anyone’s role — requireRole rejects before the DB write', async () => {
     const { changeMemberRoleAction } = await import('./members');
     const member = await makeHouseholdWithUser('member');
-    const { user: target } = await makeHouseholdWithUser('viewer');
+    const { user: target, household: targetHousehold } = await makeHouseholdWithUser('viewer');
     await db.update(users).set({ householdId: member.household.id }).where(eq(users.id, target.id));
 
     mockToken = member.token;
@@ -104,7 +106,7 @@ describe('changeMemberRoleAction / removeMemberAction — role and cross-househo
     const [unchanged] = await db.select().from(users).where(eq(users.id, target.id));
     expect(unchanged.role).toBe('viewer');
 
-    await cleanup(member.household.id);
+    await cleanup(member.household.id, targetHousehold.id);
   });
 
   it('a viewer cannot change anyone’s role either', async () => {

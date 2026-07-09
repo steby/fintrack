@@ -14,6 +14,9 @@ vi.mock('next/navigation', () => ({ redirect: redirectMock }));
 const getSessionUserMock = vi.fn();
 vi.mock('./session', () => ({ getSessionUser: getSessionUserMock }));
 
+const isEnabledMock = vi.fn();
+vi.mock('../flags', () => ({ isEnabled: isEnabledMock }));
+
 const OWNER = { id: 'u1', householdId: 'h1', email: 'a@example.com', name: 'A', role: 'owner' };
 const VIEWER = { id: 'u2', householdId: 'h1', email: 'b@example.com', name: 'B', role: 'viewer' };
 
@@ -62,6 +65,40 @@ describe('guards.ts', () => {
 
       const { requireRole } = await import('./guards');
       await expect(requireRole('write')).rejects.toThrow('NEXT_REDIRECT:/login');
+    });
+  });
+
+  // Unifies what were 4 independently-shaped flag-gating patterns across
+  // categories.ts/accounts.ts/goals.ts/import.ts into one "flag off -> error string"
+  // primitive per flag kind — see PROGRESS.md's cross-phase cleanup pass entry.
+  describe('requireConfigFlag', () => {
+    it('returns null when the flag is enabled', async () => {
+      const { requireConfigFlag } = await import('./guards');
+      expect(requireConfigFlag(true, 'Feature not enabled.')).toBeNull();
+    });
+
+    it('returns the given message when the flag is disabled', async () => {
+      const { requireConfigFlag } = await import('./guards');
+      expect(requireConfigFlag(false, 'Feature not enabled.')).toBe('Feature not enabled.');
+    });
+  });
+
+  describe('requireKillSwitch', () => {
+    it('returns null when the kill-switch is on', async () => {
+      isEnabledMock.mockResolvedValue(true);
+
+      const { requireKillSwitch } = await import('./guards');
+      await expect(requireKillSwitch('h1', 'csv_import', 'Not enabled.')).resolves.toBeNull();
+      expect(isEnabledMock).toHaveBeenCalledWith('h1', 'csv_import');
+    });
+
+    it('returns the given message when the kill-switch is off', async () => {
+      isEnabledMock.mockResolvedValue(false);
+
+      const { requireKillSwitch } = await import('./guards');
+      await expect(requireKillSwitch('h1', 'csv_import', 'Not enabled.')).resolves.toBe(
+        'Not enabled.',
+      );
     });
   });
 });

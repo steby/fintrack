@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { goals } from '../../lib/db/schema';
-import { requireRole } from '../../lib/auth/guards';
+import { requireRole, requireConfigFlag } from '../../lib/auth/guards';
 import { env } from '../../lib/env';
 import { moneyInputSchema, optionalMoneyInputSchema, centsToAmount } from '../../lib/money';
 
@@ -18,16 +18,6 @@ const targetDateSchema = z.string().refine((v) => {
   const parsed = new Date(`${v}T00:00:00Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === v;
 }, 'Enter a valid date (YYYY-MM-DD)');
-
-function requireGoalsEnabled(): string | null {
-  // spec.md Phase 4 adversarial: "flag off => zero traces in UI and actions rejected" —
-  // this covers a forged request to a household that never enabled goals, independent
-  // of whatever the UI does or doesn't show.
-  if (!env.FEATURE_SAVINGS_GOALS) {
-    return 'Savings goals are not enabled.';
-  }
-  return null;
-}
 
 const createGoalSchema = z.object({
   name: z.string().trim().min(1, 'Goal name is required').max(100),
@@ -42,7 +32,10 @@ export async function createGoalAction(
   formData: FormData,
 ): Promise<GoalActionState> {
   const actingUser = await requireRole('write');
-  const flagError = requireGoalsEnabled();
+  // spec.md Phase 4 adversarial: "flag off => zero traces in UI and actions rejected" —
+  // this covers a forged request to a household that never enabled goals, independent
+  // of whatever the UI does or doesn't show.
+  const flagError = requireConfigFlag(env.FEATURE_SAVINGS_GOALS, 'Savings goals are not enabled.');
   if (flagError) return { error: flagError };
 
   const parsed = createGoalSchema.safeParse({
@@ -80,7 +73,10 @@ export async function updateGoalAction(
   formData: FormData,
 ): Promise<GoalActionState> {
   const actingUser = await requireRole('write');
-  const flagError = requireGoalsEnabled();
+  // spec.md Phase 4 adversarial: "flag off => zero traces in UI and actions rejected" —
+  // this covers a forged request to a household that never enabled goals, independent
+  // of whatever the UI does or doesn't show.
+  const flagError = requireConfigFlag(env.FEATURE_SAVINGS_GOALS, 'Savings goals are not enabled.');
   if (flagError) return { error: flagError };
 
   const parsed = updateGoalSchema.safeParse({
@@ -122,8 +118,10 @@ export async function deleteGoalAction(
   formData: FormData,
 ): Promise<GoalActionState> {
   const actingUser = await requireRole('write');
-  const flagError = requireGoalsEnabled();
-  if (flagError) return { error: flagError };
+  // Deliberately NOT gated by FEATURE_SAVINGS_GOALS, unlike create/update — an owner
+  // who disabled goals still needs to be able to remove an old one; re-enabling the
+  // flag just to delete something would be a needless, confusing detour. Deleting
+  // never creates a new trace of the feature the way a create/update write would.
 
   const parsed = deleteGoalSchema.safeParse({ id: formData.get('id') });
   if (!parsed.success) {

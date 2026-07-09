@@ -102,9 +102,8 @@ export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canMana
       </td>
       <td className="p-2 text-right">
         {canManage ? (
-          <form action={actualAction} className="flex justify-end">
+          <form action={actualAction} className="flex flex-col items-end gap-1">
             <input type="hidden" name="id" value={entry.id} />
-            <input type="hidden" name="actualDate" value={entry.actualDate ?? ''} />
             <input
               type="number"
               name="actualAmount"
@@ -130,9 +129,33 @@ export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canMana
                 }
               }}
             />
+            <input
+              type="date"
+              name="actualDate"
+              defaultValue={entry.actualDate ?? ''}
+              disabled={actualPending}
+              aria-label="Actual date"
+              className="h-7 w-32 rounded border bg-background px-1.5 text-right text-xs tabular-nums"
+              onBlur={(e) => e.currentTarget.form?.requestSubmit()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.currentTarget.form?.requestSubmit();
+                } else if (e.key === 'Escape') {
+                  e.currentTarget.value = entry.actualDate ?? '';
+                  e.currentTarget.blur();
+                }
+              }}
+            />
           </form>
         ) : (
-          <span className="tabular-nums">{entry.actualAmount ? formatSGD(actualCents!) : '—'}</span>
+          <div className="flex flex-col items-end gap-0.5">
+            <span className="tabular-nums">
+              {entry.actualAmount ? formatSGD(actualCents!) : '—'}
+            </span>
+            {entry.actualDate && (
+              <span className="text-xs text-muted-foreground">{entry.actualDate}</span>
+            )}
+          </div>
         )}
         {actualState?.error && <p className="text-xs text-destructive">{actualState.error}</p>}
       </td>

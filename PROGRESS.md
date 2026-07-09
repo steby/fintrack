@@ -1814,3 +1814,162 @@ the same pre-existing transient flake pattern documented in Phase 3, not a
 regression from touching `auth.ts`'s schemas.
 
 ---
+
+## Cross-phase cleanup pass: closing deferred items before Phase 6 (2026-07-09)
+
+Explicit user directive — close out accumulated deferred/unresolved items from every
+prior phase before starting Phase 6, rather than letting them compound further. Not a
+`/code-review` pass over a diff; a triage of everything already logged as deferred or
+unresolved across Phase 0 through Phase 5, deciding fix-now vs. still-correctly-deferred
+for each, with reasoning either way.
+
+**Resolved — the one ⚠ UNRESOLVED item:**
+
+- **Git history still contained real personal/financial data.** `lib/db/
+clean-legacy-data.ts` (deleted at HEAD since the post-Phase-2 pass, but still reachable
+  via `git show 8ebf134:lib/db/clean-legacy-data.ts` on the now-public repo) held the
+  real household-member names and account names the `seed.ts` genericization pass had
+  already scrubbed from HEAD but never from history. User explicitly authorized the
+  force-push this required (standing policy pauses history rewrites for explicit
+  go-ahead every time, even mid-session). Fresh backup bundle taken first
+  (`fintrack-backups/fintrack-pre-clean-legacy-rewrite-*.bundle`, alongside the existing
+  one from the `seed.ts` rewrite). Ran `git filter-repo --path
+lib/db/clean-legacy-data.ts --invert-paths`, force-pushed with an explicit
+  `--force-with-lease` pinned to the known-good remote SHA (safer than a bare
+  `--force-with-lease`, which failed once with "stale info" since `filter-repo` drops
+  and this session re-added the `origin` remote, leaving no tracked lease value to
+  compare against). Verified with a full-history grep afterward
+  (`git log --all --oneline -- lib/db/clean-legacy-data.ts` returns nothing) and CI
+  green on the rewritten history. Same predictable fallout as the first rewrite:
+  `.gitleaksignore`'s commit-SHA-pinned fingerprint for the unrelated Phase 0
+  adversarial-secret entry broke again (every commit SHA shifts after `filter-repo`);
+  updated to the new SHA, with all prior SHAs kept alongside (harmless) in case a stale
+  checkout ever resolves one of them. Considered switching to a path-based
+  `.gitleaks.toml` allowlist instead (survives rewrites permanently, unlike a SHA
+  pin) — deliberately not done: no local `gitleaks` binary to verify the TOML schema
+  against, and CI's Docker step pulls `:latest`, so an unverified schema change risked
+  breaking the secret-scan gate itself with no fast feedback loop. Still a real,
+  deferred improvement, now hit twice.
+
+**Fixed — real gaps, in scope for a dedicated cleanup pass (several were previously
+deferred specifically as "out of proportion for a review-fixup pass," which no longer
+applies here):**
+
+- **Kill-switch/flag-gating had 4 independently-shaped variants**, flagged in both the
+  Phase 4 and Phase 5 hardening passes as "worth prioritizing soon" and left
+  unaddressed both times. `categories.ts`/`accounts.ts` each hand-rolled an inline
+  `!env.FEATURE_X` check, `goals.ts` had a private `requireGoalsEnabled()`, `import.ts`
+  had a private `requireCsvImportEnabled()`. Phase 6 was about to add two more
+  kill-switches (`email_reminders`, `monthly_recap`), which would have produced a 5th
+  and 6th variant on top. Added two shared primitives to `lib/auth/guards.ts` —
+  `requireConfigFlag(enabled, message)` for env-var-backed config flags (sync) and
+  `requireKillSwitch(householdId, flag, message)` for `household_settings`-backed
+  kill-switches (async, wraps `lib/flags.ts`'s `isEnabled`) — both returning a
+  user-facing error string, matching the existing `requireRole` convention of
+  surfacing a rejected action as a form error rather than a throw. Migrated all 4 call
+  sites. Deliberately did NOT force `monthly/page.tsx`'s `auto_generate` check or the
+  `/import`, `/goals`, dashboard, and settings pages' page-level render conditionals
+  through these helpers — those need a raw boolean for an `if`, not an
+  action-rejection error string, and were never actually part of the duplicated
+  pattern being complained about. New tests in `lib/auth/guards.test.ts` for both
+  helpers (guards.ts coverage was previously only 83%/50% stmts/branches on the
+  now-added lines; back to 100% after).
+- **`deleteGoalAction` was gated by the same `FEATURE_SAVINGS_GOALS` check as
+  create/update**, so an owner who disabled goals couldn't remove an old one without
+  re-enabling the flag first (a config flag — re-enabling means a redeploy). Explicitly
+  deferred twice before as "a real design question, not a bug fix a review pass should
+  decide unilaterally"; decided now: delete is asymmetric, deliberately not gated.
+  This alone wasn't enough, though — `app/(app)/goals/page.tsx` returned a blanket "not
+  enabled" message with zero goal cards rendered when the flag was off, so there was no
+  UI path to reach a delete button regardless of what the action itself allowed. Fixed
+  the page too: goals still render (delete-only) when the flag is off — `GoalCard`
+  gained a `canEdit` prop that hides the Edit button/form (create/update stay genuinely
+  gated, only delete is exempt), no add form either way. New integration test
+  (`goals.integration.test.ts`) proving delete succeeds with the flag mocked off.
+- **No UI control anywhere let a user set an actual entry's date** — flagged as a
+  known gap since the Phase 2 hardening pass (`updateActualAction` always supported
+  amount+date per spec.md's task list; `entry-row.tsx` only ever echoed
+  `entry.actualDate` back through a hidden, unchangeable field). Added a real
+  `<input type="date">` alongside the existing amount input, same form, same
+  blur-to-save/Enter/Escape UX already established for the amount field. Read-only
+  view now also shows the date under the amount (previously shown nowhere). New E2E
+  assertion in `monthly.spec.ts`, verified against the real DB via `expect.poll` —
+  first draft of this test asserted on the input's own post-blur value instead, which
+  passed even before the fix actually landed anything server-side (an uncontrolled
+  field keeps showing whatever was typed regardless of whether the submission
+  completed), producing a false pass; caught this by running the suite and seeing a
+  _different_, correct failure (DB value still `null`) than the one the flawed
+  assertion would have hidden — fixed the test to poll the database directly, the same
+  proof-of-persistence standard already used for the sibling amount-field test.
+- **`members.integration.test.ts` leaked an orphaned household row on 2 of its 6
+  tests**, flagged and accepted as out-of-scope in the Phase 1 round-2 hardening pass.
+  Root cause: both tests create a `target` user in their own auto-generated household
+  via `makeHouseholdWithUser`, then re-home that user into a different household via a
+  direct `UPDATE` — but `cleanup()` only ever deleted the destination household, never
+  the now-empty original one the re-homed user's row was created in. Fixed by
+  capturing and cleaning up both household ids in the two affected tests. Pre-existing
+  orphaned rows already sitting in the `dev` branch from before this fix were not
+  swept — direct ad-hoc DB scripting against `DATABASE_URL` outside the test/seed
+  harness is exactly the pattern that caused Phase 1's real accidental-mass-delete
+  incident, and the auto-mode classifier correctly blocked a throwaway script written
+  for this; a handful of harmless empty rows isn't worth pushing past that guard for.
+- **`proxy.ts`'s session-validity query — run on every single request in the app —
+  carried an unnecessary `innerJoin` to `users`**, joining a table it never selected
+  any column from. `sessions.userId` has a FK to `users.id`, so the join could only
+  ever prove what the constraint already guarantees. Removed; zero behavior change,
+  one less join on the hottest query path in the codebase.
+- **A pre-existing integration test file used real Singapore bank brand names (DBS,
+  OCBC) as arbitrary account-name fixtures** — noted in the post-Phase-2 review as
+  "worth a second look... for consistency" after the seed-data genericization pass, on
+  a now-public repo. Not sensitive (no PII, no real figures, just borrowed company
+  names for a generic fixture), but cheap and consistent to fix: renamed to
+  `Test Bank A`/`Test Bank B` throughout `accounts.integration.test.ts`.
+- **React 19 auto-resets an uncontrolled `<form action={...}>` once the action
+  settles, including on an error return, not just success** — flagged in the Phase 1
+  round-3 hardening pass as "a real UX papercut" and deferred. `change-password-
+form.tsx`'s two password fields were uncontrolled (`defaultValue`-less, just plain
+  inputs), so a wrong-current-password error cleared both fields right as the user
+  read why the submission failed. Converted both to controlled inputs (state + the
+  established `reactedTo` idiom to clear them only on a genuine success, matching the
+  pattern already used for the `budgetState`/`updateState`-driven forms elsewhere in
+  the app) — a controlled value isn't affected by React's post-action reset, since
+  React keeps rendering the state-held value regardless of what the DOM's native reset
+  would otherwise do to an uncontrolled field.
+
+**Still correctly deferred — re-affirmed, not silently dropped, original reasoning
+still holds and is not repeated here in full (see each phase's own entry above):**
+Phase 0's `pool.end()`-not-in-`finally`, `.nvmrc`/`engines` mismatch, `createPool()`'s
+prose-enforced safety, `lib/env.ts`'s eager `loadEnv()`, `getSentry()`'s unreachable
+defense-in-depth; Phase 1's `proxy.ts` renewal-write race, `revokeOtherSessions()`
+duplication (2 call sites, not the 3+ this codebase's own convention extracts at),
+`household_invitations(email)` index (the query that needed it no longer exists),
+`getClientIp()`'s malformed-header edge case and test-coverage gap (would need a new
+Server-Action test harness for a narrow edge-within-an-edge case), `DUMMY_PASSWORD_HASH`
+hardcoding; Phase 2's Monthly summary bar excluding uncategorized amounts (no
+obviously-correct number to add them to), `lib/flags.ts`'s cross-instance cache
+staleness; the concurrency-group/per-ref CI gap, `household_invitations` rows never
+cleaned, the `.gitleaks.toml` path-based-allowlist migration (see above — hit twice
+now, still not done, same reason both times); Phase 3's unrendered
+`CategoryBreakdownPoint`/`YoyDelta` fields, the sidebar year-selector's architectural
+`searchParams` limitation; Phase 4's goal-overdue UTC-vs-local timezone handling (needs
+an app-wide decision, not a one-call-site patch), `openingBalanceSchema`'s regex
+duplication (continues a pre-existing pattern), the 3x progress-bar duplication;
+Phase 5's Route-Handler-vs-Server-Action architecture for CSV import, `classifyRow`'s
+big-O at unrealistic scale, unused `entryId`/`direction` fields (zero behavioral
+benefit either way), and the `reactedTo` idiom now at 9+ occurrences (still the
+established codebase convention, not a bug).
+
+Re-verified end to end, not just re-run: lint/typecheck/format/build clean, unit
+311/311 (up from 307 — 4 new `guards.ts` tests), integration 157/157 (up from 156 — 1
+new `deleteGoalAction`-while-disabled test), E2E 36/36 (the `monthly.spec.ts` date-entry
+test caught and had its own race condition fixed before the suite went green — see
+above). Every fix independently confirmed: kill-switch centralization re-verified
+against all 4 original call sites' existing test suites (categories/accounts/goals/
+import integration tests, all still passing unchanged); the goals delete-while-disabled
+fix proven via both a new integration test and by tracing the page-level rendering path
+that would otherwise have made the action-level fix unreachable; the entry-date UI
+proven against the real DB via `expect.poll`, not a client-side echo. History rewrite
+independently verified via a full-history grep and a green CI run on the force-pushed
+commit (`gh run view`, not just the `push` command's own exit code).
+
+---

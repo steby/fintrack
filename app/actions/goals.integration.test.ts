@@ -239,4 +239,27 @@ describe('deleteGoalAction', () => {
 
     await cleanup(memberA.household.id, memberB.household.id);
   });
+
+  it('deletes a goal even when FEATURE_SAVINGS_GOALS is disabled (unlike create/update, deliberately not gated — an owner who turns the feature off still needs to remove old data)', async () => {
+    const member = await makeHouseholdWithUser('member', 'Goal delete C');
+    const [goal] = await db
+      .insert(goals)
+      .values({ householdId: member.household.id, name: 'Trip', targetAmount: '1000.00' })
+      .returning();
+
+    vi.doMock('../../lib/env', () => ({ env: { FEATURE_SAVINGS_GOALS: false } }));
+    vi.resetModules();
+    const { deleteGoalAction } = await import('./goals');
+
+    mockToken = member.token;
+    const result = await deleteGoalAction(undefined, formData({ id: goal.id }));
+    expect(result).toEqual({ success: true });
+
+    const rows = await db.select().from(goals).where(eq(goals.id, goal.id));
+    expect(rows).toHaveLength(0);
+
+    await cleanup(member.household.id);
+    vi.doUnmock('../../lib/env');
+    vi.resetModules();
+  });
 });

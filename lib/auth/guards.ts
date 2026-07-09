@@ -2,6 +2,7 @@ import 'server-only';
 import { redirect } from 'next/navigation';
 import { getSessionUser, type SessionUser } from './session';
 import { can, type Action } from './rbac';
+import { isEnabled, type KillSwitchKey } from '../flags';
 
 // For use in Server Components/pages: redirects to /login if there's no valid session.
 // proxy.ts already does a real, DB-backed check of its own before the page even
@@ -36,4 +37,29 @@ export async function requireRole(action: Action): Promise<SessionUser> {
     throw new ForbiddenError();
   }
   return user;
+}
+
+// Config flags (env-var-backed, sync — spec.md Feature Matrix: category_budgets,
+// savings_goals, net_worth, entry_attribution, pwa; a flip requires a redeploy).
+// Returns a user-facing error string rather than throwing, matching how every Server
+// Action already surfaces a rejected requireRole check as a form error, not an
+// uncaught exception. The caller still decides WHEN to check (e.g. categories.ts only
+// gates a write that actually touches monthlyBudget, not every category edit) — this
+// only standardizes the "flag off -> error string" translation itself, which four
+// independently-shaped call sites had each been reimplementing.
+export function requireConfigFlag(enabled: boolean, message: string): string | null {
+  return enabled ? null : message;
+}
+
+// Kill-switches (household_settings-backed via lib/flags.ts's isEnabled, async,
+// runtime-toggleable without a redeploy — spec.md Feature Matrix: auto_generate,
+// csv_import, email_reminders, monthly_recap). Same "return an error string" contract
+// as requireConfigFlag, so a Server Action gates a feature the same way regardless of
+// which kind of flag it is.
+export async function requireKillSwitch(
+  householdId: string,
+  flag: KillSwitchKey,
+  message: string,
+): Promise<string | null> {
+  return (await isEnabled(householdId, flag)) ? null : message;
 }

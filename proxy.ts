@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { eq } from 'drizzle-orm';
 import { db } from './lib/db';
-import { sessions, users } from './lib/db/schema';
+import { sessions } from './lib/db/schema';
 import { isExpired, shouldRenew, newExpiry } from './lib/auth/session-rules';
 import { sessionCookieOptions, SESSION_COOKIE_NAME } from './lib/auth/session';
 import { logger } from './lib/log';
@@ -35,10 +35,13 @@ export async function proxy(request: NextRequest) {
   let validSession: { expiresAt: Date } | null = null;
   if (token) {
     try {
+      // No join to `users` — sessions.userId has a FK to users.id, so a session row
+      // can never reference a nonexistent user; joining just to prove what the FK
+      // already guarantees would be pure waste on the single hottest query in the app
+      // (runs on every navigation).
       const rows = await db
         .select({ expiresAt: sessions.expiresAt })
         .from(sessions)
-        .innerJoin(users, eq(sessions.userId, users.id))
         .where(eq(sessions.id, token))
         .limit(1);
       const row = rows[0];

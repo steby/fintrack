@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { categories, directionEnum } from '../../lib/db/schema';
-import { requireRole } from '../../lib/auth/guards';
+import { requireRole, requireConfigFlag } from '../../lib/auth/guards';
 import { env } from '../../lib/env';
 import { optionalMoneyInputSchema, centsToAmount } from '../../lib/money';
 
@@ -47,8 +47,12 @@ export async function createCategoryAction(
   // off (spec.md Phase 4 adversarial: "flags enforced server-side too, not just hidden
   // UI") — a forged form submission can't set a budget cap the household hasn't
   // enabled.
-  if (parsed.data.monthlyBudget !== null && !env.FEATURE_CATEGORY_BUDGETS) {
-    return { error: 'Category budgets are not enabled.' };
+  if (parsed.data.monthlyBudget !== null) {
+    const flagError = requireConfigFlag(
+      env.FEATURE_CATEGORY_BUDGETS,
+      'Category budgets are not enabled.',
+    );
+    if (flagError) return { error: flagError };
   }
   // A budget cap only means anything against expense entries (getCurrentMonthCategoryBudgets
   // only ever looks at direction: 'expense' categories) — reject rather than silently
@@ -111,8 +115,12 @@ export async function updateCategoryAction(
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? 'Invalid category.' };
   }
-  if (parsed.data.monthlyBudget !== null && !env.FEATURE_CATEGORY_BUDGETS) {
-    return { error: 'Category budgets are not enabled.' };
+  if (parsed.data.monthlyBudget !== null) {
+    const flagError = requireConfigFlag(
+      env.FEATURE_CATEGORY_BUDGETS,
+      'Category budgets are not enabled.',
+    );
+    if (flagError) return { error: flagError };
   }
   if (parsed.data.monthlyBudget !== null && parsed.data.direction !== 'expense') {
     return { error: 'Only expense categories can have a budget cap.' };

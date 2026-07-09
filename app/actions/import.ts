@@ -2,8 +2,8 @@
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
-import { requireRole } from '../../lib/auth/guards';
-import { isEnabled, setFlag } from '../../lib/flags';
+import { requireRole, requireKillSwitch } from '../../lib/auth/guards';
+import { setFlag } from '../../lib/flags';
 import { runImportPipeline, commitImport } from '../../lib/import-csv';
 import {
   REQUIRED_FIELDS,
@@ -87,13 +87,6 @@ function readHasHeaderRow(formData: FormData): boolean {
   return formData.get('hasHeaderRow') !== 'false';
 }
 
-async function requireCsvImportEnabled(householdId: string): Promise<string | null> {
-  if (!(await isEnabled(householdId, 'csv_import'))) {
-    return 'CSV import is not enabled for this household.';
-  }
-  return null;
-}
-
 function findUnmappedRequiredField(mapping: ColumnMapping): string | null {
   for (const field of REQUIRED_FIELDS) {
     // `field` only ranges over the fixed, compile-time REQUIRED_FIELDS literals —
@@ -112,7 +105,11 @@ export async function previewImportAction(
 ): Promise<ImportActionState> {
   const actingUser = await requireRole('write');
 
-  const disabledError = await requireCsvImportEnabled(actingUser.householdId);
+  const disabledError = await requireKillSwitch(
+    actingUser.householdId,
+    'csv_import',
+    'CSV import is not enabled for this household.',
+  );
   if (disabledError) return { error: disabledError };
 
   const parsed = previewInputSchema.safeParse({ csvText: formData.get('csvText') });
@@ -162,7 +159,11 @@ export async function commitImportAction(
 ): Promise<ImportActionState> {
   const actingUser = await requireRole('write');
 
-  const disabledError = await requireCsvImportEnabled(actingUser.householdId);
+  const disabledError = await requireKillSwitch(
+    actingUser.householdId,
+    'csv_import',
+    'CSV import is not enabled for this household.',
+  );
   if (disabledError) return { error: disabledError };
 
   const parsed = commitInputSchema.safeParse({

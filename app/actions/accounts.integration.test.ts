@@ -62,7 +62,7 @@ describe('createAccountAction', () => {
 
     const result = await createAccountAction(
       undefined,
-      formData({ name: 'DBS', accountType: 'bank' }),
+      formData({ name: 'Test Bank A', accountType: 'bank' }),
     );
 
     expect(result).toEqual({ success: true });
@@ -71,7 +71,11 @@ describe('createAccountAction', () => {
       .from(bankAccounts)
       .where(eq(bankAccounts.householdId, member.household.id));
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ name: 'DBS', accountType: 'bank', linkedBankAccountId: null });
+    expect(rows[0]).toMatchObject({
+      name: 'Test Bank A',
+      accountType: 'bank',
+      linkedBankAccountId: null,
+    });
     expect(rows[0].openingBalance).toBe('0.00');
 
     await cleanup(member.household.id);
@@ -116,7 +120,7 @@ describe('createAccountAction', () => {
     const member = await makeHouseholdWithUser('member', 'Acct create B');
     const [bank] = await db
       .insert(bankAccounts)
-      .values({ householdId: member.household.id, name: 'DBS', accountType: 'bank' })
+      .values({ householdId: member.household.id, name: 'Test Bank A', accountType: 'bank' })
       .returning();
 
     mockToken = member.token;
@@ -187,13 +191,13 @@ describe('createAccountAction', () => {
     const member = await makeHouseholdWithUser('member', 'Acct create E');
     const [bank] = await db
       .insert(bankAccounts)
-      .values({ householdId: member.household.id, name: 'DBS', accountType: 'bank' })
+      .values({ householdId: member.household.id, name: 'Test Bank A', accountType: 'bank' })
       .returning();
 
     mockToken = member.token;
     const result = await createAccountAction(
       undefined,
-      formData({ name: 'OCBC', accountType: 'bank', linkedBankAccountId: bank.id }),
+      formData({ name: 'Test Bank B', accountType: 'bank', linkedBankAccountId: bank.id }),
     );
 
     expect(result).toEqual({ error: 'Only credit accounts can link to a bank account.' });
@@ -323,17 +327,22 @@ describe('updateAccountAction', () => {
     const member = await makeHouseholdWithUser('member', 'Acct update E');
     const [bank1] = await db
       .insert(bankAccounts)
-      .values({ householdId: member.household.id, name: 'DBS', accountType: 'bank' })
+      .values({ householdId: member.household.id, name: 'Test Bank A', accountType: 'bank' })
       .returning();
     const [bank2] = await db
       .insert(bankAccounts)
-      .values({ householdId: member.household.id, name: 'OCBC', accountType: 'bank' })
+      .values({ householdId: member.household.id, name: 'Test Bank B', accountType: 'bank' })
       .returning();
 
     mockToken = member.token;
     const result = await updateAccountAction(
       undefined,
-      formData({ id: bank1.id, name: 'DBS', accountType: 'bank', linkedBankAccountId: bank2.id }),
+      formData({
+        id: bank1.id,
+        name: 'Test Bank A',
+        accountType: 'bank',
+        linkedBankAccountId: bank2.id,
+      }),
     );
 
     expect(result).toEqual({ error: 'Only credit accounts can link to a bank account.' });
@@ -346,7 +355,7 @@ describe('updateAccountAction', () => {
     const member = await makeHouseholdWithUser('member', 'Acct update F');
     const [bank] = await db
       .insert(bankAccounts)
-      .values({ householdId: member.household.id, name: 'DBS', accountType: 'bank' })
+      .values({ householdId: member.household.id, name: 'Test Bank A', accountType: 'bank' })
       .returning();
     await db.insert(bankAccounts).values({
       householdId: member.household.id,
@@ -358,7 +367,7 @@ describe('updateAccountAction', () => {
     mockToken = member.token;
     const result = await updateAccountAction(
       undefined,
-      formData({ id: bank.id, name: 'DBS', accountType: 'credit' }),
+      formData({ id: bank.id, name: 'Test Bank A', accountType: 'credit' }),
     );
 
     expect(result).toEqual({
@@ -375,13 +384,13 @@ describe('updateAccountAction', () => {
     const member = await makeHouseholdWithUser('member', 'Acct update G');
     const [bank] = await db
       .insert(bankAccounts)
-      .values({ householdId: member.household.id, name: 'DBS', accountType: 'bank' })
+      .values({ householdId: member.household.id, name: 'Test Bank A', accountType: 'bank' })
       .returning();
 
     mockToken = member.token;
     const result = await updateAccountAction(
       undefined,
-      formData({ id: bank.id, name: 'DBS', accountType: 'credit' }),
+      formData({ id: bank.id, name: 'Test Bank A', accountType: 'credit' }),
     );
 
     expect(result).toEqual({ success: true });
@@ -416,7 +425,7 @@ describe('deleteAccountAction', () => {
     const member = await makeHouseholdWithUser('member', 'Acct delete A');
     const [acct] = await db
       .insert(bankAccounts)
-      .values({ householdId: member.household.id, name: 'DBS', accountType: 'bank' })
+      .values({ householdId: member.household.id, name: 'Test Bank A', accountType: 'bank' })
       .returning();
     const [item] = await db
       .insert(recurringSchedule)
@@ -446,7 +455,7 @@ describe('deleteAccountAction', () => {
     const member = await makeHouseholdWithUser('member', 'Acct delete B');
     const [bank] = await db
       .insert(bankAccounts)
-      .values({ householdId: member.household.id, name: 'DBS', accountType: 'bank' })
+      .values({ householdId: member.household.id, name: 'Test Bank A', accountType: 'bank' })
       .returning();
     const [credit] = await db
       .insert(bankAccounts)

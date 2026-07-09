@@ -18,7 +18,15 @@ export interface Goal {
   createdAt: Date;
 }
 
-export function GoalCard({ goal, canManage }: { goal: Goal; canManage: boolean }) {
+export function GoalCard({
+  goal,
+  canManage,
+  canEdit,
+}: {
+  goal: Goal;
+  canManage: boolean;
+  canEdit: boolean;
+}) {
   const [isEditing, setIsEditing] = useState(false);
   const [updateState, updateAction, updatePending] = useActionState(updateGoalAction, undefined);
   const [deleteState, deleteAction, deletePending] = useActionState(deleteGoalAction, undefined);
@@ -120,9 +128,11 @@ export function GoalCard({ goal, canManage }: { goal: Goal; canManage: boolean }
         )}
         {canManage && (
           <div className="mt-2 flex justify-end gap-1">
-            <Button type="button" variant="ghost" size="sm" onClick={() => setIsEditing(true)}>
-              Edit
-            </Button>
+            {canEdit && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setIsEditing(true)}>
+                Edit
+              </Button>
+            )}
             <form action={deleteAction}>
               <input type="hidden" name="id" value={goal.id} />
               <Button

@@ -5,7 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { bankAccounts, accountTypeEnum } from '../../lib/db/schema';
-import { requireRole } from '../../lib/auth/guards';
+import { requireRole, requireConfigFlag } from '../../lib/auth/guards';
 import { env } from '../../lib/env';
 import { parseAmountToCents, centsToAmount } from '../../lib/money';
 
@@ -95,8 +95,12 @@ export async function createAccountAction(
   // UI") — a forged submission can't set a real opening balance the household hasn't
   // enabled net-worth tracking for. A submitted-but-zero value is indistinguishable
   // from the column's own default, so it's let through rather than rejected.
-  if (openingBalanceProvided && parsed.data.openingBalance !== 0 && !env.FEATURE_NET_WORTH) {
-    return { error: 'Net worth tracking is not enabled.' };
+  if (openingBalanceProvided && parsed.data.openingBalance !== 0) {
+    const flagError = requireConfigFlag(
+      env.FEATURE_NET_WORTH,
+      'Net worth tracking is not enabled.',
+    );
+    if (flagError) return { error: flagError };
   }
 
   // Only a 'credit' account can link out to a bank account — resolveLinkedAccountId
@@ -166,8 +170,12 @@ export async function updateAccountAction(
     return { error: parsed.error.issues[0]?.message ?? 'Invalid account.' };
   }
 
-  if (openingBalanceProvided && parsed.data.openingBalance !== 0 && !env.FEATURE_NET_WORTH) {
-    return { error: 'Net worth tracking is not enabled.' };
+  if (openingBalanceProvided && parsed.data.openingBalance !== 0) {
+    const flagError = requireConfigFlag(
+      env.FEATURE_NET_WORTH,
+      'Net worth tracking is not enabled.',
+    );
+    if (flagError) return { error: flagError };
   }
 
   // Same "source must be credit" check as createAccountAction.

@@ -110,6 +110,26 @@ test.describe('monthly entries', () => {
     await row.locator('input[name="actualAmount"]').blur();
     await expect(row.getByText('+$5.00')).toBeVisible();
 
+    // Set the actual date too — previously there was no UI control for this at all
+    // (updateActualAction always supported it; entry-row.tsx only ever echoed a hidden,
+    // unchangeable value). Verified against the real DB via expect.poll, not by re-
+    // reading the input's own value: the field is uncontrolled, so it keeps showing
+    // whatever was typed regardless of whether the Server Action round trip has landed
+    // yet — a toHaveValue check here would pass even if the submission never persisted
+    // anything, unlike the amount case above, which waits on a value ('+$5.00') that
+    // only appears once the server has actually responded.
+    await row.locator('input[name="actualDate"]').fill('2026-01-15');
+    await row.locator('input[name="actualDate"]').blur();
+    await expect
+      .poll(async () => {
+        const [persisted] = await testDb
+          .select({ actualDate: monthlyEntries.actualDate })
+          .from(monthlyEntries)
+          .where(eq(monthlyEntries.item, itemName));
+        return persisted.actualDate;
+      })
+      .toBe('2026-01-15');
+
     // Override this month's budgeted amount — a Phase 2 addition beyond the reference
     // app, marking the row is_overridden so a later recurring-item propagate can't
     // silently clobber it.
