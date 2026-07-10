@@ -74,8 +74,19 @@ export function parseCsvText(text: string): string[][] {
       continue;
     }
     if (ch === '\r') {
+      if (text[i + 1] === '\n') {
+        // CRLF: the \r itself is just skipped, the \n right after ends the row.
+        i += 1;
+        continue;
+      }
+      // Bare CR with no following \n — classic Mac (pre-OS X) line endings, still a
+      // real convention some older export tools use. Without ending the row here, the
+      // \r would just be silently dropped and every subsequent row would fuse into
+      // this one, mangling the whole file with no error surfaced (see the CRLF/LF
+      // cases below, which both correctly end a row on their line-ending character).
+      endRow();
       i += 1;
-      continue; // normalize CRLF/CR to the \n handling below
+      continue;
     }
     if (ch === '\n') {
       endRow();
@@ -102,10 +113,7 @@ export function parseCsvText(text: string): string[][] {
 export const MAX_CSV_BYTES = 5 * 1024 * 1024;
 export const MAX_CSV_ROWS = 2000;
 
-export interface CsvSizeCheck {
-  ok: boolean;
-  error?: string;
-}
+export type CsvSizeCheck = { ok: true } | { ok: false; error: string };
 
 export function checkCsvByteSize(text: string): CsvSizeCheck {
   // .length on a JS string is UTF-16 code units, not bytes — an undercount for

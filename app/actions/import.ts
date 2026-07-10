@@ -3,6 +3,7 @@
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
 import { requireRole, requireKillSwitch } from '../../lib/auth/guards';
+import type { SessionUser } from '../../lib/auth/session';
 import { setFlag } from '../../lib/flags';
 import { runImportPipeline, commitImport } from '../../lib/import-csv';
 import {
@@ -97,12 +98,28 @@ function findUnmappedRequiredField(mapping: ColumnMapping): string | null {
   return null;
 }
 
-const previewInputSchema = z.object({ csvText: z.string().min(1, 'Choose a file to import.') });
+interface PreparedImport {
+  actingUser: SessionUser;
+  mapping: ColumnMapping;
+  hasHeaderRow: boolean;
+  classifications: RowClassification[];
+}
 
-export async function previewImportAction(
-  _prevState: ImportActionState,
+// Shared by previewImportAction and commitImportAction — both need exactly "auth +
+// kill-switch gate, read the column mapping, reject an unmapped required field, run
+// the pipeline against live DB state" before doing their own distinct thing with the
+// result (project to PreviewRow vs. actually apply it). `context` only changes the
+// unmapped-field message's wording ("previewing" vs "committing") — the underlying
+// advice (fix the mapping and resubmit) is identical either way; commitImportAction
+// re-runs this same pipeline rather than trusting anything the client cached from the
+// preview step, so a request that reaches it with a bad mapping is either a tampered
+// POST or a UI regression, and deserves a message that matches the step it's actually
+// failing at, not a copy-pasted "before previewing."
+async function prepareImportPipeline(
+  csvText: string,
   formData: FormData,
-): Promise<ImportActionState> {
+  context: 'preview' | 'commit',
+): Promise<{ ok: true; value: PreparedImport } | { ok: false; error: string }> {
   const actingUser = await requireRole('write');
 
   const disabledError = await requireKillSwitch(
@@ -110,34 +127,46 @@ export async function previewImportAction(
     'csv_import',
     'CSV import is not enabled for this household.',
   );
-  if (disabledError) return { error: disabledError };
+  if (disabledError) return { ok: false, error: disabledError };
 
-  const parsed = previewInputSchema.safeParse({ csvText: formData.get('csvText') });
-  if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? 'Choose a file to import.' };
-  }
   const mapping = readMapping(formData);
   const hasHeaderRow = readHasHeaderRow(formData);
   const unmapped = findUnmappedRequiredField(mapping);
   if (unmapped) {
-    return { error: `Map the "${unmapped}" column before previewing.` };
+    const gerund = context === 'preview' ? 'previewing' : 'committing';
+    return { ok: false, error: `Map the "${unmapped}" column before ${gerund}.` };
   }
 
-  const result = await runImportPipeline(
-    actingUser.householdId,
-    parsed.data.csvText,
-    mapping,
-    hasHeaderRow,
-  );
+  const result = await runImportPipeline(actingUser.householdId, csvText, mapping, hasHeaderRow);
   if ('error' in result) {
-    return { error: result.error };
+    return { ok: false, error: result.error };
   }
 
   return {
+    ok: true,
+    value: { actingUser, mapping, hasHeaderRow, classifications: result.classifications },
+  };
+}
+
+const previewInputSchema = z.object({ csvText: z.string().min(1, 'Choose a file to import.') });
+
+export async function previewImportAction(
+  _prevState: ImportActionState,
+  formData: FormData,
+): Promise<ImportActionState> {
+  const parsed = previewInputSchema.safeParse({ csvText: formData.get('csvText') });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Choose a file to import.' };
+  }
+
+  const prepared = await prepareImportPipeline(parsed.data.csvText, formData, 'preview');
+  if (!prepared.ok) return { error: prepared.error };
+
+  return {
     csvText: parsed.data.csvText,
-    mapping,
-    hasHeaderRow,
-    rows: result.classifications.map(toPreviewRow),
+    mapping: prepared.value.mapping,
+    hasHeaderRow: prepared.value.hasHeaderRow,
+    rows: prepared.value.classifications.map(toPreviewRow),
   };
 }
 
@@ -157,15 +186,6 @@ export async function commitImportAction(
   _prevState: ImportActionState,
   formData: FormData,
 ): Promise<ImportActionState> {
-  const actingUser = await requireRole('write');
-
-  const disabledError = await requireKillSwitch(
-    actingUser.householdId,
-    'csv_import',
-    'CSV import is not enabled for this household.',
-  );
-  if (disabledError) return { error: disabledError };
-
   const parsed = commitInputSchema.safeParse({
     csvText: formData.get('csvText'),
     excludedRows: formData.get('excludedRows') ?? undefined,
@@ -173,27 +193,13 @@ export async function commitImportAction(
   if (!parsed.success) {
     return { error: 'Invalid request.' };
   }
-  const mapping = readMapping(formData);
-  const hasHeaderRow = readHasHeaderRow(formData);
-  // Same check previewImportAction runs — a request reaching this action with an
-  // unmapped required field (a tampered/forged POST, or a future UI regression that
-  // fails to forward the preview's mapping) must surface a clear error, not silently
-  // classify every row as 'error' and report {success:true, applied:0} as if nothing
-  // were wrong.
-  const unmapped = findUnmappedRequiredField(mapping);
-  if (unmapped) {
-    return { error: `Map the "${unmapped}" column before previewing.` };
-  }
 
-  const result = await runImportPipeline(
-    actingUser.householdId,
-    parsed.data.csvText,
-    mapping,
-    hasHeaderRow,
-  );
-  if ('error' in result) {
-    return { error: result.error };
-  }
+  // A request reaching this action with an unmapped required field (a tampered/forged
+  // POST, or a future UI regression that fails to forward the preview's mapping) must
+  // surface a clear error via prepareImportPipeline's own check, not silently classify
+  // every row as 'error' and report {success:true, applied:0} as if nothing were wrong.
+  const prepared = await prepareImportPipeline(parsed.data.csvText, formData, 'commit');
+  if (!prepared.ok) return { error: prepared.error };
 
   const excludedRowNumbers = new Set(
     (parsed.data.excludedRows ?? '')
@@ -203,8 +209,8 @@ export async function commitImportAction(
   );
 
   const outcome = await commitImport(
-    actingUser.householdId,
-    result.classifications,
+    prepared.value.actingUser.householdId,
+    prepared.value.classifications,
     excludedRowNumbers,
   );
 

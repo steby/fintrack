@@ -44,10 +44,10 @@ export async function runImportPipeline(
   hasHeaderRow: boolean,
 ): Promise<ImportPipelineResult | { error: string }> {
   const byteCheck = checkCsvByteSize(csvText);
-  if (!byteCheck.ok) return { error: byteCheck.error ?? 'File is too large.' };
+  if (!byteCheck.ok) return { error: byteCheck.error };
 
   const encodingCheck = checkCsvEncoding(csvText);
-  if (!encodingCheck.ok) return { error: encodingCheck.error ?? 'Invalid file encoding.' };
+  if (!encodingCheck.ok) return { error: encodingCheck.error };
 
   const allRows = parseCsvText(csvText);
   if (allRows.length === 0) {
@@ -59,7 +59,7 @@ export async function runImportPipeline(
   }
 
   const rowCheck = checkCsvRowCount(dataRows.length);
-  if (!rowCheck.ok) return { error: rowCheck.error ?? 'Too many rows.' };
+  if (!rowCheck.ok) return { error: rowCheck.error };
 
   const mappedRecords = buildMappedRows(dataRows, mapping);
 

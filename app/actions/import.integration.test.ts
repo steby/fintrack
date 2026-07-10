@@ -225,7 +225,9 @@ describe('commitImportAction', () => {
         date: '',
       }),
     );
-    expect(result).toEqual({ error: expect.stringContaining('date') });
+    // "before committing", not a copy-pasted "before previewing" — this action never
+    // previews anything, and the message should name the step that's actually failing.
+    expect(result).toEqual({ error: 'Map the "date" column before committing.' });
 
     await cleanup(member.household.id);
   });

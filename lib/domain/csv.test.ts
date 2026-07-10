@@ -52,6 +52,24 @@ describe('parseCsvText', () => {
     ]);
   });
 
+  it('handles bare-CR line endings (classic Mac, no trailing \\n) instead of merging every row into one', () => {
+    const rows = parseCsvText('A,B\r1,2\r3,4\r');
+    expect(rows).toEqual([
+      ['A', 'B'],
+      ['1', '2'],
+      ['3', '4'],
+    ]);
+  });
+
+  it('handles a mix of CRLF and bare-CR line endings in the same file', () => {
+    const rows = parseCsvText('A,B\r\n1,2\r3,4\n');
+    expect(rows).toEqual([
+      ['A', 'B'],
+      ['1', '2'],
+      ['3', '4'],
+    ]);
+  });
+
   it('handles a file with no trailing newline', () => {
     const rows = parseCsvText('A,B\n1,2');
     expect(rows).toEqual([
@@ -99,7 +117,7 @@ describe('checkCsvByteSize', () => {
 
   it('rejects a file over the byte cap', () => {
     const result = checkCsvByteSize('x'.repeat(MAX_CSV_BYTES + 1));
-    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected ok: false');
     expect(result.error).toMatch(/too large/i);
   });
 });
@@ -111,7 +129,7 @@ describe('checkCsvRowCount', () => {
 
   it('rejects a row count over the cap', () => {
     const result = checkCsvRowCount(MAX_CSV_ROWS + 1);
-    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected ok: false');
     expect(result.error).toMatch(/too many rows/i);
   });
 });
@@ -129,7 +147,7 @@ describe('checkCsvEncoding', () => {
     // Simulates what File.text() produces for a file actually saved in a different
     // encoding (e.g. Windows-1252) — invalid byte sequences decode to U+FFFD.
     const result = checkCsvEncoding('Date,Item,Amount\n2026-01-05,Caf�,4.50\n');
-    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected ok: false');
     expect(result.error).toMatch(/utf-8/i);
   });
 });
