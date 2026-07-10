@@ -52,6 +52,16 @@ describe('captureException', () => {
     const errorSpy = vi.fn();
     const warnSpy = vi.fn();
     vi.doMock('./log', () => ({ logger: { error: errorSpy, warn: warnSpy } }));
+    // Simulates "not installed" via a throwing factory rather than relying on the real
+    // package genuinely being absent from node_modules — observability.ts's own
+    // `.env.example`/doc comment says `npm install @sentry/nextjs` to light this up for
+    // real, and this repo does exactly that, so real absence can no longer be assumed.
+    // initSentry()'s catch around `await import(specifier)` treats any rejection there
+    // identically (logs the same hardcoded 'is not installed' message regardless of the
+    // actual error), so a throwing mock factory exercises the same code path.
+    vi.doMock('@sentry/nextjs', () => {
+      throw new Error('Cannot find module @sentry/nextjs (simulated)');
+    });
 
     const { captureException } = await import('./observability');
     await expect(captureException(new Error('boom'))).resolves.toBeUndefined();
@@ -178,6 +188,15 @@ describe('captureException', () => {
     const errorSpy = vi.fn();
     const warnSpy = vi.fn();
     vi.doMock('./log', () => ({ logger: { error: errorSpy, warn: warnSpy } }));
+    // The second call below (after shouldThrow flips false) needs the real "is not
+    // installed" path to fire again, which — now that @sentry/nextjs is genuinely
+    // installed — requires simulating that failure rather than relying on real absence
+    // (see the earlier "falls back to log-only... package is missing" test for why).
+    // Doesn't affect the first call: its throw happens reading env.SENTRY_DSN, before
+    // initSentry() ever reaches the import() line this mock replaces.
+    vi.doMock('@sentry/nextjs', () => {
+      throw new Error('Cannot find module @sentry/nextjs (simulated)');
+    });
 
     const { captureException } = await import('./observability');
     await expect(captureException(new Error('first'))).resolves.toBeUndefined();
