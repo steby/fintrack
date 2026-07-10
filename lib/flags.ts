@@ -1,4 +1,4 @@
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { db } from './db';
 import { householdSettings } from './db/schema';
 
@@ -52,6 +52,40 @@ export async function isEnabled(householdId: string, flag: KillSwitchKey): Promi
   const value = row ? row.value === 'true' : KILL_SWITCH_DEFAULTS[flag];
   cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
   return value;
+}
+
+// Batched sibling of isEnabled() for the cron routes' "which of ALL households have
+// this flag on" question — those loop every household checking the same single flag,
+// which meant one DB round trip per household just for the gate check before any of
+// the per-household work (candidates/recipients/claim) even started. One query here
+// replaces N. Deliberately bypasses isEnabled()'s per-(household,flag) cache rather
+// than populating it — these routes run once daily (vercel.json), so there's no
+// meaningful reuse window to warm the cache for, and mutating that private Map from
+// outside would break its own encapsulation for no real benefit here.
+export async function getEnabledHouseholdIds(
+  householdIds: string[],
+  flag: KillSwitchKey,
+): Promise<Set<string>> {
+  if (householdIds.length === 0) return new Set();
+
+  const rows = await db
+    .select({ householdId: householdSettings.householdId, value: householdSettings.value })
+    .from(householdSettings)
+    .where(
+      and(inArray(householdSettings.householdId, householdIds), eq(householdSettings.key, flag)),
+    );
+
+  const explicit = new Map(rows.map((r) => [r.householdId, r.value === 'true']));
+  // Same false positive as isEnabled() above: `flag` is narrowed to the 4-value
+  // KillSwitchKey union at compile time, never arbitrary/untrusted input.
+  // eslint-disable-next-line security/detect-object-injection
+  const defaultValue = KILL_SWITCH_DEFAULTS[flag];
+
+  const enabled = new Set<string>();
+  for (const id of householdIds) {
+    if (explicit.get(id) ?? defaultValue) enabled.add(id);
+  }
+  return enabled;
 }
 
 export async function setFlag(

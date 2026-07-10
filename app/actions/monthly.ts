@@ -9,6 +9,7 @@ import { requireRole, requireConfigFlag } from '../../lib/auth/guards';
 import { env } from '../../lib/env';
 import { moneyInputSchema, optionalMoneyInputSchema, centsToAmount } from '../../lib/money';
 import { isValidCalendarDate } from '../../lib/domain/month-params';
+import { resolveOptionalRef } from '../../lib/db/queries';
 
 export type MonthlyActionState = { error?: string; success?: boolean } | undefined;
 
@@ -27,23 +28,6 @@ const dateInputSchema = z.string().refine((v) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
   return isValidCalendarDate(v);
 }, 'Enter a valid date (YYYY-MM-DD)');
-
-async function resolveOptionalRef(
-  table: typeof categories | typeof bankAccounts | typeof users,
-  householdId: string,
-  raw: string | undefined,
-): Promise<{ ok: true; value: string | null } | { ok: false; error: string }> {
-  if (!raw) return { ok: true, value: null };
-  const [row] = await db
-    .select({ id: table.id })
-    .from(table)
-    .where(and(eq(table.id, raw), eq(table.householdId, householdId)))
-    .limit(1);
-  if (!row) {
-    return { ok: false, error: 'Reference not found.' };
-  }
-  return { ok: true, value: raw };
-}
 
 const updateActualSchema = z.object({
   id: z.string().uuid(),

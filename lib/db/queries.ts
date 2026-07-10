@@ -1,4 +1,4 @@
-import { and, eq, lt, or } from 'drizzle-orm';
+import { and, eq, lt, or, sql } from 'drizzle-orm';
 import { db } from './index';
 import { logger } from '../log';
 import { isUnusuallyLargeRowCount } from '../domain/query-limits';
@@ -17,11 +17,38 @@ import type { NetWorthAccountInput } from '../domain/net-worth';
 import type { MatchCandidateEntry } from '../domain/csv';
 import type { UpcomingBillCandidate } from '../domain/reminders';
 import type { YearMonth } from '../domain/recurring';
+import { currentYearMonth } from '../domain/today';
 
 // Matches lib/flags.ts's KillSwitchKey pattern: a small, hand-written union rather than
 // derived from the pgEnum, since Drizzle doesn't export a ready-made TS type for enum
 // columns and this is only ever used at these two call sites.
 export type EmailType = 'reminder' | 'recap';
+
+// Shared by app/actions/recurring.ts and app/actions/monthly.ts — both need "does this
+// optional foreign-key id refer to a real row IN THIS HOUSEHOLD" before accepting it
+// (category/account/paid-by-user references on a recurring item or a monthly entry;
+// spec.md threat note: missing household_id filter -> cross-tenant leak). Was two
+// verbatim copies before this extraction; no `error` string on the failure branch —
+// every call site at both action files discards it and substitutes its own
+// field-specific message ('Category not found.', 'Bank account not found.', etc.), so
+// carrying a generic one here was dead weight inviting someone to "fix" a message that
+// never reaches a user.
+export async function resolveOptionalRef(
+  table: typeof categories | typeof bankAccounts | typeof users,
+  householdId: string,
+  raw: string | undefined,
+): Promise<{ ok: true; value: string | null } | { ok: false }> {
+  if (!raw) return { ok: true, value: null };
+  const [row] = await db
+    .select({ id: table.id })
+    .from(table)
+    .where(and(eq(table.id, raw), eq(table.householdId, householdId)))
+    .limit(1);
+  if (!row) {
+    return { ok: false };
+  }
+  return { ok: true, value: raw };
+}
 
 // Warning (not truncating) ceiling for the two "every entry ever" queries below
 // (getAccountEntriesBeforeYear, getExportRows) — spec.md Phase 7 calls for "pagination
@@ -82,6 +109,71 @@ export async function getDashboardRows(
   }));
 }
 
+// Leaner sibling of getDashboardRows for the dashboard's YoY prior-year baseline,
+// which only ever calls lib/domain/dashboard.ts's sumIncomeExpense on the result — that
+// function reads just direction/budgetedCents/actualCents, so this selects only those
+// (and skips the bankAccounts join getDashboardRows needs for its other consumers
+// entirely, since a prior year's category name/color/account are never displayed, only
+// summed). Still a plain row-level fetch feeding a pure function, same
+// testable-aggregation philosophy as getDashboardRows above — not a parallel SQL SUM
+// that could drift from sumIncomeExpense's own logic.
+export async function getIncomeExpenseRows(
+  householdId: string,
+  year: number,
+): Promise<Pick<DashboardEntryRow, 'direction' | 'budgetedCents' | 'actualCents'>[]> {
+  const rows = await db
+    .select({
+      budgetedAmount: monthlyEntries.budgetedAmount,
+      actualAmount: monthlyEntries.actualAmount,
+      direction: categories.direction,
+    })
+    .from(monthlyEntries)
+    .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
+    .where(and(eq(monthlyEntries.householdId, householdId), eq(monthlyEntries.year, year)));
+
+  return rows.map((row) => ({
+    budgetedCents: parseAmountToCents(row.budgetedAmount),
+    actualCents: row.actualAmount === null ? null : parseAmountToCents(row.actualAmount),
+    direction: row.direction,
+  }));
+}
+
+// Leaner sibling of getDashboardRows for the recap cron, which only wants ONE month's
+// lib/domain/dashboard.ts's buildMonthlySeries point, not the full year's — fetching
+// the whole year just to index into one of the 12 resulting points meant scanning and
+// transferring 11 months' worth of rows the recap never uses. buildMonthlySeries only
+// reads month/direction/budgetedCents/actualCents, so, like getIncomeExpenseRows
+// above, this also skips the bankAccounts join and category name/color columns.
+export async function getDashboardRowsForMonth(
+  householdId: string,
+  year: number,
+  month: number,
+): Promise<Pick<DashboardEntryRow, 'month' | 'direction' | 'budgetedCents' | 'actualCents'>[]> {
+  const rows = await db
+    .select({
+      month: monthlyEntries.month,
+      budgetedAmount: monthlyEntries.budgetedAmount,
+      actualAmount: monthlyEntries.actualAmount,
+      direction: categories.direction,
+    })
+    .from(monthlyEntries)
+    .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
+    .where(
+      and(
+        eq(monthlyEntries.householdId, householdId),
+        eq(monthlyEntries.year, year),
+        eq(monthlyEntries.month, month),
+      ),
+    );
+
+  return rows.map((row) => ({
+    month: row.month,
+    budgetedCents: parseAmountToCents(row.budgetedAmount),
+    actualCents: row.actualAmount === null ? null : parseAmountToCents(row.actualAmount),
+    direction: row.direction,
+  }));
+}
+
 export interface NetWorthAccountRow extends NetWorthAccountInput {
   name: string;
 }
@@ -119,12 +211,19 @@ export interface NetWorthPriorEntryRow {
   amountCents: number;
 }
 
-// Every entry from every year strictly before `year`, in the minimal shape
-// lib/domain/net-worth.ts's sumNetCentsByAccount needs — net worth is a lifetime
-// running total, not something that resets when a different year is browsed, so
-// whichever year buildAccountBalances walks month-by-month needs everything before it
-// folded into a single carry-forward baseline first (see app/(app)/page.tsx). Not
-// bounded by month, since the point is "before this year" in full, not any one month.
+// Lifetime carry-forward baseline for net worth (spec.md Phase 4) — everything before
+// `year` folded down to one row per (bank_account_id, direction), not one row per
+// historical entry. lib/domain/net-worth.ts's sumNetCentsByAccount just adds up signed
+// amounts per effective account; feeding it pre-summed groups instead of individual
+// entries produces the exact same total (addition is associative — sum-of-sums equals
+// sum-of-everything), so that pure function needed no changes at all, only this
+// query's shape did. Previously returned one row per entry ever recorded before this
+// year — an unboundedly growing fetch+transfer+parse cost this file's own
+// warnIfUnusuallyLarge comment already flagged; a household only ever has a handful of
+// bank accounts, so this now returns at most 2 rows per account (one per direction)
+// regardless of how many years of history exist. No warnIfUnusuallyLarge call here
+// anymore — the returned row count no longer reflects entry-history size, so that
+// warning's premise (catching unbounded growth) no longer applies to it.
 export async function getAccountEntriesBeforeYear(
   householdId: string,
   year: number,
@@ -133,22 +232,21 @@ export async function getAccountEntriesBeforeYear(
     .select({
       bankAccountId: monthlyEntries.bankAccountId,
       direction: categories.direction,
-      budgetedAmount: monthlyEntries.budgetedAmount,
-      actualAmount: monthlyEntries.actualAmount,
+      // Mirrors bestEstimateCents' COALESCE(actual_amount, budgeted_amount) pattern —
+      // same "best available estimate" rule, just applied per-row before SQL sums
+      // rather than in JS after fetching every row (see lib/domain/dashboard.ts's
+      // bestEstimateCents doc comment for why this rule exists).
+      total: sql<string>`sum(coalesce(${monthlyEntries.actualAmount}, ${monthlyEntries.budgetedAmount}))`,
     })
     .from(monthlyEntries)
     .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
-    .where(and(eq(monthlyEntries.householdId, householdId), lt(monthlyEntries.year, year)));
-
-  warnIfUnusuallyLarge('getAccountEntriesBeforeYear', householdId, rows.length);
+    .where(and(eq(monthlyEntries.householdId, householdId), lt(monthlyEntries.year, year)))
+    .groupBy(monthlyEntries.bankAccountId, categories.direction);
 
   return rows.map((row) => ({
     bankAccountId: row.bankAccountId,
     direction: row.direction,
-    amountCents: bestEstimateCents({
-      budgetedCents: parseAmountToCents(row.budgetedAmount),
-      actualCents: row.actualAmount === null ? null : parseAmountToCents(row.actualAmount),
-    }),
+    amountCents: parseAmountToCents(row.total),
   }));
 }
 
@@ -167,9 +265,7 @@ export interface CategoryBudgetRow {
 export async function getCurrentMonthCategoryBudgets(
   householdId: string,
 ): Promise<CategoryBudgetRow[]> {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
+  const { year, month } = currentYearMonth();
 
   const [categoryRows, entryRows] = await Promise.all([
     db

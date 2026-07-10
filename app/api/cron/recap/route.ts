@@ -1,13 +1,14 @@
 import { verifyCronRequest } from '../../../../lib/auth/cron';
 import {
   getAllHouseholds,
-  getDashboardRows,
+  getDashboardRowsForMonth,
   getEmailRecipients,
   claimEmailSlot,
 } from '../../../../lib/db/queries';
-import { isEnabled } from '../../../../lib/flags';
+import { getEnabledHouseholdIds } from '../../../../lib/flags';
 import { buildMonthlySeries } from '../../../../lib/domain/dashboard';
 import { addMonths } from '../../../../lib/domain/recurring';
+import { currentYearMonth } from '../../../../lib/domain/today';
 import { sendEmail } from '../../../../lib/email/resend';
 import { recapEmailHtml } from '../../../../lib/email/templates';
 import { MONTH_SHORT } from '../../../../lib/format';
@@ -22,27 +23,32 @@ export async function GET(request: Request) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const now = new Date();
-  const currentYM = { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
-  const target = addMonths(currentYM, -1);
+  const target = addMonths(currentYearMonth(), -1);
   const period = `${target.year}-${String(target.month).padStart(2, '0')}`;
   const monthName = MONTH_SHORT[target.month - 1];
 
   const allHouseholds = await getAllHouseholds();
+  // One query for every household's monthly_recap flag instead of one query PER
+  // household (lib/flags.ts's getEnabledHouseholdIds) — same reasoning as
+  // api/cron/generate's identical change. Only the flag gate moved; the claim-after-
+  // recipients-check ordering invariant below is untouched.
+  const enabledIds = await getEnabledHouseholdIds(
+    allHouseholds.map((h) => h.id),
+    'monthly_recap',
+  );
   let sent = 0;
   let skippedEmpty = 0;
   let skippedNoRecipients = 0;
   let alreadyClaimed = 0;
 
   for (const household of allHouseholds) {
+    if (!enabledIds.has(household.id)) continue;
     // See app/api/cron/reminders/route.ts's identical try/catch comment: one
     // household's failure must not abort the rest of the loop. A failure here happens
     // before claimEmailSlot is reached (see its call site below), so it's naturally
     // retried on the next scheduled invocation.
     try {
-      if (!(await isEnabled(household.id, 'monthly_recap'))) continue;
-
-      const rows = await getDashboardRows(household.id, target.year);
+      const rows = await getDashboardRowsForMonth(household.id, target.year, target.month);
       const point = buildMonthlySeries(rows)[target.month - 1];
       const isEmptyMonth =
         point.budgetedIncomeCents === 0 &&

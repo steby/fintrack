@@ -1,8 +1,9 @@
 import { verifyCronRequest } from '../../../../lib/auth/cron';
 import { getAllHouseholds } from '../../../../lib/db/queries';
-import { isEnabled } from '../../../../lib/flags';
+import { getEnabledHouseholdIds } from '../../../../lib/flags';
 import { generateEntriesForRange } from '../../../../lib/generate-entries';
 import { addMonths } from '../../../../lib/domain/recurring';
+import { currentYearMonth } from '../../../../lib/domain/today';
 import { logger } from '../../../../lib/log';
 
 // Backstop for households that don't load /monthly regularly. That page's own on-load
@@ -21,21 +22,28 @@ export async function GET(request: Request) {
   // for this invocation, matching reminders/recap's "one shared today" pattern. Inside
   // the loop, a slow run straddling a UTC day/month rollover could give later
   // households a different window than earlier ones.
-  const now = new Date();
-  const from = { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
+  const from = currentYearMonth();
 
   const allHouseholds = await getAllHouseholds();
+  // One query for every household's auto_generate flag instead of one query PER
+  // household (lib/flags.ts's getEnabledHouseholdIds) — the flag check no longer needs
+  // its own try/catch inside the loop below since it now happens once, up front,
+  // outside the per-household guard; a failure here fails the whole invocation loudly
+  // (surfacing in Vercel's cron logs) rather than being silently swallowed per household.
+  const enabledIds = await getEnabledHouseholdIds(
+    allHouseholds.map((h) => h.id),
+    'auto_generate',
+  );
   let processed = 0;
   let insertedTotal = 0;
 
   for (const household of allHouseholds) {
-    // The whole per-household body — including the flag check, not just
-    // generateEntriesForRange — is inside the guard: a transient failure in
-    // isEnabled() (e.g. a DB hiccup reading household_settings) must not abort every
-    // household still left in the loop, matching reminders/recap's identical guard.
+    if (!enabledIds.has(household.id)) continue;
+    // generateEntriesForRange itself is still individually guarded: a transient
+    // failure for one household (e.g. a DB hiccup mid-transaction) must not abort
+    // every household still left in the loop, matching reminders/recap's identical
+    // per-household guard.
     try {
-      if (!(await isEnabled(household.id, 'auto_generate'))) continue;
-
       insertedTotal += await generateEntriesForRange(household.id, from, addMonths(from, 2));
       processed++;
     } catch (err) {

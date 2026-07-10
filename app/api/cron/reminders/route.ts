@@ -5,9 +5,9 @@ import {
   getEmailRecipients,
   claimEmailSlot,
 } from '../../../../lib/db/queries';
-import { isEnabled } from '../../../../lib/flags';
+import { getEnabledHouseholdIds } from '../../../../lib/flags';
 import { selectUpcomingBills } from '../../../../lib/domain/reminders';
-import { utcStartOfDay } from '../../../../lib/domain/today';
+import { utcStartOfDay, currentYearMonth } from '../../../../lib/domain/today';
 import { addMonths } from '../../../../lib/domain/recurring';
 import { sendEmail } from '../../../../lib/email/resend';
 import { reminderEmailHtml } from '../../../../lib/email/templates';
@@ -24,27 +24,35 @@ export async function GET(request: Request) {
 
   const today = utcStartOfDay();
   const period = today.toISOString().slice(0, 10);
-  const from = { year: today.getUTCFullYear(), month: today.getUTCMonth() + 1 };
+  const from = currentYearMonth(today);
   // Both the current and next month, so a bill due in the first few days of next month
   // is still visible within the 3-day window even though it lives in a different
   // monthly_entries row.
   const buckets = [from, addMonths(from, 1)];
 
   const allHouseholds = await getAllHouseholds();
+  // One query for every household's email_reminders flag instead of one query PER
+  // household (lib/flags.ts's getEnabledHouseholdIds) — same reasoning as
+  // api/cron/generate's identical change. The claim-after-recipients-check ordering
+  // invariant below is untouched: only the flag gate moved, nothing about
+  // candidates/recipients/claim/send changed.
+  const enabledIds = await getEnabledHouseholdIds(
+    allHouseholds.map((h) => h.id),
+    'email_reminders',
+  );
   let sent = 0;
   let skippedNoBills = 0;
   let skippedNoRecipients = 0;
   let alreadyClaimed = 0;
 
   for (const household of allHouseholds) {
+    if (!enabledIds.has(household.id)) continue;
     // One household's failure (a transient DB hiccup fetching candidates/recipients,
     // say) must not abort every OTHER household still left in this loop — matches
     // api/cron/generate's same try/catch. A failure here happens before claimEmailSlot
     // is ever reached (see its call site below), so it's naturally retried on the next
     // scheduled invocation — nothing is left stuck in a stale "claimed" state.
     try {
-      if (!(await isEnabled(household.id, 'email_reminders'))) continue;
-
       const candidates = await getUpcomingBillCandidates(household.id, buckets);
       const bills = selectUpcomingBills(candidates, today);
       if (bills.length === 0) {

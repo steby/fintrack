@@ -43,9 +43,19 @@ export interface MonthlyPoint {
 }
 
 // Always returns exactly 12 points (Jan-Dec), even for a year with zero rows — so chart
-// components never have to special-case a short/missing series.
-export function buildMonthlySeries(rows: DashboardEntryRow[]): MonthlyPoint[] {
-  const byMonth = new Map<number, DashboardEntryRow[]>();
+// components never have to special-case a short/missing series. Parameter type is
+// narrowed to the 4 fields actually read (not the full DashboardEntryRow) — the recap
+// cron only wants a single month's point out of the 12 returned, so it can pass a
+// query result scoped to just that month (lib/db/queries.ts's
+// getDashboardRowsForMonth) rather than fetching every month in the year to discard 11
+// of the resulting 12 points. A full DashboardEntryRow[] (page.tsx's usage) is still
+// assignable here — Pick<> only narrows what this function is allowed to read, not
+// what a caller may pass.
+export function buildMonthlySeries(
+  rows: Pick<DashboardEntryRow, 'month' | 'direction' | 'budgetedCents' | 'actualCents'>[],
+): MonthlyPoint[] {
+  type Row = (typeof rows)[number];
+  const byMonth = new Map<number, Row[]>();
   for (const row of rows) {
     const list = byMonth.get(row.month) ?? [];
     list.push(row);
@@ -231,7 +241,13 @@ export function buildBankSummary(rows: DashboardEntryRow[]): BankSummaryPoint[] 
 // used for the prior year's YoY baseline, where only the totals matter, not a
 // month-by-month or budgeted/actual breakdown. Mirrors the reference app's
 // prevYearTotals query semantics exactly (`COALESCE(actual_amount, budgeted_amount)`).
-export function sumIncomeExpense(rows: DashboardEntryRow[]): {
+// Parameter type is narrowed to just the 3 fields actually read (not the full
+// DashboardEntryRow) — lets the YoY caller fetch a leaner row shape (no category
+// name/color, no bank account join) for the prior year, which this function alone
+// consumes, without a parallel/duplicated SQL SUM that could drift from this logic.
+export function sumIncomeExpense(
+  rows: Pick<DashboardEntryRow, 'direction' | 'budgetedCents' | 'actualCents'>[],
+): {
   incomeCents: number;
   expenseCents: number;
 } {

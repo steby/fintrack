@@ -7,6 +7,7 @@ import {
   buildFixedVsVariable,
   buildBankSummary,
   buildYoyDelta,
+  sumIncomeExpense,
   type DashboardEntryRow,
 } from './dashboard';
 
@@ -69,6 +70,15 @@ describe('buildMonthlySeries', () => {
       actualExpenseCents: 900,
       hasActuals: true,
     });
+  });
+
+  it('accepts a row shape narrower than the full DashboardEntryRow (only month/direction/budgetedCents/actualCents)', () => {
+    // Exactly the shape lib/db/queries.ts's getDashboardRowsForMonth returns for the
+    // recap cron's single-month fetch.
+    const series = buildMonthlySeries([
+      { month: 6, direction: 'income' as const, budgetedCents: 1000, actualCents: null },
+    ]);
+    expect(series[5]).toMatchObject({ budgetedIncomeCents: 1000, hasActuals: false });
   });
 });
 
@@ -175,6 +185,39 @@ describe('buildBankSummary', () => {
       }),
     ]);
     expect(points[0]).toMatchObject({ totalInflowCents: 1200, totalOutflowCents: 400 });
+  });
+});
+
+describe('sumIncomeExpense', () => {
+  it('sums income and expense separately, using best-estimate (actual, falling back to budgeted) per row', () => {
+    const result = sumIncomeExpense([
+      row({ direction: 'income', budgetedCents: 5000, actualCents: 5500 }),
+      row({ direction: 'income', budgetedCents: 2000, actualCents: null }),
+      row({ direction: 'expense', budgetedCents: 1000, actualCents: 900 }),
+    ]);
+    expect(result).toEqual({ incomeCents: 5500 + 2000, expenseCents: 900 });
+  });
+
+  it('excludes uncategorized (direction: null) rows from both totals', () => {
+    const result = sumIncomeExpense([
+      row({ direction: null, budgetedCents: 99999, actualCents: 99999 }),
+      row({ direction: 'income', budgetedCents: 100, actualCents: null }),
+    ]);
+    expect(result).toEqual({ incomeCents: 100, expenseCents: 0 });
+  });
+
+  it('returns zero totals for an empty array', () => {
+    expect(sumIncomeExpense([])).toEqual({ incomeCents: 0, expenseCents: 0 });
+  });
+
+  it('accepts a row shape narrower than the full DashboardEntryRow (only direction/budgetedCents/actualCents)', () => {
+    // Exercises the narrowed parameter type directly — this is exactly the shape
+    // lib/db/queries.ts's getIncomeExpenseRows returns for the dashboard's YoY prior
+    // year, deliberately leaner than a full DashboardEntryRow.
+    const result = sumIncomeExpense([
+      { direction: 'expense', budgetedCents: 300, actualCents: null },
+    ]);
+    expect(result).toEqual({ incomeCents: 0, expenseCents: 300 });
   });
 });
 

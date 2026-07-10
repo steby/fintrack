@@ -2,6 +2,7 @@ import { requireUser } from '../../lib/auth/guards';
 import { env } from '../../lib/env';
 import {
   getDashboardRows,
+  getIncomeExpenseRows,
   getAccountsForNetWorth,
   getAccountEntriesBeforeYear,
   getCurrentMonthCategoryBudgets,
@@ -44,10 +45,10 @@ export default async function DashboardPage({
   const params = await searchParams;
   const year = parseYearParam(params.year);
 
-  const [currentRows, priorRows, netWorthAccounts, priorYearsEntries, budgetRows] =
+  const [currentRows, priorIncomeExpenseRows, netWorthAccounts, priorYearsEntries, budgetRows] =
     await Promise.all([
       getDashboardRows(user.householdId, year),
-      getDashboardRows(user.householdId, year - 1),
+      getIncomeExpenseRows(user.householdId, year - 1),
       env.FEATURE_NET_WORTH ? getAccountsForNetWorth(user.householdId) : Promise.resolve([]),
       env.FEATURE_NET_WORTH
         ? getAccountEntriesBeforeYear(user.householdId, year)
@@ -63,7 +64,10 @@ export default async function DashboardPage({
   const cumulativeSavings = buildCumulativeSavings(currentRows);
   const fixedVsVariable = buildFixedVsVariable(currentRows);
   const bankSummary = buildBankSummary(currentRows);
-  const yoy = buildYoyDelta(sumIncomeExpense(currentRows), sumIncomeExpense(priorRows));
+  const yoy = buildYoyDelta(
+    sumIncomeExpense(currentRows),
+    sumIncomeExpense(priorIncomeExpenseRows),
+  );
 
   // Net worth is a lifetime running total, not something that resets every time a
   // different year is browsed — everything from years before `year` is folded into a
