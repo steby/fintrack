@@ -4,19 +4,44 @@ import { shouldPropagate, getDifference } from './entries';
 
 describe('shouldPropagate', () => {
   it('propagates a plain forecast row (no actual, not overridden)', () => {
-    expect(shouldPropagate({ actualCents: null, isOverridden: false })).toBe(true);
+    expect(shouldPropagate({ actualCents: null, actualDate: null, isOverridden: false })).toBe(
+      true,
+    );
   });
 
   it('does not propagate an actualized row', () => {
-    expect(shouldPropagate({ actualCents: 500, isOverridden: false })).toBe(false);
+    expect(
+      shouldPropagate({ actualCents: 500, actualDate: '2026-01-05', isOverridden: false }),
+    ).toBe(false);
   });
 
   it('does not propagate an overridden row, even without an actual yet', () => {
-    expect(shouldPropagate({ actualCents: null, isOverridden: true })).toBe(false);
+    expect(shouldPropagate({ actualCents: null, actualDate: null, isOverridden: true })).toBe(
+      false,
+    );
   });
 
   it('does not propagate a row that is both actualized and overridden', () => {
-    expect(shouldPropagate({ actualCents: 500, isOverridden: true })).toBe(false);
+    expect(
+      shouldPropagate({ actualCents: 500, actualDate: '2026-01-05', isOverridden: true }),
+    ).toBe(false);
+  });
+
+  it('does not propagate a row with a recorded payment date but a still-blank amount (regression: partial actualization must count as actualized)', () => {
+    // updateActualAction genuinely allows saving just a date with the amount left
+    // empty (monthly.ts's optionalMoneyInputSchema) — this must be treated the same
+    // as a fully-actualized row, not as a still-safe-to-overwrite forecast, or a later
+    // propagate/removeForecast would silently delete/clobber the date the user
+    // already recorded.
+    expect(
+      shouldPropagate({ actualCents: null, actualDate: '2026-01-05', isOverridden: false }),
+    ).toBe(false);
+  });
+
+  it('does not propagate a row with an actual amount but no date (the inverse partial case, for symmetry)', () => {
+    expect(shouldPropagate({ actualCents: 500, actualDate: null, isOverridden: false })).toBe(
+      false,
+    );
   });
 });
 

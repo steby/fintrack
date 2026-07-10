@@ -15,27 +15,11 @@ import { requireRole } from '../../lib/auth/guards';
 import { parseScheduleMonths, walkMonths } from '../../lib/domain/recurring';
 import { moneyInputSchema, centsToAmount } from '../../lib/money';
 import { generateEntriesForRange } from '../../lib/generate-entries';
+import { resolveOptionalRef } from '../../lib/db/queries';
 
 export type RecurringActionState = { error?: string; success?: boolean } | undefined;
 
 const uuidOrEmpty = z.union([z.literal(''), z.string().uuid()]).optional();
-
-async function resolveOptionalRef(
-  table: typeof categories | typeof bankAccounts,
-  householdId: string,
-  raw: string | undefined,
-): Promise<{ ok: true; value: string | null } | { ok: false; error: string }> {
-  if (!raw) return { ok: true, value: null };
-  const [row] = await db
-    .select({ id: table.id })
-    .from(table)
-    .where(and(eq(table.id, raw), eq(table.householdId, householdId)))
-    .limit(1);
-  if (!row) {
-    return { ok: false, error: 'Reference not found.' };
-  }
-  return { ok: true, value: raw };
-}
 
 const recurringItemFormSchema = z.object({
   item: z.string().trim().min(1, 'Item name is required').max(200),
@@ -130,11 +114,18 @@ async function resolveRecurringInput(
 // write would still get silently overwritten/deleted, since the write only checked id
 // membership, not a fresh predicate. Folding the two conditions directly into the
 // WHERE clause makes the read-and-write a single atomic statement instead.
+// "Not actualized" requires BOTH actualAmount and actualDate to be null, matching
+// lib/domain/entries.ts's shouldPropagate exactly — a row with just a payment date
+// recorded (amount still blank, a real supported partial-entry state; see
+// monthly.ts's optionalMoneyInputSchema) must NOT count as a still-safe-to-overwrite
+// forecast, or a later propagate/removeForecast would silently delete/clobber that
+// recorded date.
 function propagationTargetFilter(recurringScheduleId: string, householdId: string) {
   return and(
     eq(monthlyEntries.recurringScheduleId, recurringScheduleId),
     eq(monthlyEntries.householdId, householdId),
     isNull(monthlyEntries.actualAmount),
+    isNull(monthlyEntries.actualDate),
     eq(monthlyEntries.isOverridden, false),
   );
 }

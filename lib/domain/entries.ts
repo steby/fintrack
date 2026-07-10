@@ -1,5 +1,6 @@
 export interface PropagationCandidate {
   actualCents: number | null;
+  actualDate: string | null;
   isOverridden: boolean;
 }
 
@@ -7,9 +8,14 @@ export interface PropagationCandidate {
 // safe for a recurring item's propagated edit to overwrite — actualized months are
 // historical record (spec.md threat note: "never overwrite actualized rows"), and
 // overridden months are the user's deliberate one-off correction that a later edit to
-// the recurring template shouldn't silently clobber.
+// the recurring template shouldn't silently clobber. "Actualized" means EITHER field is
+// set, not just actualCents: updateActualAction lets a user record just a payment date
+// with the amount still blank (a real, supported partial-entry workflow — see
+// monthly.ts's optionalMoneyInputSchema) — treating that row as still-a-forecast would
+// let a later propagate/removeForecast silently delete or overwrite the date the user
+// already recorded.
 export function shouldPropagate(entry: PropagationCandidate): boolean {
-  return entry.actualCents === null && !entry.isOverridden;
+  return entry.actualCents === null && entry.actualDate === null && !entry.isOverridden;
 }
 
 export interface DifferenceInput {

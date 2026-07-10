@@ -79,7 +79,15 @@ export function computeGoalProgress(
     if (dailyRateCents > 0) {
       const daysRemaining = remainingCents / dailyRateCents;
       const projected = new Date(now.getTime() + daysRemaining * 24 * 60 * 60 * 1000);
-      projectedCompletionDate = projected.toISOString().slice(0, 10);
+      // A near-zero saving rate against a large target can push `projected` past the
+      // ECMAScript max time value (8.64e15ms from epoch), producing an Invalid Date —
+      // .toISOString() throws RangeError on that rather than returning a sentinel, so
+      // this must be checked before calling it. A projection that far out isn't
+      // meaningful to show anyway; null (no projection) is the correct result, same as
+      // the "no progress yet" case above.
+      if (!Number.isNaN(projected.getTime())) {
+        projectedCompletionDate = projected.toISOString().slice(0, 10);
+      }
     }
   }
 

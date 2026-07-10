@@ -400,6 +400,63 @@ describe('updateRecurringAction propagate', () => {
     await cleanup(member.household.id);
   });
 
+  it('skips a row with a recorded payment date but a still-blank amount (regression: partial actualization must not be silently overwritten)', async () => {
+    const { updateRecurringAction } = await import('./recurring');
+    const member = await makeHouseholdWithUser('member', 'Recur propagate date-only');
+    const [item] = await db
+      .insert(recurringSchedule)
+      .values({
+        householdId: member.household.id,
+        item: 'Old Name',
+        budgetedAmount: '100.00',
+        frequency: 'Monthly',
+      })
+      .returning();
+
+    // Exactly what updateActualAction allows: a payment date recorded, amount left
+    // blank (optionalMoneyInputSchema maps '' to null) — the confirmed bug had
+    // propagationTargetFilter treat this as still a plain forecast (only checking
+    // actualAmount IS NULL), so a propagated edit would silently overwrite the
+    // item/budgetedAmount on a row the user had already started actualizing.
+    const [dateOnlyEntry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: 2026,
+        month: 4,
+        recurringScheduleId: item.id,
+        item: 'Old Name',
+        budgetedAmount: '100.00',
+        actualDate: '2026-04-05',
+      })
+      .returning();
+
+    mockToken = member.token;
+    const result = await updateRecurringAction(
+      undefined,
+      formData({
+        id: item.id,
+        item: 'New Name',
+        budgetedAmount: '150.00',
+        frequency: 'Monthly',
+        propagate: 'yes',
+      }),
+    );
+    expect(result).toEqual({ success: true });
+
+    const [reloaded] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, dateOnlyEntry.id));
+    expect(reloaded).toMatchObject({
+      item: 'Old Name',
+      budgetedAmount: '100.00',
+      actualDate: '2026-04-05',
+    });
+
+    await cleanup(member.household.id);
+  });
+
   it('without propagate=yes, existing monthly_entries rows are untouched', async () => {
     const { updateRecurringAction } = await import('./recurring');
     const member = await makeHouseholdWithUser('member', 'Recur propagate B');
@@ -578,6 +635,43 @@ describe('deleteRecurringAction', () => {
       .where(eq(monthlyEntries.id, actualizedEntry.id));
     expect(survivingActualized).toBeDefined();
     expect(survivingActualized.recurringScheduleId).toBeNull();
+
+    await cleanup(member.household.id);
+  });
+
+  it('removeForecast=yes keeps a row with a recorded payment date but a still-blank amount (regression: same partial-actualization fix as propagate)', async () => {
+    const { deleteRecurringAction } = await import('./recurring');
+    const member = await makeHouseholdWithUser('member', 'Recur delete date-only');
+    const [item] = await db
+      .insert(recurringSchedule)
+      .values({ householdId: member.household.id, item: 'Old Sub', frequency: 'Monthly' })
+      .returning();
+    const [dateOnlyEntry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: 2026,
+        month: 1,
+        recurringScheduleId: item.id,
+        item: 'Old Sub',
+        actualDate: '2026-01-05',
+      })
+      .returning();
+
+    mockToken = member.token;
+    const result = await deleteRecurringAction(
+      undefined,
+      formData({ id: item.id, removeForecast: 'yes' }),
+    );
+    expect(result).toEqual({ success: true });
+
+    const [surviving] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, dateOnlyEntry.id));
+    expect(surviving).toBeDefined();
+    expect(surviving.actualDate).toBe('2026-01-05');
+    expect(surviving.recurringScheduleId).toBeNull();
 
     await cleanup(member.household.id);
   });

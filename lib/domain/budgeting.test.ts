@@ -107,4 +107,13 @@ describe('computeGoalProgress', () => {
     expect(result.remainingCents).toBe(-50000);
     expect(result.isComplete).toBe(true);
   });
+
+  it('returns a null projection instead of throwing when the linear rate projects past the max representable date', () => {
+    // 1 cent saved against a target near moneyInputSchema's 10-digit cap (schema-legal,
+    // see app/actions/goals.ts) yields a daily rate so small that a naive projection
+    // overflows the ECMAScript max time value (8.64e15ms from epoch) — this used to
+    // throw RangeError out of .toISOString() instead of degrading gracefully.
+    const result = computeGoalProgress(1, 999_999_999_999, createdAt, null, now);
+    expect(result.projectedCompletionDate).toBeNull();
+  });
 });
