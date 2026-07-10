@@ -79,6 +79,19 @@ test.describe('monthly entries', () => {
   test('generate, enter an actual, status advances, override budget survives a later propagate, ad-hoc add/delete', async ({
     page,
   }) => {
+    // This test chains an unusually large number of real server round trips (recurring
+    // item create + generate + two DB-polled actual-amount/date edits + budget override
+    // + a recurring rename + propagate-skip check + ad-hoc add/delete) into one flow —
+    // deliberately, since it's exercising the full propagate/override interaction, not
+    // easily split without losing that end-to-end guarantee. Already documented once
+    // before as timing-marginal under CI's real network latency (see the DB-poll comment
+    // below); the default 30s budget left it exactly at the edge. Raised after it failed
+    // reproducibly on Dependabot PR #9 (react-dom 19.2.4 -> 19.2.7) with "Test timeout of
+    // 30000ms exceeded" on the very last assertion, not a specific broken interaction —
+    // consistent with the cumulative time from every earlier step simply eating into the
+    // final assertion's own budget, not delete itself being broken.
+    test.setTimeout(45000);
+
     await page.goto('/login');
     await page.getByLabel('Email').fill(OWNER_EMAIL);
     await page.getByLabel('Password').fill(OWNER_PASSWORD);
