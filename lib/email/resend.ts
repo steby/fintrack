@@ -1,4 +1,5 @@
 import 'server-only';
+import { randomUUID } from 'crypto';
 import { Resend } from 'resend';
 import { env } from '../env';
 import { logger } from '../log';
@@ -18,11 +19,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function sendOnce(resend: Resend, input: SendEmailInput): Promise<void> {
+async function sendOnce(
+  resend: Resend,
+  input: SendEmailInput,
+  idempotencyKey: string,
+): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const result = await Promise.race([
-      resend.emails.send({ from: EMAIL_FROM, ...input }),
+      // Resend's SDK has no AbortSignal support anywhere in its types (checked against
+      // the installed version directly — no `signal` field on any request options
+      // interface), so a 5s local timeout can't actually cancel the underlying HTTP
+      // request; Resend may still finish processing it after we've given up waiting.
+      // The SAME idempotencyKey across every retry of this one logical send (passed in
+      // by the caller, not generated here) is the real fix for that: it tells Resend's
+      // own server "this is a retry of an operation you may have already started,
+      // don't send it twice" via the Idempotency-Key header, regardless of whether our
+      // side ever learns the first attempt actually succeeded.
+      resend.emails.send({ from: EMAIL_FROM, ...input }, { idempotencyKey }),
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new Error('Resend request timed out')), SEND_TIMEOUT_MS);
       }),
@@ -67,10 +81,14 @@ export async function sendEmail(input: SendEmailInput): Promise<boolean> {
   }
 
   const resend = new Resend(env.RESEND_API_KEY);
+  // ONE key for every retry of this logical send, generated once here — not inside
+  // sendOnce, which would give each retry its own key and defeat the whole point
+  // (Resend would then see N distinct operations instead of N attempts at the same one).
+  const idempotencyKey = randomUUID();
   let lastErr: unknown;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      await sendOnce(resend, input);
+      await sendOnce(resend, input, idempotencyKey);
       return true;
     } catch (err) {
       lastErr = err;
