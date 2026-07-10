@@ -113,7 +113,19 @@ export const config = {
   // asserts buildPwaMatcherAlternatives()'s output still equals what's hardcoded
   // here — if you change STATIC_PWA_EXACT_PATHS/STATIC_PWA_PREFIX_PATHS, that test
   // fails until this literal is updated to match, so the two can't silently drift.
+  //
+  // `api/cron/` (unanchored prefix, like `_next/static`/`_next/image` — there are 3
+  // routes under it: generate/reminders/recap) is excluded for the same reason
+  // `api/health$` is: Vercel Cron's GET carries `Authorization: Bearer <CRON_SECRET>`,
+  // never a session cookie, so without this exclusion every cron invocation hit the
+  // `!authenticated` branch above and got 303-redirected to /login before
+  // verifyCronRequest() (each cron route's OWN, correct auth check) ever ran — a real
+  // bug that meant no cron job ever actually executed in production, caught by
+  // curling the live endpoint and seeing a 303 instead of the route's own 401.
+  // Integration tests never caught it because they call the route handlers directly,
+  // bypassing Proxy entirely — see e2e/cron.spec.ts for the regression coverage this
+  // gap needed instead.
   matcher: [
-    '/((?!_next/static|_next/image|api/health$|icon$|apple-icon$|favicon\\.ico$|manifest\\.webmanifest$|sw\\.js$|icons/).*)',
+    '/((?!_next/static|_next/image|api/health$|api/cron/|icon$|apple-icon$|favicon\\.ico$|manifest\\.webmanifest$|sw\\.js$|icons/).*)',
   ],
 };
