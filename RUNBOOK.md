@@ -14,8 +14,9 @@ isn't."
 Structured logs (pino) are the source of truth for everything else. In production every
 caught error is logged with context (never swallowed silently — see `development-workflow.md`'s
 non-negotiable rules); if `SENTRY_DSN` is set, the same errors are also forwarded to Sentry via
-`lib/observability.ts`. Without a DSN configured, logs are the only record — there is currently
-no `SENTRY_DSN` provisioned, so **logs are the only record today**.
+`lib/observability.ts`. `SENTRY_DSN` is provisioned in production (Vercel env) as of
+2026-07-10 — check the Sentry dashboard first for anything error-shaped, then fall back to
+structured logs for context Sentry doesn't capture.
 
 ---
 
@@ -69,8 +70,8 @@ email after retries; degrading (not sent)` — never thrown up to crash the cron
 
 ## Bad deploy — rollback
 
-The app is designed to deploy to Vercel (not yet deployed as of this writing — see
-`PROGRESS.md`). When it is:
+The app is deployed to Vercel, live at **<https://fintrack.steby.net>** (auto-deploys from
+`main` on push — see `PROGRESS.md`).
 
 1. **Instant rollback:** Vercel keeps every prior deployment immutable and instantly
    promotable — from the Vercel dashboard's Deployments list, select the last known-good

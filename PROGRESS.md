@@ -2929,3 +2929,178 @@ already-discussed decision to revisit later, not new information. A test in
 value — plausible fragility, not currently triggered, lower priority than the above.
 
 ---
+
+## Production deploy: fintrack.steby.net (2026-07-09/10)
+
+The app is live in production on Vercel at **<https://fintrack.steby.net>** (custom
+domain on the `steby.net` zone, DNS pointed at Vercel), auto-deploying from `main` on
+every push. All production env vars provisioned (`DATABASE_URL` → Neon `production`
+branch, `SESSION_SECRET`, `CRON_SECRET`, `RESEND_API_KEY`, all 9 feature-flag vars).
+`GET /api/health` confirmed live (`{"ok":true,"db":"up","version":"0.1.0"}`).
+
+Closed the two remaining keys-optional gaps: `RESEND_API_KEY` is now set (reminders/
+recap send for real, not log-fallback), and `@sentry/nextjs` was installed with
+`SENTRY_DSN` set in production (`3246ddc`) — `lib/observability.ts`'s keys-optional
+seam, built and tested since Phase 0 for exactly this moment, needed no code changes
+to light up. Uptime monitoring added via UptimeRobot (external to this repo, alert
+threshold 2 consecutive failures) — Vercel has no native uptime-monitoring product,
+only deploy/build status, so this fills that specific gap. `RUNBOOK.md` updated to
+drop its two now-stale "not yet deployed" / "no SENTRY_DSN provisioned" caveats.
+
+Repo visibility flipped from private to public (2026-07-09), deliberately and
+temporarily, to unblock GitHub Actions minutes — scheduled to revert to private once
+the monthly minutes allowance resets.
+
+---
+
+## `/code-review` full comprehensive pass (extra-high effort, 2026-07-10/11)
+
+An uncapped review of everything since the last hardening pass — 8 finder angles, no
+10-item output cap this time (`dont cap the findings`), 33 raw candidates deduped and
+1-vote-verified down to 27 surviving CONFIRMED/PLAUSIBLE findings, triaged and worked
+down one by one, easiest first, complex ones last, every PLAUSIBLE finding
+investigated further rather than taken at face value. All 27 fixed or explicitly
+resolved; two PLAUSIBLE findings investigated and deliberately left as-is with
+reasoning recorded below rather than silently dropped.
+
+**Most severe — production cron jobs had never actually run:** `proxy.ts`'s route
+matcher excluded `/api/health` and static assets from the session-check pipeline but
+not `/api/cron/*`, so every cron request (`generate`/`reminders`/`recap`, real
+`CRON_SECRET` bearer or not) hit the same "no session → redirect to `/login`" path as
+a logged-out browser — a 303, never the route handler, confirmed live against
+production with `curl` before fixing. Vercel Cron doesn't follow the redirect or
+report this as a failure (it sees a response, just the wrong one), so this had been
+silently true since Phase 6 with no alarm ever firing. Fixed by adding
+`api/cron/` to the matcher's negative-lookahead exclusion group; added
+`e2e/cron.spec.ts` (new) asserting all three routes return their own 200/401 through
+the real running server, not a `/login` redirect, for both a valid and an
+invalid/missing secret — the class of bug that a unit test on the matcher regex alone
+would not have caught, only a real end-to-end request could.
+
+**Two genuine race conditions closed, both verified against real concurrent load
+against Postgres, not just sequential-call tests:**
+
+- `changeMemberRoleAction`/`removeMemberAction` (`app/actions/members.ts`) checked
+  "would this leave zero owners" via a plain `SELECT` with no lock, then wrote — two
+  concurrent demotes of the household's last two owners could both read "2 owners,
+  safe" and both proceed, leaving zero. Fixed by wrapping both actions in
+  `db.transaction`, locking every owner row (`.for('update')`) before the check, so
+  the loser's re-check (via Postgres's `EvalPlanQual` re-evaluation) sees the
+  winner's already-committed change. Verified with real `Promise.allSettled`
+  concurrent-burst tests (two simultaneous demote/remove calls against the same
+  two-owner household), accepting either of two legitimately-timing-dependent
+  outcomes (a thrown `ForbiddenError` or a returned "last owner" error) as correct —
+  run 3× to confirm no flakiness.
+- `loginAction` (`app/actions/auth.ts`) recorded a failed attempt and checked the
+  rate limit as two separate, unlocked steps — under a real concurrent burst (10
+  simultaneous wrong-password requests, added as a regression test), more than 5
+  could slip through the 5-attempts/15-minute limiter before any of their own
+  `INSERT`s became visible to each other. Fixed by wrapping the check+verify+record
+  sequence in `db.transaction` with a `pg_advisory_xact_lock(hashtext(email),
+  hashtext(ip))` taken first, serializing concurrent attempts for the same
+  email+IP without row-level locking (nothing to lock — the rate-limit "state" is a
+  row count, not a row). `createSession`/`redirect` stayed outside the transaction
+  (no reason to hold the lock across a cookie write). Verified live: 10 concurrent
+  wrong-password calls now produce exactly 5 `"Invalid email or password."` and
+  exactly 5 rate-limited results, exactly 5 DB rows — run 3× to confirm no flakiness.
+
+**Other confirmed correctness bugs fixed:**
+
+- `shouldPropagate` (`lib/domain/entries.ts`) treated a row with a recorded actual
+  _date_ but a still-blank _amount_ as an untouched forecast (only checked
+  `actualCents === null`) — `updateActualAction` genuinely allows saving just a date
+  with the amount left empty, so a later recurring-item propagate or a
+  remove-forecast could silently delete/overwrite a date the user had already
+  entered. Now requires both `actualCents === null && actualDate === null`.
+- `acceptInviteAction` (`app/actions/invites.ts`) had a residual race: two accepts of
+  different invitations for the same email could both pass the "no existing user"
+  check before either inserted. Added a pre-check plus a Postgres `23505`
+  unique-violation catch as a defense-in-depth backstop. Paired with a new
+  `lib/auth/email.ts` (`normalizeEmail`/`emailEquals`) used consistently at every
+  email-comparison site (login, invites, seed) — logins were previously
+  case-sensitive against a case-sensitive unique index, so `Steven@x.com` and
+  `steven@x.com` could both register, and one of them would then be permanently
+  unable to log back in with their own actual email casing.
+- `computeGoalProgress` (`lib/domain/budgeting.ts`) threw an uncaught `RangeError`
+  from `.toISOString()` on a schema-legal but extreme `target_date`/savings-rate
+  combination that projects a date outside JS's representable range. Now checks
+  `Number.isNaN(projected.getTime())` first and returns `null`.
+- `lib/domain/csv.ts`'s row-splitter didn't handle a bare `\r` (classic Mac line
+  ending) at all — silently merged that row into the next one instead of ending it.
+  Fixed; `CsvSizeCheck` also changed from a `{ok: boolean; error?: string}`
+  anti-pattern to a real `{ok: true} | {ok: false; error: string}` discriminated
+  union, removing three call sites' dead `?? '...'` fallbacks that existed only
+  because the old type couldn't guarantee `error` was present when `ok` was false.
+- Server-side "current month" was computed inconsistently — some call sites used
+  local server time (`new Date().getFullYear()`/`getMonth()`), which is wrong for a
+  server (Vercel's server clock is UTC; local-time "current month" would drift
+  around midnight UTC depending on deploy region). Added `currentYearMonth()`
+  (`lib/domain/today.ts`, UTC-based) and switched every _server-side_ call site
+  (monthly page, year-nav, month-params parsing, all three cron routes,
+  calendar-view's "is this the current month" check) to it — deliberately leaving
+  `generate-form.tsx`'s client-side form default alone, since that one correctly
+  wants the browser's own local "today," not the server's.
+- The Monthly page's on-load auto-generate hook had no guard against firing twice
+  in quick succession for the same household (e.g. two tabs, or a fast
+  double-navigation) beyond the underlying `INSERT ... ON CONFLICT DO NOTHING`'s
+  own idempotency at the DB level — cheap but not free (still a real query pair per
+  redundant fire). Added `lib/domain/auto-generate-guard.ts`, a small in-memory
+  per-household TTL guard (`shouldRun`/`recordRun`, injectable clock) that skips a
+  fire within the same short window.
+- Resend's SDK has **no `AbortSignal` support anywhere** in its types (checked
+  directly against the installed version's `.d.mts`, not assumed) — the original
+  finding's proposed fix (wire an abort signal into the timeout race) was not
+  actually implementable. The real bug — a timed-out send that Resend may have
+  still processed server-side gets retried and could double-send — has an actual
+  fix in the SDK: a single `idempotencyKey` (one `randomUUID()` per logical send,
+  reused across all retries of that same send, passed via
+  `CreateEmailRequestOptions`) tells Resend's own server "this may be a retry,
+  don't send it twice" regardless of whether the client ever learns the first
+  attempt succeeded.
+- `app/actions/report-error.ts` (the client-error-boundary bridge, deliberately
+  unauthenticated since the root error boundary must work pre-login) forwarded
+  whatever the client sent with no shape/size validation. Added a zod schema
+  (message capped at 2000 chars, optional digest capped at 200) and a fixed
+  generic log message for malformed input, so a hostile/broken client can't inject
+  arbitrary unbounded content into production logs.
+
+**Efficiency cleanups** (all covered by existing/expanded tests, not new behavior):
+`getAccountEntriesBeforeYear` replaced a fetch-every-row-then-sum-in-JS pattern with
+a `SUM(COALESCE(actual, budgeted)) ... GROUP BY` SQL aggregate (verified
+byte-identical to the old JS totals — addition is associative); the dashboard's
+prior-year YoY fetch and the recap cron now pull only the columns they need
+(`getIncomeExpenseRows`/`getDashboardRowsForMonth`) instead of the full dashboard
+row set; the three cron routes' per-household kill-switch check (one query per
+household, every day, for every cron) replaced with one batched
+`getEnabledHouseholdIds` query per run; `resolveOptionalRef` (bank-account/category
+ref resolution) de-duplicated out of `recurring.ts`/`monthly.ts` into
+`lib/db/queries.ts`; the recurring-generate-form's local month-name array
+de-duplicated into `lib/format.ts`'s shared `MONTH_SHORT`.
+
+**Two PLAUSIBLE findings investigated and deliberately left as-is** (reasoning
+recorded in-code, not silently dropped): a lint-bypassable gap where `pool.end()`
+could still be called on an aliased import in an integration test (the existing
+warning comment plus this repo's two-file blast radius don't justify a custom
+ESLint rule at this scale — same call this session already made once for a related
+finding above); `clean-e2e-debris.ts`'s age-based orphan heuristic could in theory
+sweep a slow-but-legitimate long-running test, and an `is_test` column would remove
+the ambiguity entirely — rejected because it would require a schema migration and a
+seed-data convention change for a heuristic that's already proven itself in
+practice (see the two threshold incidents above) and has a 5-minute margin far
+larger than any real test's runtime.
+
+**Test/CI status after every fix, full regression:** lint/typecheck/format all
+clean, 392/392 unit tests (99.37% coverage on the gated scope, gate is 80%), 232/232
+integration tests against the real `dev` branch, `npm run build` clean, 51/52 E2E.
+The one E2E failure (`mobile.spec.ts`'s bottom-nav test) was individually
+re-investigated post-hoc: reproduces consistently even fully isolated (not a
+resource-contention flake), root cause is a `<nextjs-portal
+data-nextjs-dev-overlay="true">` element — Next's dev-mode overlay — visually
+overlapping the bottom nav on a narrow mobile viewport under `next dev` only.
+`playwright.config.ts` runs E2E against `npm run start` (a real production build) in
+CI and only `next dev` locally, so this element cannot exist in CI or production;
+confirmed via `git diff` that no bottom-nav/layout/`mobile.spec.ts` file was touched
+by any of the 27 fixes above. Not a regression, pre-existing, out of scope for this
+pass.
+
+---
