@@ -2997,7 +2997,7 @@ against Postgres, not just sequential-call tests:**
   could slip through the 5-attempts/15-minute limiter before any of their own
   `INSERT`s became visible to each other. Fixed by wrapping the check+verify+record
   sequence in `db.transaction` with a `pg_advisory_xact_lock(hashtext(email),
-  hashtext(ip))` taken first, serializing concurrent attempts for the same
+hashtext(ip))` taken first, serializing concurrent attempts for the same
   email+IP without row-level locking (nothing to lock — the rate-limit "state" is a
   row count, not a row). `createSession`/`redirect` stayed outside the transaction
   (no reason to hold the lock across a cookie write). Verified live: 10 concurrent
