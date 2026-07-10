@@ -18,6 +18,19 @@ const eslintConfig = defineConfig([
     // *.integration.test.ts specifically: lib/db/seed.ts, lib/db/migrate.ts, and
     // lib/db/clean-e2e-debris.ts's own main() legitimately call pool.end() as
     // standalone CLI scripts, not integration tests sharing one Vitest process.
+    //
+    // Known gap (investigated, deliberately not closed): this selector matches by
+    // literal identifier name, so `import { pool as p } from './index'; p.end();`
+    // evades it — no-restricted-syntax has no cross-field comparison to catch an
+    // aliased import regardless of its local name; that needs a real custom rule with
+    // scope-based variable resolution (tracing the call's identifier back to its
+    // ImportSpecifier's `imported.name`), not a selector. Not built: the realistic
+    // failure mode this guard defends against is a well-intentioned dev accidentally
+    // reintroducing `pool.end()` in a new test file (what actually happened once
+    // already); a DELIBERATE rename specifically to dodge this lint rule is a
+    // different, much less likely threat that a code reviewer would also catch on
+    // sight, with or without tooling — the custom-rule engineering isn't worth it for
+    // that narrower case.
     files: ['**/*.integration.test.ts'],
     rules: {
       'no-restricted-syntax': [

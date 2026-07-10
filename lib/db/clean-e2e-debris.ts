@@ -74,6 +74,17 @@ import {
 // hand-duplicating it — two independently maintained copies of this number already drifted
 // out of sync once tonight (this file's own log message, three edits below, still said
 // ">1h old" for a full commit after this value became 5 minutes).
+//
+// Considered and rejected: a households.is_test boolean column instead of this
+// age-based heuristic. It doesn't actually eliminate the need for an age cutoff — a
+// bare `DELETE WHERE is_test` would still race a real in-flight test's household
+// (nothing marks a row "test but currently in use"), so the age check stays either
+// way; the column would only remove the SEED_OWNER_EMAIL lookup, at the cost of adding
+// a test-only column to the schema every real household/user row also carries. Given
+// it doesn't remove the core mechanism this file already has to get right, and this
+// only ever runs against the ephemeral, CI-only `ci` branch (main()'s `CI !== 'true'`
+// guard) where every non-seed-owner household is test debris by construction, the
+// current age+seed-owner-lookup approach stays.
 export const ORPHAN_HOUSEHOLD_AGE_MS = 5 * 60 * 1000;
 
 // Extracted from main() so it's testable against a real (local/dev) DB without going
