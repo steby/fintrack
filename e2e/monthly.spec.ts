@@ -76,20 +76,27 @@ test.describe('monthly entries', () => {
     await closeTestDb();
   });
 
-  test('generate, enter an actual, status advances, override budget survives a later propagate, ad-hoc add/delete', async ({
+  test('generate, enter an actual, status advances, override budget survives a later propagate', async ({
     page,
   }) => {
-    // This test chains an unusually large number of real server round trips (recurring
-    // item create + generate + two DB-polled actual-amount/date edits + budget override
-    // + a recurring rename + propagate-skip check + ad-hoc add/delete) into one flow —
-    // deliberately, since it's exercising the full propagate/override interaction, not
-    // easily split without losing that end-to-end guarantee. Already documented once
-    // before as timing-marginal under CI's real network latency (see the DB-poll comment
-    // below); the default 30s budget left it exactly at the edge. Raised after it failed
-    // reproducibly on Dependabot PR #9 (react-dom 19.2.4 -> 19.2.7) with "Test timeout of
-    // 30000ms exceeded" on the very last assertion, not a specific broken interaction —
-    // consistent with the cumulative time from every earlier step simply eating into the
-    // final assertion's own budget, not delete itself being broken.
+    // This test chains a large number of real server round trips (recurring item
+    // create + generate + two DB-polled actual-amount/date edits + budget override +
+    // a recurring rename + propagate-skip check) into one flow — deliberately, since
+    // it's exercising the full propagate/override interaction end to end, not easily
+    // split further without losing that composition guarantee (generate + actual +
+    // override + propagate-skip working together, not just each in isolation).
+    // Already documented once before as timing-marginal under CI's real network
+    // latency (see the DB-poll comment below); the default 30s budget left it exactly
+    // at the edge. It failed reproducibly a second time on Dependabot PR #9 (react-dom
+    // 19.2.4 -> 19.2.7) with "Test timeout of 30000ms exceeded" on its very last
+    // assertion at the time (ad-hoc delete) — not a specific broken interaction, but
+    // cumulative time from every earlier step eating into the final assertion's own
+    // budget. Fixed two ways: raised this test's own timeout to 45s AND split the
+    // ad-hoc add/delete case out into its own standalone test below (it never
+    // depended on any state from this test — the same reasoning that already split
+    // the calendar/agenda case out once before), so this test no longer needs the
+    // full 45s just to have margin, but keeps it anyway rather than re-tuning a
+    // number with no real headroom data behind it.
     test.setTimeout(45000);
 
     await page.goto('/login');
@@ -196,8 +203,24 @@ test.describe('monthly entries', () => {
     await page.goto(currentMonthUrl());
     await expect(page.getByTestId('entry-row').filter({ hasText: itemName })).toBeVisible();
     await expect(page.getByTestId('entry-row').filter({ hasText: renamedItemName })).toHaveCount(0);
+  });
 
-    // Ad-hoc entry: add then delete.
+  // Split out from the mega-test above: add/delete of an ad-hoc entry never depended
+  // on that test's recurring item, actual amount, budget override, or propagate-rename
+  // state — it only needs a logged-in owner on the current month's page, same as
+  // "an invalid amount is rejected" below. Sharing the mega-test's cumulative timeout
+  // budget after 7+ prior UI interactions was what made this specific assertion the
+  // one that failed when Dependabot PR #9 (react-dom bump) tipped it over 30s.
+  // Standalone, it gets its own full budget instead of inheriting timing pressure from
+  // everything that ran before it in that test.
+  test('ad-hoc entry: add then delete', async ({ page }) => {
+    await page.goto('/login');
+    await page.getByLabel('Email').fill(OWNER_EMAIL);
+    await page.getByLabel('Password').fill(OWNER_PASSWORD);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL('/');
+
+    await page.goto(currentMonthUrl());
     await page.getByRole('button', { name: 'Ad-hoc entry' }).click();
     await page.getByPlaceholder('e.g. Car Repair').fill(adhocName);
     await page.getByRole('button', { name: 'Add entry' }).click();
