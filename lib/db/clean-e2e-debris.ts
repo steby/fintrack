@@ -49,25 +49,28 @@ import {
 // Age-based rather than name/prefix-based: integration test files don't share one
 // naming convention the way E2E specs do (each file picks its own household labels),
 // so there's no single pattern to match. Every legitimate household from this workflow
-// is deleted within seconds of being created by its own test; anything older than an
-// hour is unambiguously orphaned, never a real in-flight test. The one household this
-// must never touch — the real seeded owner's, looked up by SEED_OWNER_EMAIL exactly
-// like lib/db/seed.ts does — is excluded explicitly, not just "hopefully old enough."
+// is deleted within seconds of being created by its own test; anything past this
+// window is unambiguously orphaned, never a real in-flight test. The one household
+// this must never touch — the real seeded owner's, looked up by SEED_OWNER_EMAIL
+// exactly like lib/db/seed.ts does — is excluded explicitly, not just "hopefully old
+// enough."
 //
-// Twice lowered to 5 minutes and reverted back on 2026-07-10 for one-time remediation
-// runs: first after months of accumulated debris finally tipped getAllHouseholds()-
-// driven cron route tests (reminders/recap/generate) into hanging for their full 15s
-// test timeout; then again the same night after a burst of ~10 CI runs within about an
+// Permanently lowered from 1 hour to 5 minutes on 2026-07-10, after the 1-hour value
+// caused the same real failure twice in one night: months of accumulated debris first
+// tipped getAllHouseholds()-driven cron route tests (reminders/recap/generate) into
+// hanging for their full 15s test timeout, then a burst of ~10 CI runs within about an
 // hour (several Dependabot PR rebases/reruns/merges in quick succession) produced
 // enough of its OWN fresh failed-test debris to re-bloat the household count before
-// the 1-hour sweep ever got a chance to clear any of it — same "debris accumulates
-// faster than the hourly sweep clears it" failure mode both times, just triggered by a
-// burst of CI activity in one sitting the second time instead of months of drift. Both
-// remediations confirmed fixed by a subsequent clean CI run, then reverted back to the
-// original 1-hour threshold here. Worth a deliberate follow-up on whether 5 minutes
-// should just become the permanent value, given it's now happened twice — not decided
-// here.
-const ORPHAN_HOUSEHOLD_AGE_MS = 60 * 60 * 1000;
+// the hourly sweep ever got a chance to clear any of it — "debris accumulates faster
+// than the sweep clears it" is a real, recurring failure mode at 1 hour, not a
+// one-off. Both incidents were fixed by temporarily dropping this same value to 5
+// minutes and confirming a clean run, which is exactly this value now, permanently.
+// Nothing about 5 minutes is less safe than 1 hour: a legitimate household's own test
+// always cleans it up within seconds (observed tonight: even a 21-test integration
+// file finishes in under 50s total), so the threshold only needs enough margin to
+// never race a real in-flight test — 5 minutes has that margin many times over, while
+// also self-healing debris from a busy CI burst in minutes instead of up to an hour.
+const ORPHAN_HOUSEHOLD_AGE_MS = 5 * 60 * 1000;
 
 // Extracted from main() so it's testable against a real (local/dev) DB without going
 // through this file's hard CI-only guard or its dynamic ./index import — see

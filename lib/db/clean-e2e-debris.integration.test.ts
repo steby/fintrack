@@ -17,7 +17,7 @@ import { cleanOrphanedHouseholds } from './clean-e2e-debris';
 // old `createdAt`) can ever be candidates for deletion. Getting this wrong would delete
 // real local dev data, not just test debris — worth the extra care.
 const NOW = new Date('2020-01-01T00:00:00Z');
-const ONE_HOUR_MS = 60 * 60 * 1000;
+const SWEEP_AGE_MS = 5 * 60 * 1000;
 
 async function makeHousehold(label: string, createdAt: Date) {
   const [household] = await db.insert(households).values({ name: label, createdAt }).returning();
@@ -29,10 +29,10 @@ async function cleanup(...householdIds: string[]) {
 }
 
 describe('cleanOrphanedHouseholds', () => {
-  it('deletes a household older than 1 hour, keeps a recent one', async () => {
+  it('deletes a household older than the sweep age, keeps a recent one', async () => {
     const old = await makeHousehold(
       'Orphan test OLD',
-      new Date(NOW.getTime() - ONE_HOUR_MS - 1000),
+      new Date(NOW.getTime() - SWEEP_AGE_MS - 1000),
     );
     const recent = await makeHousehold('Orphan test RECENT', new Date(NOW.getTime() - 1000));
 
@@ -51,7 +51,7 @@ describe('cleanOrphanedHouseholds', () => {
     const seedOwnerEmail = `orphan-test-seed-owner-${Date.now()}@example.com`;
     const seedHousehold = await makeHousehold(
       'Orphan test SEED',
-      new Date(NOW.getTime() - ONE_HOUR_MS - 1000),
+      new Date(NOW.getTime() - SWEEP_AGE_MS - 1000),
     );
     await db.insert(users).values({
       householdId: seedHousehold.id,
@@ -62,7 +62,7 @@ describe('cleanOrphanedHouseholds', () => {
     });
     const otherOld = await makeHousehold(
       'Orphan test OTHER OLD',
-      new Date(NOW.getTime() - ONE_HOUR_MS - 1000),
+      new Date(NOW.getTime() - SWEEP_AGE_MS - 1000),
     );
 
     const result = await cleanOrphanedHouseholds(db, seedOwnerEmail, NOW);
@@ -81,7 +81,7 @@ describe('cleanOrphanedHouseholds', () => {
     const unmatchedEmail = `orphan-test-unmatched-${Date.now()}@example.com`;
     const old = await makeHousehold(
       'Orphan test UNVERIFIED SEED',
-      new Date(NOW.getTime() - ONE_HOUR_MS - 1000),
+      new Date(NOW.getTime() - SWEEP_AGE_MS - 1000),
     );
 
     const result = await cleanOrphanedHouseholds(db, unmatchedEmail, NOW);
@@ -99,7 +99,7 @@ describe('cleanOrphanedHouseholds', () => {
   it('does not throw and still deletes old households when no seed owner email is configured', async () => {
     const old = await makeHousehold(
       'Orphan test NO SEED EMAIL',
-      new Date(NOW.getTime() - ONE_HOUR_MS - 1000),
+      new Date(NOW.getTime() - SWEEP_AGE_MS - 1000),
     );
 
     const result = await cleanOrphanedHouseholds(db, undefined, NOW);
@@ -112,7 +112,7 @@ describe('cleanOrphanedHouseholds', () => {
   it('is idempotent: a second call with no new debris deletes nothing', async () => {
     const old = await makeHousehold(
       'Orphan test IDEMPOTENT',
-      new Date(NOW.getTime() - ONE_HOUR_MS - 1000),
+      new Date(NOW.getTime() - SWEEP_AGE_MS - 1000),
     );
 
     const first = await cleanOrphanedHouseholds(db, undefined, NOW);
@@ -125,10 +125,10 @@ describe('cleanOrphanedHouseholds', () => {
     expect(second.orphanedHouseholds).toBe(0);
   });
 
-  it('keeps a household exactly at the 1-hour boundary (not yet strictly older)', async () => {
+  it('keeps a household exactly at the sweep-age boundary (not yet strictly older)', async () => {
     const boundary = await makeHousehold(
       'Orphan test BOUNDARY',
-      new Date(NOW.getTime() - ONE_HOUR_MS),
+      new Date(NOW.getTime() - SWEEP_AGE_MS),
     );
 
     await cleanOrphanedHouseholds(db, undefined, NOW);
