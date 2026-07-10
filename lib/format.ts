@@ -44,3 +44,20 @@ export const MONTH_SHORT = [
   'Nov',
   'Dec',
 ];
+
+// Full-name counterpart to MONTH_SHORT, same reasoning: one shared lookup instead of
+// pages hand-rolling their own copy that can drift.
+export const MONTH_FULL = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];

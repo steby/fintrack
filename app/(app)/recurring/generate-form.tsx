@@ -3,10 +3,9 @@
 import { useActionState, useState } from 'react';
 import { generateAction } from '../../actions/recurring';
 import { addMonths } from '../../../lib/domain/recurring';
+import { MONTH_SHORT } from '../../../lib/format';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 export function GenerateForm() {
   const [open, setOpen] = useState(false);
@@ -38,7 +37,7 @@ export function GenerateForm() {
           defaultValue={currentMonth}
           className="h-8 rounded-md border bg-background px-2 text-sm"
         >
-          {MONTHS.map((m, i) => (
+          {MONTH_SHORT.map((m, i) => (
             <option key={m} value={i + 1}>
               {m}
             </option>
@@ -56,7 +55,7 @@ export function GenerateForm() {
           defaultValue={toDefault.month}
           className="h-8 rounded-md border bg-background px-2 text-sm"
         >
-          {MONTHS.map((m, i) => (
+          {MONTH_SHORT.map((m, i) => (
             <option key={m} value={i + 1}>
               {m}
             </option>
