@@ -61,6 +61,14 @@ if (env.NODE_ENV !== 'production') {
 }
 
 export const db = drizzle(pool, { schema });
+// DO NOT call pool.end() or healthCheckPool.end() in an integration test's afterAll.
+// Both are globalThis-cached singletons shared by every *.integration.test.ts file in
+// a run (fileParallelism: false runs them all sequentially in one process) — a per-file
+// close previously poisoned every file scheduled to run after it with "Cannot use a
+// pool after calling end on the pool", a real bug that took a full debugging session to
+// find and fix. No file closes either pool anymore; Vitest's own worker teardown
+// releases the connections once the whole run completes. See
+// lib/db/index.integration.test.ts's comment for the full explanation.
 export { pool, healthCheckPool, createPool };
 
 /** Used by /api/health. Never throws — returns false on any failure or timeout.

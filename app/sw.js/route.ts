@@ -15,8 +15,19 @@ export const dynamic = 'force-static';
 // rebuilds was never the problem this solves, only across real deploys).
 const CACHE_VERSION = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ?? 'local-dev';
 
-function buildScript(): string {
-  return `// Minimal service worker: cache-first for immutable static assets ONLY. Every other
+// A plain constant, not a function: buildScript() had no parameter and closed only over
+// already-resolved module-scope values (CACHE_VERSION, the two path arrays), so calling
+// it was pure indirection — dynamic = 'force-static' above means this whole module only
+// ever evaluates once per build anyway.
+//
+// Escaping gotcha: this is ONE outer template literal containing the entire generated
+// script below, including its own prose comments. Any backtick typed into one of those
+// inner comments — this codebase's normal way to quote an identifier, used freely
+// elsewhere in this file and in proxy.ts/static-paths.ts — closes the OUTER literal
+// early unless escaped (see the already-escaped `` \`.catch\` `` a few dozen lines down).
+// A future comment added here without escaping its backticks breaks this file at build
+// time at best, silently truncates the shipped service worker at worst.
+const SW_SCRIPT: string = `// Minimal service worker: cache-first for immutable static assets ONLY. Every other
 // request (navigation/HTML, RSC payloads, /api/*, /login, /settings/*, etc.) is left
 // completely untouched — the fetch handler returns without calling
 // event.respondWith(), so the browser makes the request exactly as if no service
@@ -108,10 +119,9 @@ self.addEventListener('fetch', (event) => {
   );
 });
 `;
-}
 
 export async function GET() {
-  return new Response(buildScript(), {
+  return new Response(SW_SCRIPT, {
     headers: {
       'Content-Type': 'application/javascript; charset=utf-8',
       // Browsers already re-check a registered service worker for byte-level changes

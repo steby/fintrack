@@ -70,7 +70,11 @@ import {
 // file finishes in under 50s total), so the threshold only needs enough margin to
 // never race a real in-flight test — 5 minutes has that margin many times over, while
 // also self-healing debris from a busy CI burst in minutes instead of up to an hour.
-const ORPHAN_HOUSEHOLD_AGE_MS = 5 * 60 * 1000;
+// Exported so clean-e2e-debris.integration.test.ts can import the real value instead of
+// hand-duplicating it — two independently maintained copies of this number already drifted
+// out of sync once tonight (this file's own log message, three edits below, still said
+// ">1h old" for a full commit after this value became 5 minutes).
+export const ORPHAN_HOUSEHOLD_AGE_MS = 5 * 60 * 1000;
 
 // Extracted from main() so it's testable against a real (local/dev) DB without going
 // through this file's hard CI-only guard or its dynamic ./index import — see
@@ -174,7 +178,11 @@ async function main() {
     } else {
       logger.info(
         orphanResult,
-        'Cleaned orphaned (>1h old) households from any test source (idempotent).',
+        // Derived from the constant, not hand-typed — this exact message already went
+        // stale once (said ">1h old" for a full commit after the threshold became 5
+        // minutes), because a literal duration in a log string has no way to notice
+        // the constant it's describing changed underneath it.
+        `Cleaned orphaned (>${ORPHAN_HOUSEHOLD_AGE_MS / 60_000}m old) households from any test source (idempotent).`,
       );
     }
 

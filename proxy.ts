@@ -105,7 +105,7 @@ export const config = {
   // `config.matcher` at build time (AST analysis, not execution) — a real build
   // confirmed a computed expression here is rejected outright ("Entry matcher[0]
   // need to be static strings"). The PWA-specific alternatives below
-  // (`icon$|icons/|apple-icon$|sw\.js$|favicon\.ico$|manifest\.webmanifest$`) are
+  // (`icon$|apple-icon$|favicon\.ico$|manifest\.webmanifest$|sw\.js$|icons/`) are
   // NOT hand-typed from scratch — they're the tested, byte-for-byte output of
   // lib/pwa/static-paths.ts's buildPwaMatcherAlternatives(), which is what
   // app/sw.js/route.ts's cacheable-path check imports directly (a Route Handler's

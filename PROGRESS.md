@@ -2849,3 +2849,83 @@ caused _this_ failure. Both can be true: CI push cadence can still leave orphane
 this pool-lifecycle bug.
 
 ---
+
+## The orphan-household sweep threshold: 1 hour → 5 minutes, permanently (2026-07-10)
+
+With the pool-lifecycle bug fixed, CI's real underlying problem surfaced on its own,
+twice, in the same night — both times traced to `lib/db/clean-e2e-debris.ts`'s
+`ORPHAN_HOUSEHOLD_AGE_MS`, which had been 1 hour since Phase 6.
+
+**Incident 1:** the cron route tests (reminders/recap/generate, which call
+`getAllHouseholds()` — the only code that ever iterates every household unscoped)
+hung on their very first real DB call, immediately, not after several tests —
+consistent with an already-bloated household count, not a within-run leak. Months of
+accumulated debris (small, harmless leaks from cancelled CI runs, invisible until
+Phase 6's unscoped query started iterating all of them) had finally crossed the line
+into real 15s test timeouts. Fixed via a one-time remediation: temporarily dropped the
+sweep threshold to 5 minutes (safe — this step runs before each CI run's own tests
+start, so there's no in-flight data to catch, only leftovers from finished runs),
+confirmed a clean CI run, reverted back to 1 hour.
+
+**Incident 2:** same night, after a burst of ~10 CI runs within about an hour
+(several Dependabot PR rebases/reruns/merges in quick succession, each contributing
+its own failed-test debris faster than the 1-hour sweep could clear any of it) —
+the identical failure recurred. Same fix: temp-lower to 5 minutes, confirm clean,
+revert to 1 hour.
+
+Having hit the same failure mode twice in one session — the second time from normal
+CI activity, not months of drift — made a case that 1 hour was never actually the
+right permanent value. Made 5 minutes **permanent** instead: nothing about it is less
+safe (every legitimate household is cleaned up by its own test within seconds — an
+entire 21-test integration file finished in under 50s total in local testing), so the
+threshold only needs enough margin to never race a real in-flight test, which 5
+minutes clears many times over, while also self-healing a busy CI burst in minutes
+instead of up to an hour. `ORPHAN_HOUSEHOLD_AGE_MS` is now `5 * 60 * 1000`, exported
+from `lib/db/clean-e2e-debris.ts` so the paired integration test imports the real
+value instead of maintaining its own copy (the two drifted out of sync — the file's
+own log message still said ">1h old" for a full commit after the threshold changed;
+fixed in the follow-up `/code-review` pass below).
+
+**If a future edit is ever tempted to revert this back toward 1 hour:** don't, without
+re-reading this entry first — that's the exact change that caused both incidents above.
+
+---
+
+## `/code-review` pass on the pool-lifecycle + threshold work (2026-07-10)
+
+10-angle review (with several finder agents stalling and needing narrower-scoped
+retries) on everything since the last reviewed commit. 8 confirmed, 1 plausible,
+4 refuted.
+Fixed the 8 confirmed/cheap items same day:
+
+- `clean-e2e-debris.ts`'s success log hardcoded ">1h old" after the threshold became
+  5 minutes — now derived from the constant (`>${ORPHAN_HOUSEHOLD_AGE_MS / 60_000}m`)
+  instead of a literal string, so it can't go stale the same way again.
+- The paired integration test's `SWEEP_AGE_MS` was a hand-typed duplicate of the real
+  constant — `ORPHAN_HOUSEHOLD_AGE_MS` is now exported and imported instead.
+- `vitest.config.ts`'s `hookTimeout` comment still explained itself via an `afterAll`
+  that the pool-lifecycle fix had already removed — corrected.
+- `app/sw.js/route.ts`'s `buildScript()` was simplified to a plain `SW_SCRIPT`
+  constant (it only ever ran once, closing over already-resolved module constants),
+  plus an explicit warning comment about the nested-template-literal backtick-escaping
+  footgun a future inner comment could trip.
+- `proxy.ts`'s comment illustrating the PWA matcher alternatives was ordered
+  differently than the real literal two lines below it — reordered to match.
+- `lib/db/index.ts`'s `pool`/`healthCheckPool` exports gained an explicit
+  "don't call `.end()` on these in a test's `afterAll`" warning comment, so the next
+  engineer who copies an existing integration test file as a template doesn't
+  silently reintroduce the bug this session just spent real effort fixing.
+- This entry itself, closing the gap the review found: the threshold saga above was
+  previously undocumented in PROGRESS.md (only in commit messages), which is exactly
+  the kind of gap that risks a future well-intentioned revert.
+
+**Deferred, not fixed:** a real structural guard (e.g. an ESLint rule) against ever
+reintroducing `pool.end()` in an integration test file — the warning comment above is
+a cheap partial mitigation, but a lint rule is a bigger, separate investment worth
+doing deliberately, not appended to a long session. `e2e/monthly.spec.ts`'s recurring
+timeout-bump pattern (raised twice now instead of being restructured) — a conscious,
+already-discussed decision to revisit later, not new information. A test in
+`lib/pwa/static-paths.test.ts` that compares raw source text rather than a structural
+value — plausible fragility, not currently triggered, lower priority than the above.
+
+---
