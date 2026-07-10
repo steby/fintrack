@@ -4,6 +4,7 @@ import { eq, and } from 'drizzle-orm';
 import { hash } from '@node-rs/argon2';
 import { required, formatZodIssues } from '../zod-format';
 import { households, users, categories, bankAccounts, recurringSchedule } from './schema';
+import { normalizeEmail, emailEquals } from '../auth/email';
 
 // Phase 0 proved the seed *mechanism* (env validation, password hashing, DB
 // connectivity, safe-to-re-run) before any domain schema existed. Phase 1 seeded the
@@ -327,9 +328,13 @@ async function seedHouseholdData(
 // pure — it never touches process.env, so importing it doesn't trigger lib/env.ts's
 // eager `loadEnv()` call.
 const seedEnvSchema = z.object({
+  // Normalized so a SEED_OWNER_EMAIL typed/pasted with any uppercase doesn't lock the
+  // seeded owner out of their own account the same way the confirmed bug did for
+  // invited members — see lib/auth/email.ts.
   SEED_OWNER_EMAIL: z
     .string(required('SEED_OWNER_EMAIL is required'))
-    .email('SEED_OWNER_EMAIL must be a valid email address'),
+    .email('SEED_OWNER_EMAIL must be a valid email address')
+    .transform(normalizeEmail),
   SEED_OWNER_PASSWORD: z
     .string(required('SEED_OWNER_PASSWORD is required'))
     .min(1, 'SEED_OWNER_PASSWORD is required'),
@@ -356,11 +361,15 @@ async function main() {
     // Idempotent via a natural-key (email) upsert check, not INSERT ... ON CONFLICT —
     // creating the owner also has to create their household in the same transaction,
     // so "does this owner already exist" is checked explicitly rather than relying on
-    // a unique-constraint conflict to short-circuit the insert.
+    // a unique-constraint conflict to short-circuit the insert. Case-insensitive
+    // (emailEquals, not eq) so a seed owner row created before normalizeEmail existed
+    // is still recognized as "already exists" — a case-sensitive check here would
+    // otherwise create a SECOND household+owner pair for the same real person, since
+    // idempotency depends entirely on this lookup finding the existing row.
     const existing = await db
       .select({ id: users.id, householdId: users.householdId })
       .from(users)
-      .where(eq(users.email, SEED_OWNER_EMAIL))
+      .where(emailEquals(users.email, SEED_OWNER_EMAIL))
       .limit(1);
 
     let householdId: string;

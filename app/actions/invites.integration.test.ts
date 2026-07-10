@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db } from '../../lib/db';
-import { users, sessions, householdInvitations } from '../../lib/db/schema';
+import { users, sessions, householdInvitations, households } from '../../lib/db/schema';
 import { generateToken } from '../../lib/auth/token';
 import { inviteExpiry } from '../../lib/auth/invite-rules';
 import { makeHouseholdWithUser, formData, cleanup } from './test-helpers';
@@ -88,6 +88,33 @@ describe('createInviteAction', () => {
     expect(result).toEqual({ error: 'That email is already a member of a household.' });
 
     await cleanup(owner.household.id, existing.household.id);
+  });
+
+  it('rejects inviting an email that already belongs to a user under DIFFERENT casing (regression: case-insensitive duplicate check)', async () => {
+    const { createInviteAction } = await import('./invites');
+    const owner = await makeHouseholdWithUser('owner', 'Invite create case A');
+    const mixedCaseEmail = `Invite-Create-Case-A-Target-${Date.now()}@Example.com`;
+    const [existingHousehold] = await db
+      .insert(households)
+      .values({ name: 'Invite create case A target household' })
+      .returning();
+    await db.insert(users).values({
+      householdId: existingHousehold.id,
+      email: mixedCaseEmail,
+      passwordHash: 'x',
+      name: 'Existing',
+      role: 'viewer',
+    });
+
+    mockToken = owner.token;
+    const result = await createInviteAction(
+      undefined,
+      formData({ email: mixedCaseEmail.toLowerCase(), role: 'viewer' }),
+    );
+
+    expect(result).toEqual({ error: 'That email is already a member of a household.' });
+
+    await cleanup(owner.household.id, existingHousehold.id);
   });
 
   it('is idempotent: a resubmit for the same email does not create a second pending invite', async () => {
@@ -286,6 +313,106 @@ describe('acceptInviteAction', () => {
     expect(createdUsers).toHaveLength(1);
 
     await cleanup(owner.household.id);
+  });
+
+  it('rejects accepting an invite whose email already belongs to an existing user, without an uncaught DB error', async () => {
+    const { acceptInviteAction } = await import('./invites');
+    const ownerA = await makeHouseholdWithUser('owner', 'Invite dup email A');
+    const email = `already-registered-${Date.now()}@example.com`;
+    // A real user already exists with this email — e.g. from accepting an EARLIER
+    // invite to a different household (household_invitations' uniqueness is per-
+    // household, so the same email can hold a valid pending invite in two households
+    // at once; users.email is globally unique).
+    await db.insert(users).values({
+      householdId: ownerA.household.id,
+      email,
+      passwordHash: 'x',
+      name: 'Already Registered',
+      role: 'viewer',
+    });
+
+    const ownerB = await makeHouseholdWithUser('owner', 'Invite dup email B');
+    const token = generateToken();
+    await db.insert(householdInvitations).values({
+      householdId: ownerB.household.id,
+      email,
+      role: 'member',
+      token,
+      invitedByUserId: ownerB.user.id,
+      expiresAt: inviteExpiry(),
+    });
+
+    const result = await acceptInviteAction(
+      undefined,
+      formData({ token, name: 'Second Try', password: 'a-fresh-password-123' }),
+    );
+    expect(result).toEqual({
+      error: 'An account with this email already exists — log in instead of accepting this invite.',
+    });
+
+    // Exactly one user with this email exists (the original) — accepting did not
+    // create a second one, and the invite itself was never claimed (still usable if
+    // the duplicate is ever resolved another way, e.g. the first account is removed).
+    const allUsers = await db.select().from(users).where(eq(users.email, email));
+    expect(allUsers).toHaveLength(1);
+    const [invitationRow] = await db
+      .select()
+      .from(householdInvitations)
+      .where(eq(householdInvitations.token, token));
+    expect(invitationRow.acceptedAt).toBeNull();
+
+    await cleanup(ownerA.household.id, ownerB.household.id);
+  });
+
+  it('concurrently accepting two different invites (different households) for the same email creates only ONE user', async () => {
+    const { acceptInviteAction } = await import('./invites');
+    const ownerA = await makeHouseholdWithUser('owner', 'Invite dup race A');
+    const ownerB = await makeHouseholdWithUser('owner', 'Invite dup race B');
+    const email = `dup-race-${Date.now()}@example.com`;
+    const tokenA = generateToken();
+    const tokenB = generateToken();
+    await db.insert(householdInvitations).values([
+      {
+        householdId: ownerA.household.id,
+        email,
+        role: 'member',
+        token: tokenA,
+        invitedByUserId: ownerA.user.id,
+        expiresAt: inviteExpiry(),
+      },
+      {
+        householdId: ownerB.household.id,
+        email,
+        role: 'viewer',
+        token: tokenB,
+        invitedByUserId: ownerB.user.id,
+        expiresAt: inviteExpiry(),
+      },
+    ]);
+
+    const submit = (token: string) =>
+      acceptInviteAction(
+        undefined,
+        formData({ token, name: 'Racer', password: 'a-fresh-password-123' }),
+      );
+
+    // This is the residual race the pre-check alone can't close (both accepts pass the
+    // pre-check before either INSERT commits) — proving the users_email_unique catch
+    // path, not just the pre-check, actually prevents a duplicate/uncaught error here.
+    const results = await Promise.allSettled([submit(tokenA), submit(tokenB)]);
+    const outcomes = results.map((r) =>
+      r.status === 'fulfilled' ? r.value : isRedirect(r.reason) ? 'redirected' : r.reason,
+    );
+
+    expect(outcomes.filter((o) => o === 'redirected')).toHaveLength(1);
+    expect(outcomes).toContainEqual({
+      error: 'An account with this email already exists — log in instead of accepting this invite.',
+    });
+
+    const createdUsers = await db.select().from(users).where(eq(users.email, email));
+    expect(createdUsers).toHaveLength(1);
+
+    await cleanup(ownerA.household.id, ownerB.household.id);
   });
 
   it('revokes an existing session before creating the new one for an already-logged-in submitter', async () => {

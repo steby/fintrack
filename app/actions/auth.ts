@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
 import { headers, cookies } from 'next/headers';
-import { eq, and, ne, gte } from 'drizzle-orm';
+import { eq, and, ne, gte, sql } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { users, loginAttempts, sessions } from '../../lib/db/schema';
 import {
@@ -15,9 +15,14 @@ import {
 import { createSession, deleteSession, SESSION_COOKIE_NAME } from '../../lib/auth/session';
 import { isRateLimited, LOGIN_RATE_LIMIT_WINDOW_MS } from '../../lib/auth/rate-limit';
 import { requireUser } from '../../lib/auth/guards';
+import { normalizeEmail, emailEquals } from '../../lib/auth/email';
 
 const loginSchema = z.object({
-  email: z.string().email(),
+  // Normalized here, at the parse boundary, so every subsequent use of
+  // parsed.data.email in this action (rate-limit lookup/insert, user lookup) is
+  // already consistent — see lib/auth/email.ts for why this exists (a user created via
+  // a mixed-case invite couldn't log in typing the lowercase form of their own email).
+  email: z.string().email().transform(normalizeEmail),
   // .max(200) is defense-in-depth, not a real password-length policy — this action is
   // reachable pre-authentication, and next.config.ts's Server Actions bodySizeLimit
   // was raised to 20MB for Phase 5's CSV upload (a GLOBAL setting, not scoped to that
@@ -59,40 +64,74 @@ export async function loginAction(_prevState: LoginState, formData: FormData): P
   const { email, password } = parsed.data;
   const ip = await getClientIp();
 
-  const recentAttempts = await db
-    .select({ attemptedAt: loginAttempts.attemptedAt, success: loginAttempts.success })
-    .from(loginAttempts)
-    .where(
-      and(
-        eq(loginAttempts.email, email),
-        eq(loginAttempts.ip, ip),
-        gte(loginAttempts.attemptedAt, new Date(Date.now() - LOGIN_RATE_LIMIT_WINDOW_MS)),
-      ),
-    );
-
-  if (isRateLimited(recentAttempts)) {
-    return { error: 'Too many attempts. Try again in a few minutes.' };
-  }
-
-  const rows = await db.select().from(users).where(eq(users.email, email)).limit(1);
-  const user = rows[0];
-
   // Same generic message either way — never reveal whether the email exists (spec.md
   // threat notes call out takeover/enumeration risk on the auth surface generally).
   const genericError: LoginState = { error: 'Invalid email or password.' };
 
-  // verifyPassword always runs, even when there's no such user — against a fixed dummy
-  // hash in that case — so both branches pay the same argon2 cost. Returning
-  // immediately for a nonexistent email (skipping the slow hash) would let an attacker
-  // enumerate valid emails purely from response latency, despite the identical message.
-  const validPassword = await verifyPassword(user?.passwordHash ?? DUMMY_PASSWORD_HASH, password);
-  await db.insert(loginAttempts).values({ email, ip, success: Boolean(user) && validPassword });
+  // The rate-limit SELECT and the loginAttempts INSERT below used to be two separate,
+  // unguarded statements — a burst of concurrent requests for the same (email, ip)
+  // could all run the SELECT (all seeing zero prior attempts) before any of them ran
+  // the INSERT, defeating the cap entirely regardless of how many attempts fired at
+  // once. pg_advisory_xact_lock serializes the whole check-hash-record sequence per
+  // (email, ip): the second attempt's SELECT can't even START until the first
+  // attempt's transaction (including its INSERT) has committed, so it correctly sees
+  // every attempt that came before it. Released automatically at transaction end
+  // (commit OR rollback) — no separate unlock call needed. Two independent int4 keys
+  // (hashtext(email), hashtext(ip)), not one concatenated string, so there's no
+  // ambiguity between e.g. email="a", ip="bc" and email="ab", ip="c" both hashing the
+  // concatenation "abc" — a collision here would just serialize two unrelated
+  // attempts against each other, not a security bypass, but the two-key form avoids
+  // it for free. createSession()/redirect() deliberately stay OUTSIDE this
+  // transaction: redirect() throws a special Next.js control-flow signal, not a real
+  // error, and letting that propagate through an open db.transaction() would make
+  // drizzle roll back everything inside it (including the loginAttempts row this
+  // transaction just committed) as if login itself had failed.
+  const outcome = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${email}), hashtext(${ip}))`);
 
-  if (!user || !validPassword) {
+    const recentAttempts = await tx
+      .select({ attemptedAt: loginAttempts.attemptedAt, success: loginAttempts.success })
+      .from(loginAttempts)
+      .where(
+        and(
+          eq(loginAttempts.email, email),
+          eq(loginAttempts.ip, ip),
+          gte(loginAttempts.attemptedAt, new Date(Date.now() - LOGIN_RATE_LIMIT_WINDOW_MS)),
+        ),
+      );
+
+    if (isRateLimited(recentAttempts)) {
+      return { kind: 'rate-limited' } as const;
+    }
+
+    // Case-insensitive: emailEquals (not eq) so a user whose row happens to predate
+    // normalizeEmail (or any account created before this fix) is still found
+    // correctly, with no data migration required — see lib/auth/email.ts.
+    const rows = await tx.select().from(users).where(emailEquals(users.email, email)).limit(1);
+    const user = rows[0];
+
+    // verifyPassword always runs, even when there's no such user — against a fixed
+    // dummy hash in that case — so both branches pay the same argon2 cost. Returning
+    // immediately for a nonexistent email (skipping the slow hash) would let an
+    // attacker enumerate valid emails purely from response latency, despite the
+    // identical message.
+    const validPassword = await verifyPassword(user?.passwordHash ?? DUMMY_PASSWORD_HASH, password);
+    await tx.insert(loginAttempts).values({ email, ip, success: Boolean(user) && validPassword });
+
+    if (!user || !validPassword) {
+      return { kind: 'invalid' } as const;
+    }
+    return { kind: 'success', userId: user.id } as const;
+  });
+
+  if (outcome.kind === 'rate-limited') {
+    return { error: 'Too many attempts. Try again in a few minutes.' };
+  }
+  if (outcome.kind === 'invalid') {
     return genericError;
   }
 
-  await createSession(user.id);
+  await createSession(outcome.userId);
   redirect('/');
 }
 

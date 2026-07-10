@@ -13,9 +13,13 @@ import { hashPassword, validatePassword } from '../../lib/auth/password';
 import { createSession, SESSION_COOKIE_NAME } from '../../lib/auth/session';
 import { sendInviteEmail } from '../../lib/email/invite';
 import { env } from '../../lib/env';
+import { normalizeEmail, emailEquals } from '../../lib/auth/email';
 
 const createInviteSchema = z.object({
-  email: z.string().email(),
+  // Normalized at the parse boundary — see lib/auth/email.ts. Every subsequent use of
+  // parsed.data.email in this action (duplicate check, stored invitation row, the
+  // email actually sent to) is already consistent.
+  email: z.string().email().transform(normalizeEmail),
   role: z.enum(['owner', 'member', 'viewer']),
 });
 
@@ -36,7 +40,10 @@ export async function createInviteAction(
   }
   const { email, role } = parsed.data;
 
-  const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  // Case-insensitive so inviting "bob@x.com" is correctly recognized as a duplicate
+  // when "Bob@X.com" (predating normalizeEmail, or any other source of mixed casing)
+  // already exists — see lib/auth/email.ts.
+  const existing = await db.select().from(users).where(emailEquals(users.email, email)).limit(1);
   if (existing[0]) {
     return { error: 'That email is already a member of a household.' };
   }
@@ -131,6 +138,28 @@ export async function acceptInviteAction(
 
   const passwordHash = await hashPassword(password);
 
+  // household_invitations' own uniqueness is per-household (schema.ts's
+  // household_invitations_household_email_pending_unique), so the same email can hold
+  // a valid pending invite in two DIFFERENT households at once — e.g. accepted in
+  // household A first (a real `users` row now exists for that email, since users.email
+  // is globally unique), then later opening household B's still-valid invite link for
+  // the same email. Checked here, before claiming the invite, so a doomed accept
+  // doesn't burn an otherwise-still-valid invitation — the household owner can still
+  // reissue or the person can log in with the account they already have.
+  // Case-insensitive for the same reason as createInviteAction's duplicate check —
+  // invitation.email may predate normalizeEmail (this invitation could have been
+  // created before this fix shipped).
+  const existingUser = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(emailEquals(users.email, invitation.email))
+    .limit(1);
+  if (existingUser[0]) {
+    return {
+      error: 'An account with this email already exists — log in instead of accepting this invite.',
+    };
+  }
+
   // The UPDATE below (`WHERE accepted_at IS NULL`) is the real concurrency guard, not
   // the validateInvite() check above — that check ran against a row read before this
   // transaction started, so two concurrent submissions of the same link could both
@@ -138,31 +167,56 @@ export async function acceptInviteAction(
   // (Postgres serializes the two via row-level locking), so "did the update affect a
   // row" is what actually decides which request wins the race, before either one ever
   // touches `users`.
-  const newUser = await db.transaction(async (tx) => {
-    const claimed = await tx
-      .update(householdInvitations)
-      .set({ acceptedAt: new Date() })
-      .where(
-        and(eq(householdInvitations.id, invitation.id), isNull(householdInvitations.acceptedAt)),
-      )
-      .returning({ id: householdInvitations.id });
+  let newUser;
+  try {
+    newUser = await db.transaction(async (tx) => {
+      const claimed = await tx
+        .update(householdInvitations)
+        .set({ acceptedAt: new Date() })
+        .where(
+          and(eq(householdInvitations.id, invitation.id), isNull(householdInvitations.acceptedAt)),
+        )
+        .returning({ id: householdInvitations.id });
 
-    if (!claimed[0]) {
-      return null;
+      if (!claimed[0]) {
+        return null;
+      }
+
+      const [user] = await tx
+        .insert(users)
+        .values({
+          householdId: invitation.householdId,
+          // Normalized even though createInviteAction already normalizes on write —
+          // this invitation could have been created before that fix shipped, and this
+          // is the one place a new users.email row actually gets written from it.
+          email: normalizeEmail(invitation.email),
+          passwordHash,
+          name,
+          role: invitation.role,
+        })
+        .returning();
+      return user;
+    });
+  } catch (err) {
+    // Defense-in-depth for the residual race the pre-check above can't close: two
+    // invites for the same email (different households) accepted at nearly the same
+    // moment could both pass the pre-check before either INSERT commits. Postgres's
+    // own users_email_unique index is the real backstop here — '23505' is its unique-
+    // violation code (see lib/db/schema.integration.test.ts for the same check).
+    // Throwing (rather than returning) inside the transaction callback above rolled
+    // back the invite claim too, so the invite is still valid/unclaimed after this,
+    // same end state as the pre-check catching it earlier.
+    if (err instanceof Error && 'cause' in err) {
+      const cause = err.cause;
+      if (cause && typeof cause === 'object' && 'code' in cause && cause.code === '23505') {
+        return {
+          error:
+            'An account with this email already exists — log in instead of accepting this invite.',
+        };
+      }
     }
-
-    const [user] = await tx
-      .insert(users)
-      .values({
-        householdId: invitation.householdId,
-        email: invitation.email,
-        passwordHash,
-        name,
-        role: invitation.role,
-      })
-      .returning();
-    return user;
-  });
+    throw err;
+  }
 
   if (!newUser) {
     return { error: 'This invite has already been used.' };
