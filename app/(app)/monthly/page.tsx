@@ -14,8 +14,11 @@ import { parseYearParam, parseMonthParam, parseViewParam } from '../../../lib/do
 import { deriveMonthStatus, type MonthStatus } from '../../../lib/domain/month-status';
 import { addMonths } from '../../../lib/domain/recurring';
 import { parseAmountToCents } from '../../../lib/money';
+import { MONTH_FULL } from '../../../lib/format';
 import { isEnabled } from '../../../lib/flags';
 import { generateEntriesForRange } from '../../../lib/generate-entries';
+import { autoGenerateGuard } from '../../../lib/domain/auto-generate-guard';
+import { currentYearMonth } from '../../../lib/domain/today';
 import { MonthTabs } from './month-tabs';
 import { ViewToggle } from './view-toggle';
 import { SummaryBar } from './summary-bar';
@@ -37,72 +40,93 @@ export default async function MonthlyPage({
   const view = parseViewParam(params.view);
 
   // On-load hook (spec.md Phase 2): keeps the next 3 months (this one included) always
-  // materialized without the household needing to remember to click Generate. Runs on
-  // every page load — ON CONFLICT DO NOTHING makes repeated calls cheap no-ops once the
-  // window is already filled, an accepted tradeoff at household scale (no formal load
-  // tests, per spec.md's Tier-2 scope). Gated by the auto_generate kill-switch so an
-  // owner can disable it instantly if it ever misbehaves, without a redeploy. Also
-  // gated by `canManage` — viewers are read-only everywhere (lib/auth/rbac.ts), and
-  // without this check a viewer's page load would trigger real INSERTs, the one write
-  // path in the app that wasn't behind requireRole('write').
-  if (canManage && (await isEnabled(user.householdId, 'auto_generate'))) {
-    const now = new Date();
-    const from = { year: now.getFullYear(), month: now.getMonth() + 1 };
+  // materialized without the household needing to remember to click Generate. Guarded
+  // by autoGenerateGuard (lib/domain/auto-generate-guard.ts) against re-running the
+  // real SELECT + INSERT transaction on every load within a short TTL — switching
+  // between visible months/views is a full server render that hits this hook again
+  // with the exact same "today"-derived window every time. Also gated by the
+  // auto_generate kill-switch so an owner can disable it instantly if it ever
+  // misbehaves, without a redeploy, and by `canManage` — viewers are read-only
+  // everywhere (lib/auth/rbac.ts), and without this check a viewer's page load would
+  // trigger real INSERTs, the one write path in the app that wasn't behind
+  // requireRole('write').
+  if (
+    canManage &&
+    autoGenerateGuard.shouldRun(user.householdId) &&
+    (await isEnabled(user.householdId, 'auto_generate'))
+  ) {
+    const from = currentYearMonth();
     await generateEntriesForRange(user.householdId, from, addMonths(from, 2));
+    autoGenerateGuard.recordRun(user.householdId);
   }
 
-  const [entries, monthCounts, allCategories, allAccounts, members] = await Promise.all([
-    db
-      .select({
-        id: monthlyEntries.id,
-        item: monthlyEntries.item,
-        categoryId: monthlyEntries.categoryId,
-        budgetedAmount: monthlyEntries.budgetedAmount,
-        actualAmount: monthlyEntries.actualAmount,
-        actualDate: monthlyEntries.actualDate,
-        bankAccountId: monthlyEntries.bankAccountId,
-        recurringScheduleId: monthlyEntries.recurringScheduleId,
-        isOverridden: monthlyEntries.isOverridden,
-        categoryName: categories.name,
-        categoryColor: categories.color,
-        categoryDirection: categories.direction,
-        accountName: bankAccounts.name,
-        scheduledDay: recurringSchedule.actualDateDay,
-      })
-      .from(monthlyEntries)
-      .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
-      .leftJoin(bankAccounts, eq(monthlyEntries.bankAccountId, bankAccounts.id))
-      .leftJoin(recurringSchedule, eq(monthlyEntries.recurringScheduleId, recurringSchedule.id))
-      .where(
-        and(
-          eq(monthlyEntries.householdId, user.householdId),
-          eq(monthlyEntries.year, year),
-          eq(monthlyEntries.month, month),
-        ),
+  // allCategories/allAccounts/members only feed AdhocForm below, which only renders for
+  // canManage users — skip these three queries entirely for viewers instead of running
+  // and discarding them on every read-only page view.
+  const entriesPromise = db
+    .select({
+      id: monthlyEntries.id,
+      item: monthlyEntries.item,
+      categoryId: monthlyEntries.categoryId,
+      budgetedAmount: monthlyEntries.budgetedAmount,
+      actualAmount: monthlyEntries.actualAmount,
+      actualDate: monthlyEntries.actualDate,
+      bankAccountId: monthlyEntries.bankAccountId,
+      recurringScheduleId: monthlyEntries.recurringScheduleId,
+      isOverridden: monthlyEntries.isOverridden,
+      categoryName: categories.name,
+      categoryColor: categories.color,
+      categoryDirection: categories.direction,
+      accountName: bankAccounts.name,
+      scheduledDay: recurringSchedule.actualDateDay,
+    })
+    .from(monthlyEntries)
+    .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
+    .leftJoin(bankAccounts, eq(monthlyEntries.bankAccountId, bankAccounts.id))
+    .leftJoin(recurringSchedule, eq(monthlyEntries.recurringScheduleId, recurringSchedule.id))
+    .where(
+      and(
+        eq(monthlyEntries.householdId, user.householdId),
+        eq(monthlyEntries.year, year),
+        eq(monthlyEntries.month, month),
       ),
-    db
-      .select({
-        month: monthlyEntries.month,
-        total: sql<number>`count(*)::int`,
-        actualized: sql<number>`count(*) filter (where ${monthlyEntries.actualAmount} is not null)::int`,
-      })
-      .from(monthlyEntries)
-      .where(and(eq(monthlyEntries.householdId, user.householdId), eq(monthlyEntries.year, year)))
-      .groupBy(monthlyEntries.month),
-    db
-      .select({ id: categories.id, name: categories.name, direction: categories.direction })
-      .from(categories)
-      .where(eq(categories.householdId, user.householdId))
-      .orderBy(categories.direction, categories.sortOrder),
-    db
-      .select({ id: bankAccounts.id, name: bankAccounts.name })
-      .from(bankAccounts)
-      .where(eq(bankAccounts.householdId, user.householdId))
-      .orderBy(bankAccounts.sortOrder),
-    db
-      .select({ id: users.id, name: users.name })
-      .from(users)
-      .where(eq(users.householdId, user.householdId)),
+    );
+  const monthCountsPromise = db
+    .select({
+      month: monthlyEntries.month,
+      total: sql<number>`count(*)::int`,
+      actualized: sql<number>`count(*) filter (where ${monthlyEntries.actualAmount} is not null)::int`,
+    })
+    .from(monthlyEntries)
+    .where(and(eq(monthlyEntries.householdId, user.householdId), eq(monthlyEntries.year, year)))
+    .groupBy(monthlyEntries.month);
+  const categoriesPromise = canManage
+    ? db
+        .select({ id: categories.id, name: categories.name, direction: categories.direction })
+        .from(categories)
+        .where(eq(categories.householdId, user.householdId))
+        .orderBy(categories.direction, categories.sortOrder)
+    : Promise.resolve([]);
+  const accountsPromise = canManage
+    ? db
+        .select({ id: bankAccounts.id, name: bankAccounts.name })
+        .from(bankAccounts)
+        .where(eq(bankAccounts.householdId, user.householdId))
+        .orderBy(bankAccounts.sortOrder)
+    : Promise.resolve([]);
+  const membersPromise = canManage
+    ? db
+        .select({ id: users.id, name: users.name })
+        .from(users)
+        .where(eq(users.householdId, user.householdId))
+    : Promise.resolve([]);
+
+  const [entries, monthCounts, allCategories, allAccounts, members] = await Promise.all([
+    entriesPromise,
+    monthCountsPromise,
+    categoriesPromise,
+    accountsPromise,
+    membersPromise,
   ]);
 
   const typedEntries: MonthlyEntryRow[] = entries;
@@ -131,27 +155,14 @@ export default async function MonthlyPage({
     closed: 'Closed — all actuals filled in.',
   };
 
-  const monthNames = [
-    'January',
-    'February',
-    'March',
-    'April',
-    'May',
-    'June',
-    'July',
-    'August',
-    'September',
-    'October',
-    'November',
-    'December',
-  ];
+  const hasEntries = typedEntries.length > 0;
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">
-            {monthNames[month - 1]} {year}
+            {MONTH_FULL[month - 1]} {year}
           </h1>
           {/* `status` is a MonthStatus union value, not external input (same false
               positive as lib/auth/rbac.ts's MATRIX[role]). */}
@@ -172,22 +183,21 @@ export default async function MonthlyPage({
 
       <MonthTabs year={year} month={month} view={view} statuses={statuses} />
 
-      {typedEntries.length > 0 && (
-        <SummaryBar
-          budgetedIncomeCents={sumCents(incomeEntries, 'budgetedAmount')}
-          actualIncomeCents={sumCents(incomeEntries, 'actualAmount')}
-          budgetedExpenseCents={sumCents(expenseEntries, 'budgetedAmount')}
-          actualExpenseCents={sumCents(expenseEntries, 'actualAmount')}
-        />
+      {hasEntries && (
+        <>
+          <SummaryBar
+            budgetedIncomeCents={sumCents(incomeEntries, 'budgetedAmount')}
+            actualIncomeCents={sumCents(incomeEntries, 'actualAmount')}
+            budgetedExpenseCents={sumCents(expenseEntries, 'budgetedAmount')}
+            actualExpenseCents={sumCents(expenseEntries, 'actualAmount')}
+          />
+          <div className="flex justify-end">
+            <ViewToggle year={year} month={month} view={view} />
+          </div>
+        </>
       )}
 
-      {typedEntries.length > 0 && (
-        <div className="flex justify-end">
-          <ViewToggle year={year} month={month} view={view} />
-        </div>
-      )}
-
-      {typedEntries.length === 0 ? (
+      {!hasEntries ? (
         <p className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
           No entries for this month. Go to the{' '}
           <a href="/recurring" className="underline">

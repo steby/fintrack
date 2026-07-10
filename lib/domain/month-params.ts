@@ -4,6 +4,8 @@
 // constructor. Every function here falls back to a sane default instead of throwing —
 // a malformed URL should render the current month, not 500.
 
+import { currentYearMonth } from './today';
+
 export type ViewMode = 'calendar' | 'agenda' | 'list';
 
 type RawParam = string | string[] | undefined;
@@ -18,7 +20,7 @@ export const MAX_YEAR = 2100;
 export function parseYearParam(raw: RawParam): number {
   const n = Number.parseInt(firstValue(raw) ?? '', 10);
   if (!Number.isInteger(n) || n < MIN_YEAR || n > MAX_YEAR) {
-    return new Date().getFullYear();
+    return currentYearMonth().year;
   }
   return n;
 }
@@ -26,7 +28,7 @@ export function parseYearParam(raw: RawParam): number {
 export function parseMonthParam(raw: RawParam): number {
   const n = Number.parseInt(firstValue(raw) ?? '', 10);
   if (!Number.isInteger(n) || n < 1 || n > 12) {
-    return new Date().getMonth() + 1;
+    return currentYearMonth().month;
   }
   return n;
 }

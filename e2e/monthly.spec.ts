@@ -13,6 +13,14 @@ const VIEWER_PASSWORD = 'viewer-password-123';
 
 const { db: testDb, close: closeTestDb } = createTestDb();
 
+// Deliberately LOCAL time (getFullYear/getMonth), not lib/domain/today.ts's
+// UTC-based currentYearMonth() — this has to match generate-form.tsx's own default,
+// which is intentionally browser-local (a client-side form default correctly reflects
+// the user's own calendar, not the server's UTC canonical "today"; see
+// lib/domain/today.ts's comment on currentYearMonth for that reasoning). The "generate,
+// enter an actual..." test below clicks Generate without overriding the form's default
+// from-month, so this must anchor to the SAME local definition that button used, or the
+// two could disagree right around a local-midnight-vs-UTC month boundary.
 function currentMonthUrl(path = '/monthly') {
   const now = new Date();
   return `${path}?year=${now.getFullYear()}&month=${now.getMonth() + 1}&view=list`;

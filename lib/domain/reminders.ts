@@ -30,9 +30,16 @@ export interface UpcomingBill {
   budgetedAmount: string;
 }
 
-function daysInMonth(year: number, month: number): number {
+// Exported: also used by app/(app)/monthly/calendar-view.tsx's identical "clamp a
+// scheduled day to the last real day of the month" need (spec.md's "month-end
+// clamping for day 29-31" edge case applies the same way in both places), rather than
+// each maintaining its own copy of the same one-line calendar computation.
+export function daysInMonth(year: number, month: number): number {
   // Day 0 of the *next* month is the last day of `month` — a standard JS Date trick,
   // done here in UTC so it's consistent with utcDaysBetween's UTC-only arithmetic.
+  // UTC-vs-local is not actually load-bearing for this specific computation (a pure
+  // calendar fact — "Feb 2026 has 28 days" — is timezone-independent either way), but
+  // UTC keeps it consistent with the rest of this file's date arithmetic.
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 

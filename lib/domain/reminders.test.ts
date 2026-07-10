@@ -1,5 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { selectUpcomingBills, type UpcomingBillCandidate } from './reminders';
+import { selectUpcomingBills, daysInMonth, type UpcomingBillCandidate } from './reminders';
+
+describe('daysInMonth', () => {
+  it('returns 31 for a 31-day month', () => {
+    expect(daysInMonth(2026, 1)).toBe(31);
+  });
+
+  it('returns 30 for a 30-day month', () => {
+    expect(daysInMonth(2026, 4)).toBe(30);
+  });
+
+  it('returns 28 for February in a non-leap year', () => {
+    expect(daysInMonth(2026, 2)).toBe(28);
+  });
+
+  it('returns 29 for February in a leap year', () => {
+    expect(daysInMonth(2024, 2)).toBe(29);
+  });
+
+  it('handles December correctly (month 12, not a year-rollover edge case)', () => {
+    expect(daysInMonth(2026, 12)).toBe(31);
+  });
+});
 
 function candidate(overrides: Partial<UpcomingBillCandidate> = {}): UpcomingBillCandidate {
   return {

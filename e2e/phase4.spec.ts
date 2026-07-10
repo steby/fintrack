@@ -5,6 +5,7 @@ import { createTestDb } from './test-db';
 import { requireEnv } from './env';
 import { login } from './login';
 import { categories, bankAccounts, goals, users } from '../lib/db/schema';
+import { currentYearMonth } from '../lib/domain/today';
 
 const OWNER_EMAIL = requireEnv('SEED_OWNER_EMAIL');
 const OWNER_PASSWORD = requireEnv('SEED_OWNER_PASSWORD');
@@ -61,8 +62,8 @@ test.describe('Phase 4: category budgets, goals, net worth', () => {
     // Add an ad-hoc entry against this category for the current month, over the cap.
     // List view specifically — the default (calendar) view renders ad-hoc entries as
     // small chip cards without a data-testid="entry-row", which list view provides.
-    const now = new Date();
-    await page.goto(`/monthly?year=${now.getFullYear()}&month=${now.getMonth() + 1}&view=list`);
+    const { year: nowYear, month: nowMonth } = currentYearMonth();
+    await page.goto(`/monthly?year=${nowYear}&month=${nowMonth}&view=list`);
     await page.getByRole('button', { name: 'Ad-hoc entry' }).click();
     await page.getByPlaceholder('e.g. Car Repair').fill(`${categoryName} overspend`);
     await page.locator('select[name="categoryId"]').selectOption({ label: `↓ ${categoryName}` });

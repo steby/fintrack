@@ -1,5 +1,7 @@
 import { formatSGDCompact } from '../../../lib/format';
 import { parseAmountToCents } from '../../../lib/money';
+import { daysInMonth } from '../../../lib/domain/reminders';
+import { currentYearMonth } from '../../../lib/domain/today';
 import type { MonthlyEntryRow } from './types';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -15,10 +17,11 @@ export function CalendarView({
   entries: MonthlyEntryRow[];
   agenda: boolean;
 }) {
-  const daysInMonth = new Date(year, month, 0).getDate();
+  const totalDaysInMonth = daysInMonth(year, month);
   const firstDayOfWeek = new Date(year, month - 1, 1).getDay();
   const today = new Date();
-  const isCurrentMonth = year === today.getFullYear() && month === today.getMonth() + 1;
+  const current = currentYearMonth(today);
+  const isCurrentMonth = year === current.year && month === current.month;
 
   const byDay = new Map<number, MonthlyEntryRow[]>();
   const unscheduled: MonthlyEntryRow[] = [];
@@ -28,9 +31,9 @@ export function CalendarView({
       // already establishes "month-end clamping for day 29-31" as the intended handling
       // for a scheduled day that doesn't exist in a shorter month) — without this, an
       // entry with scheduledDay=31 silently vanished from Feb/30-day months entirely,
-      // since cells only spans 1..daysInMonth and a truthy scheduledDay never falls
-      // through to the "unscheduled" bucket either.
-      const day = Math.min(entry.scheduledDay, daysInMonth);
+      // since cells only spans 1..totalDaysInMonth and a truthy scheduledDay never
+      // falls through to the "unscheduled" bucket either.
+      const day = Math.min(entry.scheduledDay, totalDaysInMonth);
       const list = byDay.get(day) ?? [];
       list.push(entry);
       byDay.set(day, list);
@@ -39,7 +42,7 @@ export function CalendarView({
     }
   }
 
-  const cells = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+  const cells = Array.from({ length: totalDaysInMonth }, (_, i) => i + 1);
 
   return (
     <div className="flex flex-col gap-4">
@@ -74,7 +77,7 @@ export function CalendarView({
               const cents = parseAmountToCents(e.budgetedAmount);
               return sum + (e.categoryDirection === 'income' ? cents : -cents);
             }, 0);
-            const isToday = isCurrentMonth && day === today.getDate();
+            const isToday = isCurrentMonth && day === today.getUTCDate();
 
             return (
               <div

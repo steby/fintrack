@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { currentYearMonth } from '../../lib/domain/today';
 
 // Sidebar year selector (spec.md Phase 3) — URL-driven, jumps to the dashboard for a
 // given year from anywhere in the app. Layouts don't receive searchParams in Next.js
@@ -7,7 +8,7 @@ import Link from 'next/link';
 // a quick-jump control. The dashboard page has its own prev/next controls for
 // fine-grained navigation once you're already there.
 export function YearNav() {
-  const currentYear = new Date().getFullYear();
+  const currentYear = currentYearMonth().year;
   const years = [currentYear - 1, currentYear, currentYear + 1];
 
   return (

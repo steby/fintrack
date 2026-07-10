@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { test, expect } from '@playwright/test';
 import { requireEnv } from './env';
 import { login } from './login';
+import { currentYearMonth } from '../lib/domain/today';
 
 const OWNER_EMAIL = requireEnv('SEED_OWNER_EMAIL');
 const OWNER_PASSWORD = requireEnv('SEED_OWNER_PASSWORD');
@@ -44,7 +45,7 @@ test.describe('dashboard', () => {
 
   test('an out-of-range year param is clamped instead of crashing', async ({ page }) => {
     await login(page, OWNER_EMAIL, OWNER_PASSWORD);
-    const expectedText = `Household overview for ${new Date().getFullYear()}`;
+    const expectedText = `Household overview for ${currentYearMonth().year}`;
 
     await page.goto('/?year=99999');
     await expect(page.getByText(expectedText)).toBeVisible();
@@ -57,7 +58,7 @@ test.describe('dashboard', () => {
     page,
   }) => {
     await login(page, OWNER_EMAIL, OWNER_PASSWORD);
-    const currentYear = new Date().getFullYear();
+    const currentYear = currentYearMonth().year;
 
     await page.getByTestId('year-picker-prev').click();
     await expect(page).toHaveURL(`/?year=${currentYear - 1}`);
