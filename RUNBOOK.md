@@ -20,6 +20,38 @@ structured logs for context Sentry doesn't capture.
 
 ---
 
+## Environment map
+
+Three persistent environments, one per Neon branch — deliberately no separate
+"staging" (see `PROGRESS.md`'s environment-audit entry for the reasoning):
+
+| Context                          | Neon branch  | `DATABASE_URL` lives in               |
+| -------------------------------- | ------------ | ------------------------------------- |
+| Production (fintrack.steby.net)  | `production` | Vercel → Production env vars          |
+| Preview (every PR/branch deploy) | `dev`        | Vercel → Preview env vars             |
+| GitHub Actions CI                | `ci`         | GitHub repo secret `DATABASE_URL`     |
+| Local development                | `dev`        | local `.env` (same branch as Preview) |
+
+Every Vercel env var in this project — all of Production and Preview, not just
+`DATABASE_URL` — was created as Vercel's **Sensitive** type: write-only by design.
+Once set, the value can never be read back through the dashboard or the CLI
+(confirmed 2026-07-11 — `vercel env pull` returns an empty string for every single
+one, including harmless flags like `FEATURE_PWA`, not just real secrets). If you
+ever need to know a current value, you can't look it up; the only options are
+re-deriving it (Neon's API returns a branch's connection string on demand) or
+resetting it outright to a known value.
+
+`ci` gets its own branch rather than sharing `dev` on purpose: its debris-sweep
+step (`clean-e2e-debris.ts`) deletes anything older than 5 minutes, which is only
+safe to run unattended because `ci` is understood to hold nothing but disposable
+test data. Running that same sweep against a branch also used for real local
+exploration would mean CI silently deleting work in progress — and this project
+has already hit real incidents (an accidental unscoped `DELETE` from a throwaway
+script, per Phase 1's real-bugs entry in `PROGRESS.md`) that a shared branch would
+have made worse.
+
+---
+
 ## Neon Postgres is down or slow
 
 **Symptom:** `/api/health` returns `db: 'down'`, or requests are slow/timing out.

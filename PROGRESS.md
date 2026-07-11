@@ -3104,3 +3104,58 @@ by any of the 27 fixes above. Not a regression, pre-existing, out of scope for t
 pass.
 
 ---
+
+## Environment audit: verifying Vercel/GitHub env vars actually point where they should (2026-07-11)
+
+A routine "is everything still clean" check turned up two real things worth fixing,
+plus one architectural question worth settling for the record.
+
+**`dev` branch had genuine debris.** 81 households, only 1 real (the seeded owner)
+— the other 80 were leftover rows from this session's own integration test runs
+against the real `dev` branch (`clean-e2e-debris.ts`'s `main()` only ever runs
+against `ci`, by design — see its own CI-only guard — so nothing had ever swept
+`dev`). Its exported `cleanOrphanedHouseholds()` is DB-agnostic and already
+protects the real seed owner's household by ID lookup, so it was safe to call
+directly against `dev`: 80 orphaned rows removed, confirmed down to 1 real
+household afterward.
+
+**Every Vercel env var in this project turned out to be Vercel's "Sensitive"
+type** — discovered while trying to confirm Preview's `DATABASE_URL` actually
+points at `dev`, not `production` (a real risk: if it were ever misconfigured,
+every PR preview deployment, including Dependabot's automated ones, would have
+live read/write access to real financial data). `vercel env pull` came back with
+an empty string for literally every variable, including harmless ones like
+`FEATURE_PWA` — ruling out "the secrets are just hidden" and confirming (via
+`vercel env ls preview -F json`'s `type` field) that all of them were created
+Sensitive, meaning the value can never be read back through any means once set, by
+design. That made the original question unanswerable by inspection — the only way
+to actually be sure was to reset it to a known-correct value.
+
+Refreshed `DATABASE_URL` across all three destinations using connection strings
+fetched fresh from Neon's API (a safe, read-only call) rather than trusting
+whatever was already configured — each piped directly from a shell variable into
+`vercel env add`/`gh secret set`, never written to a file:
+
+- Vercel **Production** → Neon `production` branch
+- Vercel **Preview** → Neon `dev` branch
+- GitHub Actions secret → Neon `ci` branch
+
+All three confirmed pointing at distinct branch hosts afterward (no two ever
+resolved to the same endpoint). Production's `/api/health` stayed green
+throughout — a Vercel env var change only takes effect on the next deploy, so this
+touched nothing already running. The other secrets (`SESSION_SECRET`,
+`CRON_SECRET`, `RESEND_API_KEY`, `SENTRY_DSN`) were deliberately left untouched:
+unlike `DATABASE_URL`, there's no external system to fetch a "correct" value from,
+and there was no evidence any of them were wrong.
+
+**Settled: keep the distinct `ci` branch, don't collapse it into `dev`.** This
+project has already hit two real incidents a shared branch would have made worse —
+an accidental unscoped `DELETE` from a throwaway local script that wiped every
+household on `dev` (Phase 1's real-bugs entry), and `ci`'s aggressive 5-minute
+debris sweep (see the threshold entries above), which is only safe to run
+unattended _because_ `ci` is understood to hold nothing but disposable test data.
+Running that same sweep against a branch a human is also using interactively would
+mean CI silently deleting real work-in-progress. Neon branches are free to keep
+separate, so there's no real cost being saved by merging them.
+
+---
