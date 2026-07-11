@@ -52,6 +52,25 @@ have made worse.
 
 ---
 
+## Everything feels slow
+
+**Check the Vercel function region matches Neon's region first** — this is the
+single most likely cause, and it's not visible from the code, only from the
+dashboard. Production functions were left on Vercel's account default
+(`iad1`, Washington D.C.) while Neon's database has always been in
+`ap-southeast-1` (Singapore) — every request was paying a US-East↔Singapore
+round trip (~400-500ms) on top of actual work, compounding on any page with
+multiple queries. Fixed 2026-07-11 (Vercel dashboard → Project → Settings →
+Functions → Function Region → Singapore, then a fresh deploy to pick it up —
+region changes only apply to the next build, never retroactively). Verify via
+the `x-vercel-id` response header (`curl -sD- -o /dev/null <url>/api/health`)
+— it should read `sin1::sin1::...`, not `iad1::...`. If a future region
+change (new Neon branch in a different region, moving providers, etc.) ever
+puts these back out of sync, this is the first thing to check when "the app
+feels slow" shows up again.
+
+---
+
 ## Neon Postgres is down or slow
 
 **Symptom:** `/api/health` returns `db: 'down'`, or requests are slow/timing out.

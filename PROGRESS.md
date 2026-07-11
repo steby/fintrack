@@ -3159,3 +3159,75 @@ mean CI silently deleting real work-in-progress. Neon branches are free to keep
 separate, so there's no real cost being saved by merging them.
 
 ---
+
+## Closing out the environment audit: Resend, APP_URL, a real test leak, and a broken font (2026-07-11/12)
+
+Follow-up fixes from the same audit, plus two real bugs a fresh look at the
+running app turned up once it was actually being used instead of just tested.
+
+**`RESEND_API_KEY` is now provably distinct between Production and Preview.**
+The prior entry flagged this as unverifiable (both are Vercel's write-only
+Sensitive type). Closed properly: a dedicated `fintrack-preview` key was
+created in the Resend dashboard and set as Preview's value only — Production's
+key hasn't been touched in days, so the two are now different by construction,
+not by assumption. A PR preview deployment can no longer send real email
+through the same account/quota as production.
+
+**`APP_URL` was silently broken on every Preview deployment.** Never
+configured for Preview, so it fell back to its `http://localhost:3000`
+default — every invite email link generated from a PR preview build was
+broken. A static Preview value wouldn't have been right either, since every
+preview deployment gets its own unique URL. Fixed properly in
+`lib/env.ts::loadEnv()`: derives `APP_URL` from Vercel's auto-injected
+`VERCEL_URL` whenever `APP_URL` isn't already explicitly set — correct for
+every future preview build automatically, nothing to maintain per-deployment.
+Production keeps working exactly as before (its explicit value always wins).
+3 new unit tests cover the derivation.
+
+**`members.integration.test.ts` really was leaking a household per run** (the
+gap the second Phase-1 hardening pass had explicitly deferred, not a new
+issue). Root cause, found by finally reading the three offending tests
+closely: each re-homes a second owner into the first owner's household to set
+up a two-owner scenario, then only passed the _first_ household's id to
+`cleanup()` — the second owner's now-empty original household row was never
+deleted, because its id was destructured away and discarded at the call site
+(`const { user: ownerBUser } = await makeHouseholdWithUser(...)`, dropping
+`household`). Fixed by capturing it and passing both ids to `cleanup()`.
+Verified over 4 runs post-fix: 3 clean, 1 unrelated one-off flake with no
+recurrence, zero new leaked rows either way. Also swept the 3 pre-existing
+leaked rows on `dev` using the same `cleanOrphanedHouseholds()` mechanism as
+before.
+
+**The entire app was silently rendering in the browser's default font, not
+Geist.** `app/globals.css`'s `@theme` block had `--font-sans: var(--font-sans)`
+— a circular custom property, invalid at computed-value time, so every
+element using `font-sans` (the whole app, via the base layer's
+`@apply font-sans`) fell back to nothing. `app/layout.tsx` was loading the
+real `Geist`/`Geist Mono` fonts via `next/font/google` correctly the whole
+time — the CSS just never pointed at the variable it set
+(`--font-geist-sans`). One-character-class fix; verified live on both local
+and production (`getComputedStyle(document.body).fontFamily` went from the
+system default to `"Geist, Geist Fallback"` in both places, with
+before/after screenshots).
+
+**Production compute and the database were on opposite sides of the planet.**
+Neon's `ap-southeast-1` (Singapore) was clearly a deliberate regional choice;
+Vercel's serverless functions were left on the account default, `iad1`
+(Washington D.C.) — every DB-touching request paid a ~400-500ms US-East↔
+Singapore round trip on top of real work, the actual cause of the app
+"feeling slow," not application-level inefficiency. Not fixable from code:
+checked this project's own bundled Next.js docs first (per this repo's rule
+not to assume — see `AGENTS.md`) and confirmed `preferredRegion` only applies
+to Edge Runtime routes, which this app can't use (`pg`, `@node-rs/argon2` both
+need real Node.js). The actual lever, Vercel's project-level Function Region
+setting, isn't exposed through the `vercel` CLI at all (`vercel project
+--help` has no regions/functions subcommand) — dashboard-only. Changed
+Production's Function Region to Singapore via the dashboard, then a fresh
+`vercel deploy --prod` to pick it up (region changes only apply to new
+builds). Verified for real, not assumed: the `x-vercel-id` response header
+went from `iad1::...` to `sin1::sin1::...`, and 5 consecutive requests to
+`/api/health` settled to 82-350ms (down from what a cross-Pacific round trip
+was costing on every request before). See `RUNBOOK.md`'s new "Everything
+feels slow" entry for the general troubleshooting note this leaves behind.
+
+---
