@@ -3231,3 +3231,193 @@ was costing on every request before). See `RUNBOOK.md`'s new "Everything
 feels slow" entry for the general troubleshooting note this leaves behind.
 
 ---
+
+## Phase 8 — Design system foundation: tokens, primitives, shell/nav — status: complete 2026-07-12
+
+**What shipped:**
+
+- **Token pass** (`app/globals.css`): `--radius` 0.625rem -> 1rem; light theme moved from
+  pure grayscale to a warm near-white ramp (hue ~90, chroma <=0.005) with a vibrant violet
+  `--primary` (`oklch(0.55 0.22 293)`); dark theme replaced the true-black OLED ramp with a
+  layered warm-dark ramp (increasing lightness across background/card/popover, same violet
+  primary at a lighter/more-saturated value, softened `oklch(1 0 0 / 10%)` borders); new
+  semantic `--income`/`--expense`/`--warning` tokens registered as `text-income`/
+  `bg-expense/10`/etc. utilities; 8 fixed, CVD-validated `--chart-1..8` hex slots (light set
+  validated on white, dark set on the new dark card surface) replacing the old 5-slot
+  grayscale ramp; a `--text-display` type size for hero money figures; a new `--card-shadow`
+  / `shadow-card` token. Rewrote the stale lines-86-91 comment that documented the OLED +
+  emerald/red convention to describe the new one and its deliberate page-by-page (not
+  all-at-once) retirement through Phase 11.
+- **12 new primitives** in `components/ui/`: `dialog.tsx`, `drawer.tsx`,
+  `responsive-sheet.tsx`, `toast.tsx` (+ `ToastProvider`, mounted in `app/layout.tsx` inside
+  `ThemeProvider`), `skeleton.tsx`, `empty-state.tsx`, `progress.tsx`, `switch.tsx`,
+  `tabs.tsx`, `tooltip.tsx` (+ app-level `TooltipProvider`, also mounted in
+  `app/layout.tsx`), `stat.tsx`, `fab.tsx` — all base-ui wrappers matching `button.tsx`'s
+  established style (cva where variants exist, `cn()`, `data-slot`). Real Phase 8 UI wiring
+  (not just built-and-idle): EmptyState powers `/accounts`' `FEATURE_NET_WORTH`-off state;
+  Stat renders a new "Total net worth" headline on `/accounts`; Tooltip gives the same
+  page's heading a quick hover hint (desktop-pointer only, by Base UI's own touch-disabled
+  design); Dialog+Drawer+ResponsiveSheet together power a tap-friendly "Learn more" ->
+  "About net worth" info sheet on the same page (`net-worth-about-sheet.tsx` — centered
+  Dialog at >= md, bottom Drawer below it, same content either way); Toast fires a
+  "Switched to {theme} mode" confirmation from the theme toggle. Switch/Progress/Tabs/Fab
+  are complete and correct but deliberately not wired into a page this phase — their real
+  homes are Plan/Goals toggles (Phase 11), the Monthly view-toggle (Phase 10), and the
+  global quick-add trigger (Phase 10). Skeleton is also unwired this phase — see the
+  `loading.tsx` finding below.
+- **Shell rewrite** (`app/(app)/layout.tsx`): new grouped sidebar — Track (Home/Money/Plan)
+  / Grow (Net worth/Goals/Insights) / footer (Settings, user chip, ThemeToggle, sign-out) —
+  replacing the old flat 9-link list. Active-link styling via a new client `nav-link.tsx`
+  (`usePathname`). Deleted `app/(app)/year-nav.tsx` and its two call sites (sidebar,
+  settings hub) — the sidebar's "Dashboard year" quick-jump has no Phase 8 replacement
+  (`/insights` carries its own `YearPicker`, same component the old dashboard already had).
+  Preserved verbatim: the `min-w-0` on `<main>` and its load-bearing comment, the bottom
+  padding calc, `<BottomNav/>`.
+- **`app/(app)/bottom-nav.tsx`**: tabs -> Home (`/`) / Money (`/monthly`) / Net worth
+  (`/accounts`) / Goals (`/goals`) / More (`/settings`, matching `/settings`, `/recurring`,
+  `/insights`, `/import`). Recurring dropped from the tab bar itself (reachable via More's
+  hub). Updated the hand-maintained-list comment.
+- **New pages**, content moved with no behavior/query change from the pre-redesign
+  dashboard: `app/(app)/insights/page.tsx` (StatTiles, CashFlowChart, CategoryChart,
+  SavingsChart, FixedVariableCard, YoyCard + YearPicker — the same `getDashboardRows`/
+  `getIncomeExpenseRows` calls the dashboard already made); `app/(app)/accounts/page.tsx`
+  (NetWorthChart, AccountBalancesTable, BankSummaryTable + YearPicker + the new Stat
+  headline, behind `FEATURE_NET_WORTH` with a friendly `EmptyState` when off, matching
+  `/import`'s pattern). `dashboard/year-picker.tsx` gained an optional `basePath` prop
+  (default `/`, unchanged for the old dashboard) so `/insights`/`/accounts` page their own
+  year instead of bouncing back to `/`. The old `/` dashboard is untouched this phase —
+  every widget it already rendered (including `BudgetHealthCard`, which is deliberately
+  **not** duplicated onto `/insights` or `/accounts` — it isn't in either page's task-6
+  widget list, and Phase 9's task list confirms it's meant to become a `budget-mini` card
+  on the rewritten Home instead) still renders exactly as before.
+- **Settings hub** (`app/(app)/settings/page.tsx`): now the desktop entry too, since the
+  sidebar collapsed to one Settings link. Removed its `md:hidden` YearNav (the component is
+  gone); added `md:hidden` Plan + Insights links as the mobile bottom nav's escape hatch to
+  those two sections (desktop's sidebar already covers both, so the links are mobile-only).
+- **`app/not-found.tsx`** (new, root-level, catches any unmatched URL app-wide).
+- **Restyled existing primitives**: `card.tsx` and `select.tsx`'s popup (the two with a
+  visible outline) moved from a flat `ring-foreground/10` to `ring-foreground/6` plus the
+  new `shadow-card` token. `input.tsx`/`badge.tsx`/`table.tsx` audited and left unchanged —
+  no hardcoded gray literals in any of them; their radius bump is automatic from the
+  `--radius` token change (Tailwind v4's `--radius-*` scale in `@theme inline` derives from
+  it, no per-file edit needed).
+- **E2E**: `e2e/mobile.spec.ts` updated for the new tab labels/targets (Dashboard->Home,
+  Monthly->Money, Recurring tab replaced by Net worth). `e2e/dashboard.spec.ts`'s
+  sidebar-year-jump assertion replaced with a same-page `YearPicker` round-trip (the sidebar
+  quick-jump it tested no longer exists — a direct, in-scope consequence of deleting
+  `YearNav`, not a dashboard behavior change). New `e2e/shell.spec.ts` (desktop sidebar
+  reaches all 7 surfaces; theme toggle persists across reload; a viewer sees no Members
+  link and no write affordances anywhere in the shell). `e2e/smoke.spec.ts` audited — no
+  selectors reference anything that moved, left unchanged.
+
+**A real, reproduced bug found and fixed by removing the feature rather than shipping it
+broken:** task 8 originally called for Skeleton-based `loading.tsx` files on `/`,
+`/monthly`, `/accounts`, `/insights`, `/goals`, `/recurring`. All six were built and the
+full local gate (including `npm run build`) passed — but `next build`'s dynamic routes
+aren't rendered at build time, so a runtime-only defect had nowhere to surface yet. It
+surfaced during the mandatory pre-commit local E2E run: 3 tests failed with a Playwright
+`strict mode violation: ... resolved to 2 elements` on pages with an interactive
+`useActionState` form (`/settings/categories`'s add-category input, `/goals`'s add-goal
+input) plus `/recurring`'s "Generated N entries" confirmation never appearing at all.
+Root-caused via bisection — removing one `loading.tsx` at a time, rebuilding, and
+re-running against a **real production server** (`next build && next start`, exactly what
+CI runs) after each change, specifically to rule out a Turbopack dev-server compile-race as
+a red herring (an early, wrong hypothesis when the same symptom first appeared under `next
+dev`). Every failure traced to a `loading.tsx` Suspense boundary wrapping a page with a
+client form using `useActionState` — including `/settings/categories`, which has no
+`loading.tsx` of its own but inherited the root `app/(app)/loading.tsx` (Next's own docs:
+an ancestor's `loading.tsx` wraps "the page.js file and any children below" that don't have
+a more specific one). The duplicated DOM nodes had different React `useId()`-derived ids —
+one server-numbered (`base-ui-_r_0_`), one client-only-shaped (`base-ui-_R_<random>_`) — the
+signature of the component tree mounting twice instead of once. Removing all six
+`loading.tsx` files (not just the two directly implicated by the strict-mode violations)
+took the full local E2E suite from 3 failing to 55/55 passing against a fresh production
+build. Not fully root-caused at the React/Next.js internals level within this phase's
+budget — the mechanism by which a route-level Suspense boundary causes a client
+`useActionState` form to double-mount in production specifically (not in `next build`'s own
+static-page prerendering) is still unknown. Shipping a reproduced, confirmed form-breaking
+bug was judged strictly worse than shipping without route-level loading skeletons this
+phase (development-workflow.md's "zero-tolerance regression" rule), so `loading.tsx` is
+**not shipped** this phase; `app/not-found.tsx` is unaffected (a different file convention,
+no Suspense boundary involved) and stays. `skeleton.tsx` the primitive still exists,
+correct and ready, just not wired into a page yet — deferred alongside Switch/Progress/Tabs/
+Fab. Documented in `spec.md`'s Phase 8 task 8 with the full investigation; flagged as a
+concrete follow-up before ever adding a `loading.tsx` back anywhere a page also has a
+`useActionState` form.
+
+**Other real bugs found and fixed (before the loading.tsx investigation above):**
+
+- Passing a lucide-react icon **component reference** (e.g. `icon={Home}`) or a plain
+  **function** (`isActive={(pathname) => ...}`) as a prop from the Server Component shell
+  (`app/(app)/layout.tsx`) to the Client Component `nav-link.tsx` crashes with "Functions
+  cannot be passed directly to Client Components" — caught by the very first local E2E run
+  attempt (which failed almost every authenticated test, since the crash is in the shared
+  shell every `(app)` route renders through). Fixed by rendering the icon to a plain
+  `ReactNode` in the server component (`icon={<Home className="..." />}`, which IS
+  serializable across the boundary) and replacing the `isActive` callback with a plain
+  `extraPrefixes: string[]` prop that `nav-link.tsx` checks internally.
+- `<Button render={<Link .../>}>` (used in `not-found.tsx` and `empty-state.tsx`) rendered
+  a non-`<button>` element while Base UI's `Button` still defaulted `nativeButton={true}`,
+  producing a loud dev-mode console warning that, in a long-running `next dev` session,
+  tripped the Next.js dev overlay and intercepted pointer events on unrelated later E2E
+  tests (surfaced as mysterious `mobile.spec.ts` tap timeouts against a `<nextjs-portal>`
+  element). Fixed by passing `nativeButton={false}` at both call sites.
+- `components/ui/responsive-sheet.tsx`'s viewport-detection hook called `setState`
+  synchronously inside a bare `useEffect` (flagged by `react-hooks/set-state-in-effect`).
+  Rewritten around `useSyncExternalStore` (the same hydration-safe pattern
+  `theme-toggle.tsx`'s `useHasMounted` already established), removing the effect entirely.
+
+**Deviations from the literal phase plan, logged rather than silent:**
+
+1. `loading.tsx` not shipped (see above) — the single largest deviation this phase.
+2. `BudgetHealthCard` deliberately not duplicated onto `/insights` or `/accounts` — not in
+   task 6's named widget list for either page; Phase 9's own task list (`budget-mini.tsx`)
+   confirms it's meant to move onto the rewritten Home, not get a second home first.
+3. A small amount of genuinely new UI (the `/accounts` "Total net worth" Stat headline, its
+   Tooltip hover hint, and its "Learn more" -> "About net worth" Dialog/Drawer info sheet)
+   beyond the literal "moved widgets, no behavior change" framing — deliberate, not scope
+   creep: it exists specifically to give the new Stat/Tooltip/Dialog/Drawer/ResponsiveSheet
+   primitives a genuine Phase 8 exercise (the phase's own AC requires each new primitive be
+   exercised at least once) without reaching into Phase 9/10/11 territory (no affordability
+   math, no mark-paid, no Home rewrite).
+
+**Test/CI status:** Unit 395/395 (100% on the gated `lib/**` scope — no new `lib/**` files
+this phase, all new code is in `app/`/`components/ui/`, outside the coverage gate's scope
+by the same "UI glue, not pure logic" convention as every prior UI-only change). Integration
+232/232 (unchanged from before this phase — Phase 8 added no Server Actions or queries; one
+local re-run mid-phase hit a real "Connection terminated unexpectedly" against Neon,
+traced to two of this session's own leftover `next start` processes still holding pooled DB
+connections from earlier ad-hoc verification servers — stopped both, re-ran clean at the
+normal ~60s duration, not a code regression). E2E 55/55 (chromium), the final run executed
+with `CI=true` against the committed `playwright.config.ts` (port 3000, `next build && next
+start`, `workers: 1`, `retries: 2`) — i.e., the exact settings GitHub Actions uses, not a
+looser local approximation. Lint/typecheck/format/build all clean.
+
+**Live verification (real, not assumed — see the primitives-wiring list above for what each
+exercises):** a throwaway Playwright script (not part of the committed suite) drove the
+running production server directly: focused `/accounts`' "Learn more" button and pressed
+Enter — the Dialog opened (asserted via its body text becoming visible) at a 1280px
+viewport and the Drawer opened the same way at a 390px viewport; Escape closed both in each
+case. The Tooltip next to the same page's heading revealed its content on keyboard focus
+alone. The theme-toggle Toast appeared on a keyboard Enter and, per Base UI's own
+documented pattern (`data-expanded`, "F6 jumps into the toast viewport landmark"), its
+Close button — `aria-hidden` until the viewport is hovered/focused, by Base UI's own
+design, not a bug in this project's wrapper — became reachable and dismissed the toast
+once the viewport was expanded first. A light+dark screenshot sweep of Home/Net worth/
+Insights/Settings/Goals/Money/Plan was visually reviewed: correct token application (warm
+light background, layered warm dark, violet active-nav highlight), no unreadable text, no
+NaN, charts and tables rendering correctly in both themes. Separately, `e2e/shell.spec.ts`
+confirms a viewer sees zero write affordances anywhere in the new shell, and the `min-w-0`
+`<main>` fix from Phase 7 is confirmed still intact (no horizontal-scroll regression on the
+mobile viewport E2E run).
+
+**Deferred / not done:** Skeleton, Switch, Progress, Tabs, and Fab primitives exist and are
+correct but have no live page usage yet (Skeleton per the `loading.tsx` finding above;
+the other four per their designated Phase 9/10/11 homes, matching the plan's own phase
+boundaries — building their consumers early would mean starting Phase 9/10/11 work, which
+this phase's scope explicitly excludes). Re-investigating the `loading.tsx`/`useActionState`
+double-mount bug at the framework level (a minimal, isolated repro, ideally reported
+upstream if it turns out to be a genuine Next.js/Base UI interaction bug rather than
+something specific to this app) is tracked as a concrete follow-up, not silently dropped.
+
+---

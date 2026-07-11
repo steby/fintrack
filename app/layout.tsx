@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import { ThemeProvider } from '../components/theme-provider';
 import { RegisterServiceWorker } from '../components/register-service-worker';
+import { ToastProvider } from '../components/ui/toast';
+import { TooltipProvider } from '../components/ui/tooltip';
 import { env } from '../lib/env';
 import './globals.css';
 
@@ -40,7 +42,9 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
-          {children}
+          <TooltipProvider>
+            <ToastProvider>{children}</ToastProvider>
+          </TooltipProvider>
         </ThemeProvider>
         {env.FEATURE_PWA && <RegisterServiceWorker />}
       </body>

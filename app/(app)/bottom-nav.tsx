@@ -2,37 +2,44 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Calendar, Repeat, Target, Menu } from 'lucide-react';
+import { Home, Calendar, Wallet, Target, Menu } from 'lucide-react';
 import type { ComponentType } from 'react';
 
-// Deliberately a separate, hand-written list from the sidebar's <Link> list
+// Deliberately a separate, hand-written list from the sidebar's <NavLink> list
 // (app/(app)/layout.tsx) and the settings hub's `links` array
 // (app/(app)/settings/page.tsx), not a single shared source of truth — the three
 // aren't 1:1 duplicates (full desktop sidebar vs. this condensed 5-tab set vs. the
 // hub's "everything else" leftovers), and this project's own established convention
 // (see PROGRESS.md) tolerates small, non-mechanical duplication like this over a
-// speculative shared-nav-model abstraction. Adding a page: remember it needs a home on
-// at least one of the three surfaces, or it becomes unreachable on mobile/desktop.
+// speculative shared-nav-model abstraction. Membership changed in Phase 8 (Dashboard ->
+// Home, Monthly -> Money, Recurring dropped in favor of Net worth — Plan/Insights are
+// reachable via the "More" tab's settings hub instead): adding a page still means
+// remembering it needs a home on at least one of the three surfaces, or it becomes
+// unreachable on mobile/desktop.
 const TABS: {
   href: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
   isActive: (pathname: string) => boolean;
 }[] = [
-  { href: '/', label: 'Dashboard', icon: Home, isActive: (p) => p === '/' },
-  { href: '/monthly', label: 'Monthly', icon: Calendar, isActive: (p) => p.startsWith('/monthly') },
+  { href: '/', label: 'Home', icon: Home, isActive: (p) => p === '/' },
+  { href: '/monthly', label: 'Money', icon: Calendar, isActive: (p) => p.startsWith('/monthly') },
   {
-    href: '/recurring',
-    label: 'Recurring',
-    icon: Repeat,
-    isActive: (p) => p.startsWith('/recurring'),
+    href: '/accounts',
+    label: 'Net worth',
+    icon: Wallet,
+    isActive: (p) => p.startsWith('/accounts'),
   },
   { href: '/goals', label: 'Goals', icon: Target, isActive: (p) => p.startsWith('/goals') },
   {
     href: '/settings',
     label: 'More',
     icon: Menu,
-    isActive: (p) => p.startsWith('/settings') || p.startsWith('/import'),
+    isActive: (p) =>
+      p.startsWith('/settings') ||
+      p.startsWith('/recurring') ||
+      p.startsWith('/insights') ||
+      p.startsWith('/import'),
   },
 ];
 

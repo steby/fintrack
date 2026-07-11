@@ -320,6 +320,14 @@ day-31 in a 30-day month for `actual_date_day`. Trust boundaries: every Server A
 
 ## Phase 3 — Dashboard + theming
 
+> **Superseded 2026-07-12 (Phase 8):** the "OLED-dark identity" described in task 3 below
+> (`oklch(0 0 0)` true-black background, ported from `FinanceTracker/src/app.css`) was
+> replaced by Phase 8's "modern fintech" redesign — a layered warm dark theme
+> (`app/globals.css`'s `.dark` block: increasing-lightness background/card/popover, a
+> vibrant violet `--primary`, semantic `--income`/`--expense`/`--warning` tokens) instead
+> of pure black. This history is kept, not deleted — see spec.md's Phase 8 section below
+> and `app/globals.css`'s own comment for the full rationale.
+
 **Ready:** AC = all original dashboard widgets reproduced against household-scoped data;
 light/dark toggle. Edge cases: year with zero entries (empty states, no NaN); division by zero
 in percentages; months with budget but no actuals (charts show budget-only); prev-year absent
@@ -444,6 +452,195 @@ state; iOS PWA quirks. Trust boundary: none new (SW serves same-origin only).
 4. Final adversarial sweep across phases (session fixation, scoping probe with two seeded
    households, flag bypass attempts); fix or explicitly defer with notes.
 5. E2E: Lighthouse PWA installability check; mobile-viewport Playwright run of core flows.
+
+---
+
+## UI/UX Redesign — Phases 8-11 (approved 2026-07-11)
+
+v1.0.0 shipped and real use started, surfacing four pain points: navigation feels like
+disconnected pieces, the visual design is unconsidered (plain shadcn defaults), data entry
+is slow, and — the core gap — no screen answers "what's due soon and can I afford it?" (the
+only upcoming-bills logic, `lib/domain/reminders.ts`, is cron-email-only; paid/unpaid state
+shows in just one of three monthly views). This redesign restructures the app around that
+question (a forecast-first Home, Phase 9) inside a coherent "modern fintech" visual system
+(warm, rounded, vibrant accent, big numbers; light+dark stay, OLED true-black is retired —
+see the Phase 3 supersession note above), executed as four new phases on the same
+phase-driven process. Desktop and mobile stay equally first-class; viewers get the same
+screens minus edit controls. Money-math testing keeps the same Tier-2 treatment (property
+tests for the new affordability module). No Feature Matrix changes — all four phases ship
+under existing flags; no new flag rows.
+
+**Target information architecture** (routes stay stable; prominence changes — only
+`/insights` and `/accounts` are new routes):
+
+| Surface   | Route                      | Content                                                                                                                                |
+| --------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Home      | `/`                        | Forecast-first screen (Phase 9 rewrite; Phase 8 leaves it rendering the full pre-redesign dashboard unchanged)                         |
+| Money     | `/monthly`                 | Entry hub, redesigned in place (Phase 10)                                                                                              |
+| Plan      | `/recurring`               | Recurring + generate, relabeled "Plan", restyled (Phase 11)                                                                            |
+| Net worth | `/accounts`                | NEW (Phase 8): NetWorthChart + AccountBalancesTable + BankSummaryTable, moved off the dashboard                                        |
+| Goals     | `/goals`                   | Redesigned cards (Phase 11)                                                                                                            |
+| Insights  | `/insights`                | NEW (Phase 8): year analytics — StatTiles, CashFlow, Category donut, Savings, FixedVariable, YoY + YearPicker, moved off the dashboard |
+| Settings  | `/settings` hub + subpages | Sidebar collapses to ONE Settings entry (Phase 8); Data section gains an Import entry; `/import` route keeps working                   |
+
+Desktop sidebar (7 links, Phase 8): Home, Money, Plan, Net worth, Goals, Insights, Settings
+— grouped "Track" (Home/Money/Plan) / "Grow" (Net worth/Goals/Insights) / footer (Settings
+link, user chip, theme toggle, sign-out). The Phase 3 `YearNav` sidebar quick-jump is
+deleted (no replacement — `/insights` carries its own `YearPicker`, same as the old
+dashboard's). Mobile bottom tabs (5, Phase 8): Home `/`, Money `/monthly`, Net worth
+`/accounts`, Goals `/goals`, More `/settings` (the hub adds Plan + Insights links,
+mobile-only — the desktop sidebar already covers them). Viewer role: every new
+surface/action hides write affordances via the existing `can(role, ...)` and
+server-guards with `requireRole('write')`, same pattern as every prior phase.
+
+### Phase 8 — Design system foundation: tokens, primitives, shell/nav
+
+**Ready:** AC = every existing page renders correctly on the new tokens in light+dark; new
+sidebar/tab IA live; `/insights` + `/accounts` exist with the moved widgets (the old `/`
+dashboard KEEPS rendering everything it already did this phase — duplication is deliberate
+so nothing is orphaned until Phase 9 swaps Home); all new primitives exist, are built to
+spec, and are exercised at least once each (some get real Phase 8 UI wiring — EmptyState on
+`/accounts`' feature-off state, Stat as a headline figure on `/accounts`,
+Tooltip via a quick hover hint on `/accounts`' heading (desktop-pointer only, by Base UI's
+own touch-disabled design) plus Dialog+Drawer+ResponsiveSheet together via a tap-friendly
+"Learn more" -> "About net worth" info sheet on the same page (`net-worth-about-sheet.tsx`
+— centered Dialog at >= md, bottom Drawer below it, same content either way), Toast via a
+confirmation on the theme toggle; Skeleton/Switch/Progress/Tabs/Fab are complete and
+correct but deliberately not yet wired into a page — see task 8's `loading.tsx` finding
+below for why Skeleton in particular isn't wired this phase; Switch/Progress/Tabs/Fab's
+real homes are Plan/Goals toggles (Phase 11), the Monthly view-toggle (Phase 10), and the
+global quick-add trigger (Phase 10) respectively, per this redesign's own phase
+boundaries); full E2E green, plus a real live adversarial pass (keyboard-only Dialog/
+Drawer/Toast operation, a light+dark screenshot sweep of every touched page) — see task 11.
+Edge cases: theme-flash on first paint (next-themes class strategy already handles this;
+unchanged); Drawer scroll-lock/focus-trap vs the fixed BottomNav + `env(safe-area-inset-
+bottom)`; toast stacking (default `limit=3` is fine); the load-bearing `min-w-0` on
+`<main>` (`app/(app)/layout.tsx`) survives the rewrite verbatim.
+Trust boundaries: none new — verify a viewer sees no write affordances in the new shell;
+the Members link stays `can(user.role,'manage_members')`-gated (now inside the collapsed
+Settings hub rather than a direct sidebar link, for every role, not just non-owners).
+
+1. Append this section (Phases 8-11) to spec.md; mark the Phase 3 "OLED-dark identity"
+   note superseded with a pointer here (done above) rather than deleting it. No Feature
+   Matrix changes.
+2. **Token pass** (`app/globals.css`): `--radius: 1rem` (up from `0.625rem`); warm
+   near-white light background/neutral ramp (hue ~90, chroma <=0.005) with a vibrant
+   violet `--primary`; a layered warm dark theme (increasing-lightness
+   background/card/popover, same violet primary, softened `oklch(1 0 0 / 10%)` borders)
+   replacing the true-black OLED theme; new semantic `--income`/`--expense`/`--warning`
+   tokens (`text-income`, `bg-expense/10`, etc., registered in `@theme inline`); 8 fixed
+   CVD-validated `--chart-1..8` slots (light set validated on white, dark set on the new
+   dark card surface); a `--text-display` type size for hero money figures; a
+   `--card-shadow`/`shadow-card` token replacing the flat `ring-foreground/10` outline
+   cards used alone. Rewrote the stale comment documenting the old OLED + emerald/red
+   convention to describe the new one and its page-by-page (not all-at-once) retirement
+   through Phase 11.
+3. **New primitives** in `components/ui/`: `dialog.tsx`, `drawer.tsx`,
+   `responsive-sheet.tsx` (renders Dialog >= md / Drawer < md via a hydration-safe
+   `matchMedia` hook, defaulting to Dialog until mounted), `toast.tsx` (+ `ToastProvider`
+   mounted in `app/layout.tsx`, inside `ThemeProvider`), `skeleton.tsx`, `empty-state.tsx`,
+   `progress.tsx`, `switch.tsx`, `tabs.tsx`, `tooltip.tsx` (+ app-level
+   `TooltipProvider`, also mounted in `app/layout.tsx`), `stat.tsx`, `fab.tsx` — all
+   base-ui wrappers in `button.tsx`'s style (cva where variants exist, `cn()`,
+   `data-slot`).
+4. **Shell rewrite** (`app/(app)/layout.tsx`): grouped sidebar per the IA table above,
+   active-link styling via a new client `nav-link.tsx` (`usePathname`); deleted
+   `app/(app)/year-nav.tsx` and its two call sites (sidebar, settings hub). Preserved
+   verbatim: the `min-w-0` on `<main>` + its comment, the bottom padding calc,
+   `<BottomNav/>`.
+5. **`app/(app)/bottom-nav.tsx`**: tabs -> Home/Money/Net worth/Goals/More per the IA
+   table (Recurring dropped from the tab bar itself — reachable via More's hub); updated
+   the hand-maintained-list comment (still a deliberately separate list from the sidebar
+   and settings hub, membership just changed).
+6. **New pages** (content moves, no behavior/query change from the pre-redesign
+   dashboard): `app/(app)/insights/page.tsx` (StatTiles, CashFlowChart, CategoryChart,
+   SavingsChart, FixedVariableCard, YoyCard + YearPicker, same queries the dashboard
+   already ran); `app/(app)/accounts/page.tsx` (NetWorthChart, AccountBalancesTable,
+   BankSummaryTable + YearPicker + a new Stat headline total, behind `FEATURE_NET_WORTH`
+   with a friendly feature-off `EmptyState`, matching `/import`'s pattern). `YearPicker`
+   gained an optional `basePath` prop (default `/`, unchanged for the old dashboard) so
+   `/insights`/`/accounts` can page their own year instead of bouncing to `/`.
+7. **Settings hub** (`app/(app)/settings/page.tsx`): now the desktop entry too (sidebar
+   collapsed to one link) — removed its `md:hidden` YearNav (deleted entirely, see task
+   4); added `md:hidden` Plan + Insights links as the mobile bottom nav's escape hatch
+   (desktop's sidebar already covers both).
+8. **`loading.tsx` — built, then removed after a real, reproduced bug (not shipped this
+   phase); root `app/not-found.tsx` (kept, unaffected).** Built Skeleton-based
+   `loading.tsx` files for `/`, `/monthly`, `/accounts`, `/insights`, `/goals`,
+   `/recurring` per the original task. The full local E2E gate against a real production
+   build (`next build && next start`, exactly as CI runs it) then failed 3 tests with a
+   `strict mode violation: ... resolved to 2 elements` on pages with an interactive
+   `useActionState` form — `/settings/categories`' add-category input (cascaded from the
+   root `app/(app)/loading.tsx`, since `/settings/*` has no loading.tsx of its own and
+   Next's docs confirm an ancestor's loading.tsx wraps "the page.js file and any children
+   below") and `/goals`' add-goal input (its own dedicated loading.tsx), plus `/recurring`'s
+   generate-forecast confirmation message never appearing at all. Root-caused via a bisection
+   (removing one loading.tsx at a time, rebuilding, re-running against a real production
+   server each time — not the dev server, to rule out Turbopack dev-mode compile races,
+   which were a real red herring early in the investigation): every failure traced to a
+   `loading.tsx` Suspense boundary wrapping a page with a client form using
+   `useActionState`. The rendered DOM showed two copies of the same input with different
+   `useId()`-derived ids — one server-numbered (`base-ui-_r_0_`), one client-only-shaped
+   (`base-ui-_R_<random>_`) — the signature of the component tree mounting twice instead
+   of once. Removing **all six** `loading.tsx` files (not just the two directly
+   implicated) made the full local E2E suite pass 55/55 against a fresh production build.
+   Not fully root-caused at the React/Next.js internals level within this phase's budget;
+   shipping a known, reproduced form-breaking bug was judged strictly worse than shipping
+   without route-level loading skeletons this phase, per "zero-tolerance regression."
+   Deferred to a future phase: re-investigate with a minimal repro (isolated from this
+   app's other code) before reintroducing `loading.tsx` anywhere a page also has a
+   `useActionState` form.
+9. **Restyled existing primitives**: `card.tsx` and `select.tsx`'s popup (the two with a
+   visible outline) moved from a flat `ring-foreground/10` to a softened
+   `ring-foreground/6` + the new `shadow-card` token. `input.tsx`/`badge.tsx`/`table.tsx`
+   audited and left unchanged — already fully token-driven with no hardcoded gray
+   literals; their radius bump comes for free from the `--radius` token change (Tailwind
+   v4's `--radius-*` scale in `@theme inline` derives from it).
+10. **E2E**: `e2e/mobile.spec.ts` updated for the new tab names/targets; `e2e/dashboard.
+spec.ts`'s sidebar-year-jump assertion replaced with a same-page YearPicker
+    round-trip (the sidebar quick-jump it tested no longer exists — an explicit, in-scope
+    consequence of task 4's YearNav deletion, not itself a dashboard behavior change);
+    new `e2e/shell.spec.ts` (desktop nav reaches all 7 surfaces, theme toggle persists
+    across reload, a viewer sees no Members link/write affordances anywhere in the
+    shell).
+11. **Adversarial pass, run for real against a live production server, not just planned:**
+    keyboard-only Dialog operation on `/accounts`' "Learn more" info sheet at desktop
+    width (Tab to the trigger, Enter opens, Escape closes) and the same sheet rendering
+    as a Drawer at a 390px mobile width, both confirmed via direct DOM assertions, not
+    visual inspection alone; the Tooltip next to the same page's heading confirmed to
+    reveal its content on keyboard focus (desktop only, by design); the theme-toggle
+    Toast confirmed to appear on a keyboard-triggered toggle and to be reachable/
+    dismissible via its Close button once the toast viewport is expanded (Base UI's
+    documented `data-expanded`/F6 pattern — the Close button is `aria-hidden` until
+    then, which is Base UI's own design, not a bug). Full light+dark screenshot sweep of
+    Home/Net worth/Insights/Settings/Goals/Money/Plan confirmed no regressed-to-
+    unreadable text or broken layout. Full local gate (lint, typecheck, unit 395/395,
+    integration 232/232, build, E2E 55/55 against a real `next build && next start`);
+    commit.
+
+### Phase 9 — Affordability domain + forecast-first Home (not started)
+
+Rewrites `/` around "can I cover what's coming" (both a projected-cash lens and a
+budget-remaining lens, expenses-only subtraction, income shown but not subtracted from the
+headline number); adds `lib/domain/affordability.ts` (property-tested), a
+cross-month upcoming list with one-tap mark-paid + toast Undo, a runway sparkline, and a
+configurable horizon (default "this month," options 7/14/30 days). `/insights` and
+`/accounts` become canonical once the dashboard's widgets leave `/`. Not started as of
+Phase 8 — see the plan doc for the full task breakdown.
+
+### Phase 10 — Money page: paid-state everywhere, one-tap entry, month nav, global quick-add (not started)
+
+Adds paid/upcoming/overdue state to all three Monthly views, cross-year month navigation,
+a `fintrack_view` cookie-persisted view preference, and a global quick-add (the Phase 8
+`Fab` primitive, finally mounted, + a desktop header button) opening a `ResponsiveSheet`
+with the ad-hoc entry form. Not started as of Phase 8.
+
+### Phase 11 — Plan/Goals/Settings/Import restyle + polish + PWA refresh (not started)
+
+Restyles Plan/Goals/Settings/Import onto the Phase 8 primitives (Switch for toggles,
+Progress for goal rings, Tabs/Dialog for Import's step flow), adopts `EmptyState`
+everywhere a list can be empty, refreshes the PWA manifest/icons/`viewport` theme-color for
+the new brand, and closes with a final adversarial + a11y sweep. Not started as of Phase 8.
 
 ---
 

@@ -28,11 +28,11 @@ test.describe('mobile viewport: core flows', () => {
     const nav = page.getByRole('navigation', { name: 'Primary' });
     await expect(nav).toBeVisible();
 
-    await nav.getByRole('link', { name: 'Monthly' }).tap();
+    await nav.getByRole('link', { name: 'Money' }).tap();
     await expect(page).toHaveURL(/\/monthly/);
 
-    await nav.getByRole('link', { name: 'Recurring' }).tap();
-    await expect(page).toHaveURL(/\/recurring/);
+    await nav.getByRole('link', { name: 'Net worth' }).tap();
+    await expect(page).toHaveURL(/\/accounts/);
 
     await nav.getByRole('link', { name: 'Goals' }).tap();
     await expect(page).toHaveURL(/\/goals/);
@@ -41,7 +41,7 @@ test.describe('mobile viewport: core flows', () => {
     await expect(page).toHaveURL(/\/settings$/);
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
 
-    await nav.getByRole('link', { name: 'Dashboard' }).tap();
+    await nav.getByRole('link', { name: 'Home' }).tap();
     await expect(page).toHaveURL('/');
   });
 

@@ -2,15 +2,16 @@ import Link from 'next/link';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { MIN_YEAR, MAX_YEAR } from '../../../lib/domain/month-params';
 
-// Fine-grained year navigation relative to whichever year the dashboard is actually
-// showing — complements the sidebar's YearNav quick-jump (which can't know the current
-// page's selected year since Next.js layouts don't receive searchParams).
+// Fine-grained year navigation relative to whichever year the page is actually showing.
+// `basePath` defaults to '/' (the original dashboard's own route, untouched this phase)
+// — /insights and /accounts (Phase 8) pass their own path so "previous/next year" stays
+// on the page you're viewing instead of bouncing back to the old dashboard.
 //
 // Disabled (not just visually, the href itself is omitted) past MIN_YEAR/MAX_YEAR —
 // parseYearParam falls back to the current calendar year for anything out of that
 // range, so a plain `year - 1`/`year + 1` link at the boundary would otherwise silently
 // teleport the user decades forward/back instead of stopping.
-export function YearPicker({ year }: { year: number }) {
+export function YearPicker({ year, basePath = '/' }: { year: number; basePath?: string }) {
   const atMin = year <= MIN_YEAR;
   const atMax = year >= MAX_YEAR;
 
@@ -22,7 +23,7 @@ export function YearPicker({ year }: { year: number }) {
         </span>
       ) : (
         <Link
-          href={`/?year=${year - 1}`}
+          href={`${basePath}?year=${year - 1}`}
           data-testid="year-picker-prev"
           aria-label="Previous year"
           className="rounded-md p-1.5 hover:bg-muted"
@@ -37,7 +38,7 @@ export function YearPicker({ year }: { year: number }) {
         </span>
       ) : (
         <Link
-          href={`/?year=${year + 1}`}
+          href={`${basePath}?year=${year + 1}`}
           data-testid="year-picker-next"
           aria-label="Next year"
           className="rounded-md p-1.5 hover:bg-muted"

@@ -4,14 +4,13 @@ import { can } from '../../../lib/auth/rbac';
 import { logoutAction } from '../../actions/auth';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { YearNav } from '../year-nav';
 
-// The sidebar in app/(app)/layout.tsx already links every one of these pages directly
-// and is always visible at md+, so a desktop user never needs this hub. It exists for
-// the mobile bottom nav's "More" tab (app/(app)/bottom-nav.tsx): the sidebar is hidden
-// below md, so this is the only reachable landing spot for settings, import, sign-out,
-// theme, and (below) the dashboard year quick-jump — everything that didn't fit as its
-// own bottom-nav tab or that the sidebar carried but BottomNav's 5 tabs don't.
+// The sidebar in app/(app)/layout.tsx collapses to ONE "Settings" entry (Phase 8's IA
+// rework) and is always visible at md+, so this hub is now the desktop landing spot too
+// — not just the mobile "More" tab's destination as it was pre-Phase-8. Plan and
+// Insights get their own sidebar entries already, so their links here are mobile-only
+// (md:hidden) escape hatches for the bottom nav's condensed 5-tab set, which has no room
+// for either.
 export default async function SettingsHubPage() {
   const user = await requireUser();
 
@@ -36,20 +35,19 @@ export default async function SettingsHubPage() {
         <ThemeToggle />
       </div>
 
-      {/* md:hidden: the sidebar (app/(app)/layout.tsx) renders its own <YearNav />
-          unconditionally on every (app) route, including this one — only CSS-hidden
-          below md, not removed from the DOM. Without this wrapper, a desktop-width
-          visit to /settings shows the "Dashboard year" widget twice (verified: without
-          it, page.getByTestId('year-nav-link').count() returns 6, not 3, on this
-          route). Both copies remain in the DOM regardless of viewport either way — a
-          future test targeting year-nav-link on THIS route specifically should scope
-          the locator to a container (this wrapper or the sidebar's <aside>), not use a
-          bare page.getByTestId(), or it will hit a Playwright strict-mode violation. */}
-      <div className="md:hidden">
-        <YearNav />
-      </div>
+      {/* md:hidden: the desktop sidebar already has dedicated Plan/Insights entries
+          (app/(app)/layout.tsx); the bottom nav's 5 tabs don't have room for either, so
+          this hub is their only mobile landing spot. */}
+      <nav className="flex flex-col divide-y rounded-2xl border md:hidden">
+        <Link href="/recurring" className="flex min-h-14 items-center px-4 text-sm hover:bg-muted">
+          Plan
+        </Link>
+        <Link href="/insights" className="flex min-h-14 items-center px-4 text-sm hover:bg-muted">
+          Insights
+        </Link>
+      </nav>
 
-      <nav className="flex flex-col divide-y rounded-md border">
+      <nav className="flex flex-col divide-y rounded-2xl border">
         {links.map((link) => (
           <Link
             key={link.href}

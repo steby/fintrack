@@ -4,6 +4,7 @@ import { useSyncExternalStore } from 'react';
 import { useTheme } from 'next-themes';
 import { Moon, Sun } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useToastManager } from '@/components/ui/toast';
 
 // Never fires — this only exists to give useSyncExternalStore a snapshot that differs
 // between server (false) and client (true) render, the standard hydration-safe way to
@@ -27,6 +28,13 @@ export function ThemeToggle() {
   // a theme-dependent icon before then would mismatch the server-rendered markup.
   // Rendering a stable placeholder until mounted avoids that hydration warning class.
   const mounted = useHasMounted();
+  const toastManager = useToastManager();
+
+  function toggle() {
+    const next = resolvedTheme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    toastManager.add({ title: `Switched to ${next} mode`, timeout: 2000 });
+  }
 
   return (
     <Button
@@ -35,7 +43,7 @@ export function ThemeToggle() {
       size="icon-sm"
       aria-label="Toggle theme"
       data-testid="theme-toggle"
-      onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
+      onClick={toggle}
     >
       {mounted && resolvedTheme === 'dark' ? <Sun /> : <Moon />}
     </Button>

@@ -54,20 +54,19 @@ test.describe('dashboard', () => {
     await expect(page.getByText(expectedText)).toBeVisible();
   });
 
-  test('year picker navigates and the sidebar year links jump to the dashboard', async ({
-    page,
-  }) => {
+  // Phase 8's shell rewrite (app/(app)/layout.tsx) deleted the sidebar's YearNav
+  // quick-jump entirely (spec.md Phase 8 task 4) — the dashboard's own in-page
+  // YearPicker (unaffected this phase, still the same component) is the only year
+  // control left on this route now.
+  test('year picker navigates within the dashboard', async ({ page }) => {
     await login(page, OWNER_EMAIL, OWNER_PASSWORD);
     const currentYear = currentYearMonth().year;
 
     await page.getByTestId('year-picker-prev').click();
     await expect(page).toHaveURL(`/?year=${currentYear - 1}`);
 
-    await page
-      .getByTestId('year-nav-link')
-      .filter({ hasText: String(currentYear + 1) })
-      .click();
-    await expect(page).toHaveURL(`/?year=${currentYear + 1}`);
+    await page.getByTestId('year-picker-next').click();
+    await expect(page).toHaveURL(`/?year=${currentYear}`);
   });
 
   test('theme toggle switches and persists across reload', async ({ page }) => {
