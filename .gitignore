@@ -49,3 +49,9 @@ next-env.d.ts
 
 # local-only generated reference docs
 /infra-reference.html
+
+# Claude Code runtime state (worktrees, session locks, mailbox, etc.) — this
+# project holds no shareable config in here, only per-clone runtime files, so
+# the whole directory is ignored wholesale rather than chasing new filenames
+# one at a time as the CLI's runtime adds them.
+/.claude/
