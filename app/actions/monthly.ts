@@ -9,6 +9,7 @@ import { requireRole, requireConfigFlag } from '../../lib/auth/guards';
 import { env } from '../../lib/env';
 import { moneyInputSchema, optionalMoneyInputSchema, centsToAmount } from '../../lib/money';
 import { isValidCalendarDate } from '../../lib/domain/month-params';
+import { utcStartOfDay } from '../../lib/domain/today';
 import { resolveOptionalRef } from '../../lib/db/queries';
 
 export type MonthlyActionState = { error?: string; success?: boolean } | undefined;
@@ -76,6 +77,12 @@ export async function updateActualAction(
   if (!result[0]) {
     return { error: 'Entry not found.' };
   }
+  // Also revalidates Home (Phase 9): this is the exact action markPaidAction's toast
+  // Undo replays to restore the pre-mark-paid actualAmount/actualDate, and Home's
+  // safe-to-spend/upcoming-list read those same two columns — without this, an Undo
+  // triggered from Home would leave its cash figure and list stale until some other
+  // navigation happened to revalidate '/'.
+  revalidatePath('/');
   revalidatePath('/monthly');
   return { success: true };
 }
@@ -126,6 +133,84 @@ export async function overrideBudgetAction(
   }
   revalidatePath('/monthly');
   return { success: true };
+}
+
+const markPaidSchema = z.object({ id: z.string().uuid() });
+
+export type MarkPaidActionState =
+  | { error: string }
+  | { success: true; alreadyPaid: true }
+  // `previous` carries just enough of the pre-mark-paid state for the client's toast
+  // Undo to replay it through the existing updateActualAction (spec.md Phase 9:
+  // "Undo restores the exact previous actualAmount/actualDate, including null") — not a
+  // separate unmarkPaidAction, since updateActualAction already does exactly "set these
+  // two fields," and a second action with the same shape would be pure duplication.
+  | {
+      success: true;
+      alreadyPaid: false;
+      previous: { actualAmount: null; actualDate: string | null };
+    }
+  | undefined;
+
+// One-tap "mark this bill paid" for Home's upcoming list (spec.md Phase 9) — sets
+// actualAmount to the entry's own budgetedAmount and actualDate to today (UTC). Double-
+// tap safe BY DESIGN, not by accident: an already-paid entry (actualAmount !== null) is
+// read back and returned as a no-op (`alreadyPaid: true`) rather than re-running the
+// update or erroring — two rapid taps (or a retried request) converge on the same paid
+// state instead of silently overwriting a since-edited actual amount/date with the
+// budgeted figure a second time.
+export async function markPaidAction(
+  _prevState: MarkPaidActionState,
+  formData: FormData,
+): Promise<MarkPaidActionState> {
+  const actingUser = await requireRole('write');
+
+  const parsed = markPaidSchema.safeParse({ id: formData.get('id') });
+  if (!parsed.success) {
+    return { error: 'Invalid request.' };
+  }
+
+  const [entry] = await db
+    .select({
+      id: monthlyEntries.id,
+      actualAmount: monthlyEntries.actualAmount,
+      actualDate: monthlyEntries.actualDate,
+      budgetedAmount: monthlyEntries.budgetedAmount,
+    })
+    .from(monthlyEntries)
+    .where(
+      and(
+        eq(monthlyEntries.id, parsed.data.id),
+        eq(monthlyEntries.householdId, actingUser.householdId),
+      ),
+    )
+    .limit(1);
+
+  if (!entry) {
+    return { error: 'Entry not found.' };
+  }
+
+  if (entry.actualAmount !== null) {
+    return { success: true, alreadyPaid: true };
+  }
+
+  const todayIso = utcStartOfDay().toISOString().slice(0, 10);
+  await db
+    .update(monthlyEntries)
+    .set({ actualAmount: entry.budgetedAmount, actualDate: todayIso })
+    .where(eq(monthlyEntries.id, entry.id));
+
+  revalidatePath('/');
+  revalidatePath('/monthly');
+  // entry.actualAmount is provably null here (the branch above already excluded
+  // non-null) — spelled out as the literal `null` rather than `entry.actualAmount` so
+  // the return shape's own type (previous.actualAmount: null) is visibly satisfied by
+  // construction, not by a value TypeScript merely happens to narrow correctly today.
+  return {
+    success: true,
+    alreadyPaid: false,
+    previous: { actualAmount: null, actualDate: entry.actualDate },
+  };
 }
 
 const addAdhocSchema = z.object({

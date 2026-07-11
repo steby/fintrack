@@ -124,9 +124,7 @@ test.describe('Phase 4: category budgets, goals, net worth', () => {
     ).toBeVisible();
   });
 
-  test('setting an opening balance updates the dashboard net-worth account balances', async ({
-    page,
-  }) => {
+  test('setting an opening balance updates the net-worth account balances', async ({ page }) => {
     await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     await page.goto('/settings/categories');
@@ -135,7 +133,10 @@ test.describe('Phase 4: category budgets, goals, net worth', () => {
     await page.getByRole('button', { name: 'Add', exact: true }).last().click();
     await expect(page.getByTestId('account-row').filter({ hasText: accountName })).toBeVisible();
 
-    await page.goto('/');
+    // AccountBalancesTable moved to /accounts in Phase 8 and, as of Phase 9's Home
+    // rewrite, no longer renders on `/` at all (spec.md Phase 9: net-worth widgets are
+    // canonical on /accounts only).
+    await page.goto('/accounts');
     const balanceRow = page.getByTestId('account-balance-row').filter({ hasText: accountName });
     await expect(balanceRow).toBeVisible();
     await expect(balanceRow.getByText('$1,234.56')).toBeVisible();

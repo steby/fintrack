@@ -194,6 +194,34 @@ describe('cross-household scoping probes', () => {
     await cleanup(a.household.id, b.household.id);
   });
 
+  it('cannot mark paid a monthly entry belonging to a different household', async () => {
+    const { markPaidAction } = await import('./monthly');
+    const a = await makeHouseholdWithUser('member', 'Scoping mark-paid A');
+    const b = await makeHouseholdWithUser('member', 'Scoping mark-paid B');
+    const [entryInB] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: b.household.id,
+        year: 2077,
+        month: 3,
+        item: 'B Rent',
+        budgetedAmount: '50.00',
+      })
+      .returning();
+
+    mockToken = a.token;
+    const result = await markPaidAction(undefined, formData({ id: entryInB.id }));
+    expect(result).toEqual({ error: 'Entry not found.' });
+
+    const [stillUnpaid] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entryInB.id));
+    expect(stillUnpaid.actualAmount).toBeNull();
+
+    await cleanup(a.household.id, b.household.id);
+  });
+
   it('updateRecurringAction rejects a category/account id borrowed from a different household', async () => {
     const { createRecurringAction, updateRecurringAction } = await import('./recurring');
     const a = await makeHouseholdWithUser('member', 'Scoping recur ref A');

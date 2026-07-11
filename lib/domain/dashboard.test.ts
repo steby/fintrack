@@ -8,6 +8,8 @@ import {
   buildBankSummary,
   buildYoyDelta,
   sumIncomeExpense,
+  bestEstimateCents,
+  actualOnlyCents,
   type DashboardEntryRow,
 } from './dashboard';
 
@@ -26,6 +28,26 @@ function row(overrides: Partial<DashboardEntryRow>): DashboardEntryRow {
     ...overrides,
   };
 }
+
+describe('bestEstimateCents', () => {
+  it('prefers the actual when set', () => {
+    expect(bestEstimateCents({ budgetedCents: 1000, actualCents: 900 })).toBe(900);
+  });
+
+  it('falls back to budgeted when actual is null', () => {
+    expect(bestEstimateCents({ budgetedCents: 1000, actualCents: null })).toBe(1000);
+  });
+});
+
+describe('actualOnlyCents', () => {
+  it('returns the actual amount when set', () => {
+    expect(actualOnlyCents({ actualCents: 900 })).toBe(900);
+  });
+
+  it('returns null (NOT the budgeted amount) for a still-unpaid entry — the opposite fallback rule from bestEstimateCents', () => {
+    expect(actualOnlyCents({ actualCents: null })).toBeNull();
+  });
+});
 
 describe('buildMonthlySeries', () => {
   it('always returns 12 points, even for a completely empty year', () => {

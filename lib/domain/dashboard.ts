@@ -31,6 +31,19 @@ export function bestEstimateCents(
   return row.actualCents ?? row.budgetedCents;
 }
 
+// The Phase 9 affordability engine's "how much cash is actually in the bank right now"
+// figure needs the OPPOSITE fallback rule from bestEstimateCents above: an unpaid bill
+// hasn't left the account yet, so it must contribute nothing to a cash total (not its
+// budgeted amount) — the affordability hero already represents that unpaid bill as a
+// separate subtraction term (lib/domain/affordability.ts's upcomingExpenseCents/
+// overdueExpenseCents), so folding it into "cash" too would subtract it twice. Exists as
+// its own named function, not an inline `row.actualCents` at the call site, purely so a
+// reader immediately sees WHY actuals-only is correct here — the same one-line-of-logic,
+// document-the-intent role bestEstimateCents already plays for its own call sites.
+export function actualOnlyCents(row: Pick<DashboardEntryRow, 'actualCents'>): number | null {
+  return row.actualCents;
+}
+
 export interface MonthlyPoint {
   month: number;
   budgetedIncomeCents: number;

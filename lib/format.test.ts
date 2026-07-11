@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatSGD, formatSGDCompact } from './format';
+import { formatSGD, formatSGDCompact, formatDueDate } from './format';
 
 describe('formatSGD', () => {
   it('formats positive cents as SGD', () => {
@@ -37,5 +37,22 @@ describe('formatSGDCompact', () => {
 
   it('formats zero', () => {
     expect(formatSGDCompact(0)).toBe('$0');
+  });
+});
+
+describe('formatDueDate', () => {
+  it('formats a YYYY-MM-DD string as "Weekday D Mon"', () => {
+    // 2026-07-15 is a Wednesday.
+    expect(formatDueDate('2026-07-15')).toBe('Wed 15 Jul');
+  });
+
+  it('formats a single-digit day without zero-padding', () => {
+    // 2026-07-01 is a Wednesday.
+    expect(formatDueDate('2026-07-01')).toBe('Wed 1 Jul');
+  });
+
+  it('formats December correctly (no year-rollover mixup)', () => {
+    // 2026-12-31 is a Thursday.
+    expect(formatDueDate('2026-12-31')).toBe('Thu 31 Dec');
   });
 });

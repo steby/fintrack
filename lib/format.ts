@@ -45,6 +45,21 @@ export const MONTH_SHORT = [
   'Dec',
 ];
 
+const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// "Tue 15 Jul" — Home's upcoming-list due-date display (Phase 9). Takes a YYYY-MM-DD
+// string (already UTC-normalized upstream by lib/domain/affordability.ts's dueDate)
+// rather than a Date, and re-parses it via Date.UTC from its own components rather than
+// `new Date(iso)` — both produce the same UTC instant for a bare YYYY-MM-DD string per
+// spec, but spelling it out explicitly matches this app's "date arithmetic is UTC, said
+// out loud" convention (lib/domain/today.ts) instead of relying on a reader recalling
+// that particular parsing detail.
+export function formatDueDate(iso: string): string {
+  const [year, month, day] = iso.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return `${WEEKDAY_SHORT[date.getUTCDay()]} ${date.getUTCDate()} ${MONTH_SHORT[month - 1]}`;
+}
+
 // Full-name counterpart to MONTH_SHORT, same reasoning: one shared lookup instead of
 // pages hand-rolling their own copy that can drift.
 export const MONTH_FULL = [

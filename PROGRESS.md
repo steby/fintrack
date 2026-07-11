@@ -3421,3 +3421,215 @@ upstream if it turns out to be a genuine Next.js/Base UI interaction bug rather 
 something specific to this app) is tracked as a concrete follow-up, not silently dropped.
 
 ---
+
+## Phase 9 — Affordability domain + forecast-first Home — status: complete 2026-07-12
+
+**What shipped:**
+
+- **`lib/domain/affordability.ts`** (new, pure logic, property-tested): a superset of
+  `lib/domain/reminders.ts`'s cron-only `UpcomingBillCandidate`/`selectUpcomingBills`,
+  built as its own separate module rather than an extension of reminders.ts — the plan's
+  hard rule, verified with a dedicated regression test (see below). `parseHorizon`
+  (trust-boundary parser: `'7'|'14'|'30'` accepted, everything else — blank, `null`,
+  `'9999'`, a stray leading zero — falls back to `'month'`); `resolveHorizonDays`
+  (`'month'` = days remaining to that calendar month's end, inclusive of today: 30 on
+  the 1st of a 31-day month, 0 on the last day); `selectUpcomingItems` (skips
+  paid/uncategorized candidates; an entry with no fixed due day is due at the clamped
+  end of its own month; a CURRENT-month unpaid expense whose due day already passed is
+  "overdue" and included regardless of horizon, a next-month candidate never is);
+  `computeSafeToSpend` (cash minus upcoming minus overdue expense; income tracked
+  separately, never subtracted — the user's conservative-headline-number decision);
+  `computeBudgetRemaining` (budgeted expense minus ACTUAL spend so far this month — the
+  opposite fallback rule from `bestEstimateCents`, since an unpaid forecast row hasn't
+  spent anything yet); `buildRunway` (day-by-day projected cash, `horizonDays + 1`
+  points, DOES include income — the one deliberate hero/runway asymmetry, documented in
+  a load-bearing comment; every item's offset is clamped into `[0, horizonDays]`, making
+  the function a true conservation identity for ANY item array, not just well-formed
+  ones — this clamping turned out to matter for more than defensiveness, see the
+  property tests below). `lib/domain/dashboard.ts` gained `actualOnlyCents` next to
+  `bestEstimateCents` — same one-line-of-logic, name-the-intent role, opposite rule.
+- **`lib/domain/affordability.test.ts`** (fast-check property tests, matching
+  `lib/money.test.ts`/`lib/domain/net-worth.test.ts`'s existing treatment — user
+  decision): conservation identities for `computeSafeToSpend` (cash minus safe-to-spend
+  always equals total expense subtracted, for arbitrary item arrays) and `buildRunway`
+  (the last point always equals cash plus the full signed sum of an arbitrary item
+  array — this is what proves the day-0/clamping design is correct in general, not just
+  for the hand-picked unit cases); `computeBudgetRemaining`'s
+  `remaining + spent === budgeted` identity; a property confirming
+  `selectUpcomingItems` never selects a paid or uncategorized candidate for arbitrary
+  candidates/today/horizon. Plus unit cases for every named edge case (Feb day-31 clamp,
+  Dec->Jan spill, `'month'` horizon on the 1st vs. the last day of a month including
+  leap February, unscheduled month-end due date, zero-budget `pctSpent` 0, empty
+  candidates, every documented `parseHorizon` garbage shape).
+- **`lib/db/queries.ts`**: `getUpcomingEntryCandidates` (LEFT-joins `recurring_schedule`
+  — not INNER, so ad-hoc entries are included with `actualDateDay: null` — and
+  LEFT-joins categories for direction/name/color; a deliberately separate query from
+  `getUpcomingBillCandidates`, not a shared/parameterized one); `getActualizedCashRows`
+  (per-account signed sums of ACTUAL amounts only, no year bound — same grouped-sum
+  shape as `getAccountEntriesBeforeYear` but `WHERE actual_amount IS NOT NULL` instead
+  of a year cutoff). New **`lib/settings.ts`**: `getSetting`/`setSetting`, a generic
+  `household_settings` accessor for `affordability_horizon` — same table
+  `lib/flags.ts` owns the boolean `KillSwitchKey` subset of, deliberately not added to
+  that union, deliberately uncached (`vitest.config.ts`'s coverage exclude list gained
+  `lib/settings.ts` alongside `lib/flags.ts`, same reasoning: every path touches a live
+  DB, exercised by `lib/settings.integration.test.ts`).
+- **Actions**: `markPaidAction` (`app/actions/monthly.ts`) — zod `{ id: uuid }`,
+  `requireRole('write')`, household-scoped select; an already-paid entry returns
+  `{ success: true, alreadyPaid: true }` (idempotent, no second write — verified via a
+  double-tap integration test asserting the second call doesn't touch the row already
+  set by the first); otherwise sets `actualAmount` to the entry's own `budgetedAmount`
+  and `actualDate` to today (UTC), returning enough of the prior state
+  (`{ previous: { actualAmount: null, actualDate } }`) for the client to replay an Undo
+  through the EXISTING `updateActualAction` — no new "unmark" action, since that would
+  duplicate exactly what `updateActualAction` already does. `updateActualAction` gained
+  a `revalidatePath('/')` alongside its existing `/monthly` one, since it's now also the
+  Undo path Home's own data depends on. `setHorizonAction` (new
+  `app/actions/settings.ts`) — zod enum, `requireRole('write')` (owner OR member — a
+  personal viewing preference, not an owner-only policy toggle). New integration test
+  files: `app/actions/settings.integration.test.ts`,
+  `lib/settings.integration.test.ts`; new tests added to
+  `app/actions/monthly.integration.test.ts` (mark-paid idempotency, partial-actualization
+  `previous`, cross-tenant probe) and `cross-household-scoping.integration.test.ts`.
+  A dedicated **"reminders freeze" regression test** seeds a real fixture and asserts
+  `getUpcomingBillCandidates` + `selectUpcomingBills` — the cron path, untouched this
+  phase — still produce byte-identical output end-to-end against a live DB, guarding the
+  email path against a future accidental edit, not just against THIS phase's own diff.
+- **Home UI**: rewrote `app/(app)/page.tsx` + new `app/(app)/home/` (`safe-to-spend-hero
+.tsx`, `horizon-picker.tsx`, `upcoming-list.tsx`, `mark-paid-button.tsx`,
+  `runway-sparkline.tsx`, `budget-mini.tsx`, `goals-mini.tsx`). Cash lens is primary
+  (with an always-visible budget-remaining secondary line) whenever `FEATURE_NET_WORTH`
+  is on AND at least one bank account exists; otherwise the budget-remaining lens is
+  promoted to be the ONLY hero and the cash lens/runway sparkline are hidden entirely —
+  never a `$0` or otherwise misleading figure. A brand-new household with zero
+  `monthly_entries` in the current+next-month window gets an `EmptyState` ("set up your
+  plan" -> `/recurring`) instead of an all-zero hero. `budget-mini.tsx` reuses
+  `BudgetHealthCard` wholesale (its real, single home, per this file's own Phase 8
+  entry). `horizon-picker.tsx` is a 4-button segmented control, not the Popover the
+  plan's WISDOM section sketched — see Deviations.
+- **E2E**: new `e2e/home.spec.ts` (hero renders a real figure; a seeded ad-hoc unpaid
+  bill -> mark paid -> row disappears from the list, the budget-remaining figure drops
+  by EXACTLY its amount, Undo restores both the row and the figure; a viewer sees the
+  list with no mark-paid button or horizon picker; a genuinely fresh household — its own
+  `households` row, not just a new user grafted onto the seeded one — sees the empty
+  state). `e2e/dashboard.spec.ts` renamed to `e2e/insights.spec.ts`, every assertion
+  repointed at `/insights`. `e2e/phase4.spec.ts`'s net-worth assertion repointed at
+  `/accounts` (no longer rendered on `/` at all, as of this phase); its budget-health
+  assertion stays on `/` unchanged, since `budget-mini.tsx` is that widget's real home
+  now, not a duplicate.
+
+**Two real bugs found and fixed via live E2E verification (green test suites did NOT
+catch either on their own):**
+
+1. **`MarkPaidButton`'s toast intermittently never appeared — a real race, not a
+   flaky test.** The first implementation followed the plan's own sketch:
+   `useActionState`, firing the toast from a render-time "reacted to" comparison (this
+   codebase's existing pattern in `goal-card.tsx`/`entry-row.tsx` — but those only ever
+   call their OWN `setState`, never an external system). The full local gate — unit,
+   integration, `npm run build`, and even a first full `e2e` run — was green throughout
+   development; the bug only surfaced running the REAL committed E2E suite against a
+   REAL `next build && next start` server, and even then only in the one test that
+   actually asserted the toast's text (`home.spec.ts`'s mark-paid test), which failed
+   consistently across all 3 Playwright retries, in both `next dev` and a real
+   production build — ruling out a dev-mode-only artifact. Root-caused with a throwaway
+   script (same method as Phase 8's own adversarial pass) driving the live server
+   directly and polling the toast viewport's DOM every 300ms after a real click: it
+   stayed completely empty for the full 3-second window, confirming the toast was never
+   added at all, not just removed quickly. Mechanism: `markPaidAction`'s single response
+   drives TWO client updates from one round trip — `useActionState`'s own local `state`,
+   and (because the action calls `revalidatePath('/')`) the Next.js router's refresh of
+   Home's server-rendered tree, which removes the now-paid entry — and therefore this
+   exact component — from the list. When both land in one commit, React can go straight
+   from "old tree" to "new tree without this component," without ever committing an
+   intermediate frame where this instance holds the new `state` while still mounted — so
+   neither the render-time pattern NOR a subsequent `useEffect` keyed on `state` (tried
+   second, also intermittently failed, same non-deterministic signature) reliably fired.
+   **Fixed** by calling `markPaidAction` directly inside `startTransition`, awaiting its
+   result in the SAME async closure that fires the toast — sidestepping the render/commit
+   race entirely by never depending on this component surviving to observe its own
+   result via a later re-render. This is the exact shape the plan's own Undo button
+   already used (a direct call, not `useActionState`) for precisely this class of
+   reason; the fix just applies it consistently to the primary action too. Re-verified
+   with the same live-server script (toast present across 10 consecutive 300ms polls)
+   before re-running the full E2E suite, which then passed clean.
+2. **`vitest.config.ts`'s coverage gate initially flagged `lib/settings.ts` at 0%** —
+   caught by `npm run test:coverage` itself, not a live-verification finding, but real
+   enough to note: `lib/settings.ts` is a thin `household_settings` accessor with no
+   branch a pure unit test could exercise without a live DB (identical shape to
+   `lib/flags.ts`, which was already excluded). Fixed by adding it to the same exclude
+   list with a matching comment, not by writing a hollow unit test just to move a
+   number. (A genuine gap, not a bug, in `actualOnlyCents`'s own coverage was also
+   caught and closed with two direct unit tests in `lib/domain/dashboard.test.ts`
+   alongside a `bestEstimateCents` pair that had never had one either.)
+
+**A non-bug worth recording (also found via live verification):** `EmptyState`'s CTA
+(`Button` composed with `render={<Link/>}`, `nativeButton={false}`) is exposed to
+accessibility tools with role `"button"`, not `"link"`, even though it navigates via
+`href` — Base UI's own documented behavior (button semantics/keyboard handling layered
+on top of the underlying `<a>` when `nativeButton` is false), the same mechanism Phase
+8's `not-found.tsx`/`empty-state.tsx` already relied on. `e2e/home.spec.ts`'s empty-state
+test targets `getByRole('button', ...)` accordingly, with a comment explaining why —
+this cost one red retry cycle before being understood as intended behavior, not a bug.
+
+**Deviations from the literal plan, logged rather than silent:**
+
+1. **Horizon picker is a 4-button segmented control, not a Popover.** Phase 8 never
+   built a `popover.tsx` primitive (Tooltip/Dialog/Drawer/ResponsiveSheet were that
+   phase's full overlay set); adding a brand-new base-ui overlay wrapper purely for a
+   4-option picker was judged out of this phase's scope. Four always-visible buttons
+   need no overlay/focus-trap plumbing and are equally reachable on mobile and desktop.
+2. **`MarkPaidButton` calls `markPaidAction` directly (inside `startTransition`), not
+   via `useActionState` + `<form action>`** — see the real bug above. Logged here too
+   since it's a deviation from the plan's literal sketch, not just a bug-fix footnote.
+3. `budget-mini.tsx` links to `/insights`, `goals-mini.tsx` links to `/goals`, exactly
+   as the plan specifies, even though `/insights` doesn't render a per-category budget
+   breakdown itself — a deliberate literal reading of the plan's task 5 wording, not an
+   oversight.
+
+**Test/CI status:** Unit 444/444 (up from 395 — new `affordability.test.ts` plus two
+small additions to `dashboard.test.ts`/`format.test.ts`). Integration 260/260 (up from
+232). Coverage: 99.43% statements / 97.53% branches / 99.31% functions / 99.84% lines on
+the gated `lib/**` scope (gate is 80%; `affordability.ts` and the new `formatDueDate` in
+`lib/format.ts` are both effectively 100%-covered by their own direct tests — nothing in
+either uncovered-lines list this phase). E2E 59/59 (up from 55), the final run executed
+with `CI=true` against a real `next build && next start` — the exact settings GitHub
+Actions uses — not a looser local approximation; run twice back-to-back after the
+`mark-paid-button.tsx` fix to confirm it wasn't a one-off pass. Lint/typecheck/format all
+clean (`npm run format` made zero changes on its final run).
+
+**Live verification (real, not assumed):** the throwaway script described in the bug
+write-up above drove the running production server directly, twice — once reproducing
+the original toast bug (empty viewport across 10 polls after a real click) and once
+confirming the fix (`data-type="success"` toast visible from the first 300ms poll
+onward). Separately, `e2e/home.spec.ts`'s own assertions are themselves a real,
+hand-verifiable arithmetic check, not just a smoke test: it seeds a fresh $37.00 ad-hoc
+expense entry, reads the "Budget left this month" figure, clicks Mark paid, and asserts
+the figure dropped by EXACTLY 3700 cents — `expect(beforeCents - afterCents).toBe(3700)`
+— then clicks Undo and asserts the figure returns to its exact original value. Every run
+this phase (dev-mode, and twice against a production build) passed that exact assertion.
+
+**A hand-workable example of the safe-to-spend arithmetic** (for a reviewer to verify
+without re-deriving the logic), using small round numbers rather than the messy seeded
+E2E fixture: a household with one bank account, opening balance $1,000.00
+(`openingBalanceCents: 100000`). Two entries are already actualized (real money moved):
+a $200.00 income actual (+20000) and a $50.00 expense actual (−5000) — so
+`currentCashCents = 100000 + 20000 − 5000 = 115000` ($1,150.00), exactly what
+`getActualizedCashRows` + `sumNetCentsByAccount` + the opening balance produce (Phase 4's
+existing, already-tested net-worth math — this phase adds no new arithmetic here, only a
+different query filter). Three unpaid items fall inside the current horizon: a $300.00
+upcoming expense (due in 5 days, not overdue), a $100.00 overdue expense (current month,
+due day already passed), and a $400.00 upcoming income (due in 10 days). `computeSafeToSpend`:
+`upcomingExpenseCents = 30000`, `overdueExpenseCents = 10000`, `expectedIncomeCents =
+40000` (tracked, never subtracted), `safeToSpendCents = 115000 − 30000 − 10000 = 75000`
+— **$750.00** is the number the hero would show, and the $400.00 expected income shows
+up only in the secondary "expected income" figure, never folded into the headline. This
+matches the module's own doc comment and its property test's conservation identity
+(`cash − safeToSpend === total expense subtracted`: `115000 − 75000 = 40000`, and indeed
+`30000 + 10000 = 40000`).
+
+**Deferred / not done:** Nothing from this phase's own task list — every task 1-7 item
+shipped. Phase 10 (Money page paid-state, one-tap entry from the monthly views, month
+chevrons, global quick-add) and Phase 11 (Plan/Goals/Settings/Import restyle, PWA
+refresh) remain not started, per the plan's own phase boundaries — explicitly out of
+this phase's scope, not silently dropped.
+
+---

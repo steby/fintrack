@@ -29,6 +29,10 @@ export default defineConfig({
         // real household_settings table (even the cache-hit path needs a real DB read
         // to populate the cache first) — exercised by lib/flags.integration.test.ts.
         'lib/flags.ts',
+        // Same shape and reasoning as lib/flags.ts immediately above — a thin
+        // household_settings accessor with no cache to even exercise a "pure" branch
+        // of; every path needs a live DB — exercised by lib/settings.integration.test.ts.
+        'lib/settings.ts',
         // Every path here does a real recurring_schedule read + monthly_entries bulk
         // insert — exercised by app/actions/recurring.integration.test.ts's
         // generateAction tests (a thin wrapper around this) and the Monthly page's

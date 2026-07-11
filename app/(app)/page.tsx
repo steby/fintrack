@@ -1,143 +1,145 @@
+import { CalendarClock } from 'lucide-react';
+import { eq } from 'drizzle-orm';
 import { requireUser } from '../../lib/auth/guards';
+import { can } from '../../lib/auth/rbac';
 import { env } from '../../lib/env';
+import { db } from '../../lib/db';
+import { goals as goalsTable } from '../../lib/db/schema';
 import {
-  getDashboardRows,
-  getIncomeExpenseRows,
   getAccountsForNetWorth,
-  getAccountEntriesBeforeYear,
+  getActualizedCashRows,
+  getUpcomingEntryCandidates,
+  getDashboardRowsForMonth,
   getCurrentMonthCategoryBudgets,
 } from '../../lib/db/queries';
+import { getSetting } from '../../lib/settings';
+import { sumNetCentsByAccount } from '../../lib/domain/net-worth';
+import { addMonths } from '../../lib/domain/recurring';
+import { currentYearMonth, utcStartOfDay } from '../../lib/domain/today';
 import {
-  buildMonthlySeries,
-  sumMonthlySeries,
-  buildCategoryBreakdown,
-  buildCumulativeSavings,
-  buildFixedVsVariable,
-  buildBankSummary,
-  buildYoyDelta,
-  sumIncomeExpense,
-  bestEstimateCents,
-} from '../../lib/domain/dashboard';
-import {
-  buildAccountBalances,
-  buildNetWorthSeries,
-  sumNetCentsByAccount,
-} from '../../lib/domain/net-worth';
-import { parseYearParam } from '../../lib/domain/month-params';
-import { StatTiles } from './dashboard/stat-tiles';
-import { CashFlowChart } from './dashboard/cash-flow-chart';
-import { CategoryChart } from './dashboard/category-chart';
-import { SavingsChart } from './dashboard/savings-chart';
-import { BankSummaryTable } from './dashboard/bank-summary-table';
-import { FixedVariableCard } from './dashboard/fixed-variable-card';
-import { YoyCard } from './dashboard/yoy-card';
-import { YearPicker } from './dashboard/year-picker';
-import { BudgetHealthCard } from './dashboard/budget-health-card';
-import { NetWorthChart } from './dashboard/net-worth-chart';
-import { AccountBalancesTable } from './dashboard/account-balances-table';
+  parseHorizon,
+  resolveHorizonDays,
+  selectUpcomingItems,
+  computeSafeToSpend,
+  computeBudgetRemaining,
+  buildRunway,
+} from '../../lib/domain/affordability';
+import { EmptyState } from '@/components/ui/empty-state';
+import { SafeToSpendHero } from './home/safe-to-spend-hero';
+import { UpcomingList } from './home/upcoming-list';
+import { RunwaySparkline } from './home/runway-sparkline';
+import { BudgetMini } from './home/budget-mini';
+import { GoalsMini } from './home/goals-mini';
 
-export default async function DashboardPage({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
+// Forecast-first Home (spec.md Phase 9) — replaces the pre-redesign dashboard (its
+// widgets now live permanently on /insights and /accounts, moved there in Phase 8).
+// Answers "can I cover what's coming": a cash lens (primary, when trustworthy) and a
+// budget-remaining lens (secondary, always shown; promoted to primary when the cash
+// lens isn't trustworthy) — see safe-to-spend-hero.tsx for the exact promotion rule.
+export default async function HomePage() {
   const user = await requireUser();
-  const params = await searchParams;
-  const year = parseYearParam(params.year);
+  const canManage = can(user.role, 'write');
+  const today = utcStartOfDay();
+  const current = currentYearMonth(today);
+  const nextMonth = addMonths(current, 1);
 
-  const [currentRows, priorIncomeExpenseRows, netWorthAccounts, priorYearsEntries, budgetRows] =
-    await Promise.all([
-      getDashboardRows(user.householdId, year),
-      getIncomeExpenseRows(user.householdId, year - 1),
-      env.FEATURE_NET_WORTH ? getAccountsForNetWorth(user.householdId) : Promise.resolve([]),
-      env.FEATURE_NET_WORTH
-        ? getAccountEntriesBeforeYear(user.householdId, year)
-        : Promise.resolve([]),
-      env.FEATURE_CATEGORY_BUDGETS
-        ? getCurrentMonthCategoryBudgets(user.householdId)
-        : Promise.resolve([]),
-    ]);
+  const [
+    rawHorizon,
+    candidates,
+    netWorthAccounts,
+    actualizedRows,
+    currentMonthRows,
+    budgetRows,
+    topGoals,
+  ] = await Promise.all([
+    getSetting(user.householdId, 'affordability_horizon'),
+    getUpcomingEntryCandidates(user.householdId, [current, nextMonth]),
+    env.FEATURE_NET_WORTH ? getAccountsForNetWorth(user.householdId) : Promise.resolve([]),
+    env.FEATURE_NET_WORTH ? getActualizedCashRows(user.householdId) : Promise.resolve([]),
+    getDashboardRowsForMonth(user.householdId, current.year, current.month),
+    env.FEATURE_CATEGORY_BUDGETS
+      ? getCurrentMonthCategoryBudgets(user.householdId)
+      : Promise.resolve([]),
+    env.FEATURE_SAVINGS_GOALS
+      ? db
+          .select()
+          .from(goalsTable)
+          .where(eq(goalsTable.householdId, user.householdId))
+          .orderBy(goalsTable.createdAt)
+          .limit(3)
+      : Promise.resolve([]),
+  ]);
 
-  const monthlySeries = buildMonthlySeries(currentRows);
-  const totals = sumMonthlySeries(monthlySeries);
-  const categoryBreakdown = buildCategoryBreakdown(currentRows);
-  const cumulativeSavings = buildCumulativeSavings(currentRows);
-  const fixedVsVariable = buildFixedVsVariable(currentRows);
-  const bankSummary = buildBankSummary(currentRows);
-  const yoy = buildYoyDelta(
-    sumIncomeExpense(currentRows),
-    sumIncomeExpense(priorIncomeExpenseRows),
+  // A brand-new household with nothing recorded yet has nothing to forecast against —
+  // showing a $0 hero and an empty list would look broken, not reassuring. Guide them to
+  // set up recurring items instead (spec.md Phase 9 edge case).
+  if (candidates.length === 0) {
+    return (
+      <div className="flex flex-col gap-6">
+        <h1 className="text-2xl font-semibold">Welcome, {user.name}</h1>
+        <EmptyState
+          icon={CalendarClock}
+          title="Nothing on the books yet"
+          description="Set up recurring bills and income so Home can show what's coming up and whether you can cover it."
+          action={canManage ? { label: 'Set up your plan', href: '/recurring' } : undefined}
+        />
+      </div>
+    );
+  }
+
+  const horizon = parseHorizon(rawHorizon);
+  const horizonDays = resolveHorizonDays(horizon, today);
+  const items = selectUpcomingItems(candidates, today, horizonDays);
+  const throughDate = new Date(today.getTime() + horizonDays * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  const expenseItemCount = items.filter((i) => i.direction === 'expense').length;
+
+  // Cash lens is only trustworthy when net worth tracking is on AND there's at least one
+  // bank account to sum — spec.md: "FEATURE_NET_WORTH off or zero bank accounts ->
+  // promote the budget lens to hero, hide the cash lens entirely."
+  const bankAccountsList = netWorthAccounts.filter((a) => a.accountType === 'bank');
+  const cashLensActive = env.FEATURE_NET_WORTH && bankAccountsList.length > 0;
+
+  const netByAccount = sumNetCentsByAccount(netWorthAccounts, actualizedRows);
+  const currentCashCents = bankAccountsList.reduce(
+    (sum, a) => sum + a.openingBalanceCents + (netByAccount.get(a.id) ?? 0),
+    0,
   );
 
-  // Net worth is a lifetime running total, not something that resets every time a
-  // different year is browsed — everything from years before `year` is folded into a
-  // carry-forward baseline on top of each account's one-time opening_balance, then the
-  // selected year's entries walk forward from there month by month.
-  let netWorthSeries: ReturnType<typeof buildNetWorthSeries> = [];
-  let latestBalances: { accountId: string; name: string; balanceCents: number }[] = [];
-  if (env.FEATURE_NET_WORTH) {
-    const carryForward = sumNetCentsByAccount(netWorthAccounts, priorYearsEntries);
-    const accountBalances = buildAccountBalances(
-      netWorthAccounts,
-      currentRows.map((row) => ({
-        month: row.month,
-        bankAccountId: row.bankAccountId,
-        direction: row.direction,
-        amountCents: bestEstimateCents(row),
-      })),
-      carryForward,
-    );
-    netWorthSeries = buildNetWorthSeries(accountBalances);
-    latestBalances = netWorthAccounts
-      .filter((a) => a.accountType === 'bank')
-      .map((a) => ({
-        accountId: a.id,
-        name: a.name,
-        // Every bank account passed in always gets a full 12-point series back, so
-        // this is never the empty-array fallback — buildAccountBalances only ever
-        // omits an account entirely, never returns it with zero points.
-        balanceCents: accountBalances.get(a.id)![11].balanceCents,
-      }));
-  }
+  const safeToSpend = cashLensActive ? computeSafeToSpend(currentCashCents, items) : null;
+  const runwayPoints = cashLensActive
+    ? buildRunway(currentCashCents, items, today, horizonDays)
+    : [];
+  const budgetRemaining = computeBudgetRemaining(currentMonthRows);
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Welcome, {user.name}</h1>
-          <p className="text-sm text-muted-foreground">Household overview for {year}</p>
-        </div>
-        <YearPicker year={year} />
+      <div>
+        <h1 className="text-2xl font-semibold">Welcome, {user.name}</h1>
+        <p className="text-sm text-muted-foreground">Household forecast</p>
       </div>
 
-      <StatTiles totals={totals} />
+      <SafeToSpendHero
+        cashLensActive={cashLensActive}
+        safeToSpend={safeToSpend}
+        budgetRemaining={budgetRemaining}
+        expenseItemCount={expenseItemCount}
+        throughDate={throughDate}
+        horizon={horizon}
+        canManage={canManage}
+      />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <CashFlowChart series={monthlySeries} />
-        <CategoryChart breakdown={categoryBreakdown} />
-      </div>
+      {cashLensActive && <RunwaySparkline points={runwayPoints} />}
 
-      <SavingsChart series={cumulativeSavings} />
+      <UpcomingList items={items} canManage={canManage} />
 
-      {env.FEATURE_NET_WORTH && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <div className="lg:col-span-2">
-            <NetWorthChart series={netWorthSeries} />
-          </div>
-          <AccountBalancesTable accounts={latestBalances} />
+      {(env.FEATURE_CATEGORY_BUDGETS || env.FEATURE_SAVINGS_GOALS) && (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {env.FEATURE_CATEGORY_BUDGETS && <BudgetMini categories={budgetRows} />}
+          {env.FEATURE_SAVINGS_GOALS && <GoalsMini goals={topGoals} />}
         </div>
       )}
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <BankSummaryTable accounts={bankSummary} />
-        </div>
-        <FixedVariableCard data={fixedVsVariable} />
-      </div>
-
-      {env.FEATURE_CATEGORY_BUDGETS && <BudgetHealthCard categories={budgetRows} />}
-
-      <YoyCard yoy={yoy} priorYear={year - 1} />
     </div>
   );
 }

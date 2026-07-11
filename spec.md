@@ -475,7 +475,7 @@ under existing flags; no new flag rows.
 
 | Surface   | Route                      | Content                                                                                                                                |
 | --------- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Home      | `/`                        | Forecast-first screen (Phase 9 rewrite; Phase 8 leaves it rendering the full pre-redesign dashboard unchanged)                         |
+| Home      | `/`                        | Forecast-first screen — safe-to-spend, upcoming list, runway (Phase 9 rewrite, done)                                                   |
 | Money     | `/monthly`                 | Entry hub, redesigned in place (Phase 10)                                                                                              |
 | Plan      | `/recurring`               | Recurring + generate, relabeled "Plan", restyled (Phase 11)                                                                            |
 | Net worth | `/accounts`                | NEW (Phase 8): NetWorthChart + AccountBalancesTable + BankSummaryTable, moved off the dashboard                                        |
@@ -618,29 +618,185 @@ spec.ts`'s sidebar-year-jump assertion replaced with a same-page YearPicker
     integration 232/232, build, E2E 55/55 against a real `next build && next start`);
     commit.
 
-### Phase 9 — Affordability domain + forecast-first Home (not started)
+### Phase 9 — Affordability domain + forecast-first Home
 
-Rewrites `/` around "can I cover what's coming" (both a projected-cash lens and a
-budget-remaining lens, expenses-only subtraction, income shown but not subtracted from the
-headline number); adds `lib/domain/affordability.ts` (property-tested), a
-cross-month upcoming list with one-tap mark-paid + toast Undo, a runway sparkline, and a
-configurable horizon (default "this month," options 7/14/30 days). `/insights` and
-`/accounts` become canonical once the dashboard's widgets leave `/`. Not started as of
-Phase 8 — see the plan doc for the full task breakdown.
+**Ready:** AC = `/` answers "can I cover what's coming" (both lenses); cross-month
+upcoming list with one-tap mark-paid + toast Undo; runway sparkline; horizon
+configurable (this-month default / 7 / 14 / 30); `/insights` + `/accounts` are now
+canonical (the old dashboard's widgets are gone from `/`, replaced entirely);
+reminder-email behavior byte-identical (pinned by an integration regression test, not
+just left alone by omission). Edge cases: `FEATURE_NET_WORTH` off or zero bank accounts
+-> promote the budget lens to hero, hide the cash lens (never render a wrong number);
+negative safe-to-spend -> warning styling, not an error; overdue unpaid bills (current
+month, due day passed) shown in their own bucket AND subtracted regardless of horizon;
+day-29-31 clamping in short months; horizon window spilling Dec->Jan; Undo restores the
+exact previous actualAmount/actualDate (including null); a brand-new household with zero
+entries -> empty state with a "set up your plan" CTA to `/recurring`. Trust boundaries:
+`markPaidAction` + `setHorizonAction` inputs (zod); horizon re-validated on read
+(`parseHorizon`, never trusts a stored `household_settings` row blindly); every new
+query is household-scoped; a cross-household entry-id probe returns "Entry not found".
+
+1. **Pure logic — `lib/domain/affordability.ts`** (imports `daysInMonth` from
+   `reminders.ts` and `utcDaysBetween`/`utcStartOfDay`/`currentYearMonth` from
+   `today.ts`; does NOT modify `reminders.ts`): `UpcomingEntryCandidate` (a superset of
+   `reminders.ts`'s `UpcomingBillCandidate` — adds direction/category, and
+   `actualDateDay: null` covers both "no schedule" and "ad-hoc, no schedule at all"),
+   `parseHorizon` (trust-boundary parser, garbage/out-of-set -> `'month'`),
+   `resolveHorizonDays` ('month' = days to that calendar month's end, inclusive of
+   today), `selectUpcomingItems` (skips paid + uncategorized; unscheduled -> due at
+   clamped month-end; overdue = negative days-until-due, CURRENT month only, included
+   regardless of horizon; sorted due-date then item), `computeSafeToSpend` (cash minus
+   upcoming minus overdue expense; income tracked but never subtracted — the
+   conservative headline number the plan's user decision calls for),
+   `computeBudgetRemaining` (budgeted expense minus ACTUAL spend so far this month —
+   deliberately the opposite fallback rule from `bestEstimateCents`: an unpaid forecast
+   row hasn't spent anything yet), `buildRunway` (day-by-day projected cash,
+   `horizonDays + 1` points, DOES include income — the one deliberate asymmetry with the
+   hero's conservative number, documented in a load-bearing comment; overdue items land
+   on day 0; every other item's offset is clamped into `[0, horizonDays]` so the
+   function stays a true conservation identity for any item array, not just
+   well-formed ones). `lib/domain/dashboard.ts` gained `actualOnlyCents` alongside
+   `bestEstimateCents` — the cash-total's opposite fallback rule (actuals only, never
+   falling back to budgeted), named and commented so a call site doesn't need to
+   re-derive why.
+2. **Tests — `lib/domain/affordability.test.ts`** (fast-check property tests, same
+   treatment as `lib/money.test.ts`/`lib/domain/net-worth.test.ts` — user decision):
+   conservation identities for `computeSafeToSpend` (cash minus safe-to-spend always
+   equals total expense subtracted, for arbitrary item arrays) and `buildRunway` (the
+   last point always equals cash plus the full signed sum of an arbitrary item array,
+   proving the day-0/clamping design holds generally, not just for well-formed input);
+   `computeBudgetRemaining`'s `remaining + spent === budgeted` identity; a property
+   confirming `selectUpcomingItems` never selects a paid or uncategorized candidate for
+   arbitrary candidates/today/horizon. Unit cases: Feb day-31 clamp, Dec->Jan spill,
+   `'month'` horizon on the 1st vs. the last day of a month (including leap February),
+   unscheduled-entry month-end due date, zero-budget `pctSpent` 0, empty candidates,
+   `parseHorizon` against every documented garbage shape.
+3. **Data layer — `lib/db/queries.ts`**: `getUpcomingEntryCandidates` (clones
+   `getUpcomingBillCandidates`'s bucket-spanning shape but LEFT-joins
+   `recurring_schedule`, not INNER, so ad-hoc entries are included with
+   `actualDateDay: null`, and LEFT-joins categories for direction/name/color — a
+   deliberately separate query from the cron path's, not a shared/parameterized one, so
+   a future Home change can never accidentally alter cron behavior);
+   `getActualizedCashRows` (per-account signed sums of ACTUAL amounts only, no year
+   bound — same grouped-sum shape as `getAccountEntriesBeforeYear` but
+   `WHERE actual_amount IS NOT NULL` instead of a year cutoff). New `lib/settings.ts`:
+   `getSetting`/`setSetting`, a generic `household_settings` accessor for the
+   `affordability_horizon` key — same table `lib/flags.ts` owns the boolean
+   `KillSwitchKey` subset of, deliberately NOT added to that union (a horizon isn't a
+   kill-switch) and deliberately uncached (a single per-request read on Home's render
+   path, not a hot path).
+4. **Actions**: `markPaidAction` (`app/actions/monthly.ts`) — zod `{ id: uuid }`,
+   `requireRole('write')`, household-scoped select; an already-paid entry
+   (`actualAmount !== null`) returns `{ success: true, alreadyPaid: true }` (idempotent,
+   double-tap safe — no second write); otherwise sets `actualAmount` to the entry's own
+   `budgetedAmount` and `actualDate` to today (UTC), returning
+   `{ success: true, alreadyPaid: false, previous: { actualAmount: null, actualDate } }`
+   so the client's toast Undo can replay the exact prior state through the EXISTING
+   `updateActualAction` (no new "unmark" action — that would duplicate exactly what
+   `updateActualAction` already does). `updateActualAction` itself gained a
+   `revalidatePath('/')` alongside its existing `/monthly` one, since it's now also the
+   Undo path Home's data depends on. `setHorizonAction` (new `app/actions/settings.ts`)
+   — zod enum, `requireRole('write')` (owner OR member — a personal viewing preference,
+   not an owner-only policy toggle like the `manage_settings`-gated kill-switches).
+   Integration tests cover idempotency, cross-household scoping (added to
+   `cross-household-scoping.integration.test.ts` too), a partial-actualization
+   (date-only) `previous` case, and horizon round-trip/tampering. A dedicated
+   **"reminders freeze"** regression test seeds a real fixture and asserts
+   `getUpcomingBillCandidates` + `selectUpcomingBills` (the cron path — untouched this
+   phase) still produce byte-identical output end-to-end against a live DB, not just "no
+   diff in reminders.ts."
+5. **Home UI — rewrote `app/(app)/page.tsx` + new `app/(app)/home/`**:
+   `safe-to-spend-hero.tsx` (cash lens primary + always-visible budget-remaining
+   secondary line when cash is trustworthy; budget lens promoted to the ONLY hero,
+   cash hidden entirely, when `FEATURE_NET_WORTH` is off or there are zero bank
+   accounts — never a wrong/misleading number), `upcoming-list.tsx` (Overdue / This
+   week / Later groups) + `mark-paid-button.tsx` (client; see the real bug below),
+   `runway-sparkline.tsx` (Recharts, axis-free, zero-reference line), `budget-mini.tsx`
+   (reuses `BudgetHealthCard` wholesale — its real, single home per the Phase 8 entry's
+   own note) + `goals-mini.tsx` (compact read-only `computeGoalProgress` cards),
+   `horizon-picker.tsx` (a 4-button segmented control, not a Popover — see Deviations).
+   A brand-new household with zero `monthly_entries` in the current+next-month window
+   gets an `EmptyState` ("set up your plan" -> `/recurring`) instead of a confusing
+   all-zero hero.
+6. **E2E**: new `e2e/home.spec.ts` (hero renders a real figure; a seeded ad-hoc bill ->
+   mark paid -> row disappears from the list, the budget-remaining figure drops by
+   EXACTLY its amount, Undo restores both; a viewer sees the list with no mark-paid
+   button or horizon picker; a genuinely fresh household — its own `households` row,
+   not just a new user in the seeded one — sees the empty state). `e2e/dashboard.spec.ts`
+   renamed to `e2e/insights.spec.ts` and repointed at `/insights` (the widgets' now-sole
+   home). `e2e/phase4.spec.ts`'s net-worth assertion repointed at `/accounts` (no longer
+   rendered on `/` at all); its budget-health assertion stays on `/` unchanged, since
+   `budget-mini.tsx` is that widget's real home now, not a duplicate.
+7. **Adversarial pass**: double-tap mark-paid (idempotent, confirmed via integration
+   test); forged/foreign entry id (cross-household probe); horizon tampering (form field
+   AND a garbage DB row, both re-validated through `parseHorizon`); confirmed the cron
+   reminder unit + integration suites stay green and byte-identical (task 4's freeze
+   test). Full local gate green; commit.
+
+**Deviations from the literal plan, logged rather than silent:**
+
+1. **Horizon picker is a 4-button segmented control, not a Popover.** The plan's WISDOM
+   section sketched a small Popover for this; Phase 8 never built a `popover.tsx`
+   primitive (Tooltip/Dialog/Drawer/ResponsiveSheet were that phase's full overlay set),
+   and adding a brand-new base-ui overlay wrapper purely for a 4-option picker was
+   judged out of THIS phase's scope. Four always-visible buttons need no
+   overlay/focus-trap plumbing and are equally reachable on mobile and desktop.
+2. **`MarkPaidButton` calls `markPaidAction` directly (inside `startTransition`), not
+   via `useActionState` + `<form action>`, despite the plan's WISDOM section sketching
+   the latter.** See the real bug below — a `useActionState`-bound version was built
+   first per the plan and demonstrably failed under real E2E verification.
+3. `budget-mini.tsx` links to `/insights` and `goals-mini.tsx` links to `/goals`,
+   exactly as the plan specifies, even though `/insights` doesn't render a per-category
+   budget breakdown itself (`CategoryChart`'s expense-by-category donut is the nearest
+   analytically-related widget there) — a deliberate, literal reading of the plan's own
+   task 5 wording, not an oversight.
+
+**A real bug found and fixed via live E2E verification (not just green tests):** the
+first `MarkPaidButton` implementation followed the plan's sketch — `useActionState`,
+firing the toast from a render-time "reacted to" comparison (this codebase's existing
+pattern for `goal-card.tsx`/`entry-row.tsx`, but those only ever call their OWN
+`setState`, never an external system). Full green unit/integration/E2E suites did NOT
+catch this — the toast reliably failed to appear only under a REAL browser exercising
+the REAL click, confirmed via a throwaway script driving the live `next build && next
+start` server directly (same verification method as Phase 8's own adversarial pass).
+Root cause: `markPaidAction`'s single response drives TWO client updates at once —
+`useActionState`'s own local `state`, and (because the action calls `revalidatePath('/')`)
+the Next.js router's refresh of Home's server-rendered tree, which removes the
+now-paid entry (and therefore this exact component) from the list. When both land in
+one commit, React can go straight from "old tree" to "new tree without this component,"
+without ever committing an intermediate frame where this instance holds the new `state`
+while still mounted — so neither the render-time pattern NOR a `useEffect` keyed on
+`state` reliably fired (both were tried; both intermittently failed, matching the
+non-deterministic "sometimes it's there" signature of a genuine race, not a typo).
+Fixed by calling `markPaidAction` directly inside `startTransition`, awaiting its result
+in the same closure that fires the toast — the same shape the plan's own Undo button
+already used for exactly this reason, now applied consistently to the primary action
+too. Verified via the same throwaway live-server script (toast now appears reliably
+across 10 consecutive 300ms samples) before re-running the full E2E suite.
+
+A second, smaller finding from the same live-verification pass: `EmptyState`'s
+CTA (`Button` composed with `render={<Link/>}` and `nativeButton={false}`) exposes an
+accessibility role of `"button"`, not `"link"`, even though it navigates via `href` —
+Base UI adds button semantics/keyboard handling on top of the underlying `<a>` when
+`nativeButton` is `false`. Not a bug (this is Base UI's own documented composition
+behavior, the same mechanism Phase 8's `not-found.tsx`/`empty-state.tsx` already
+depend on) — just a real thing to know when writing a Playwright locator against it;
+`e2e/home.spec.ts`'s empty-state test targets `getByRole('button', ...)` accordingly,
+with a comment explaining why.
 
 ### Phase 10 — Money page: paid-state everywhere, one-tap entry, month nav, global quick-add (not started)
 
 Adds paid/upcoming/overdue state to all three Monthly views, cross-year month navigation,
 a `fintrack_view` cookie-persisted view preference, and a global quick-add (the Phase 8
 `Fab` primitive, finally mounted, + a desktop header button) opening a `ResponsiveSheet`
-with the ad-hoc entry form. Not started as of Phase 8.
+with the ad-hoc entry form. Not started as of Phase 9.
 
 ### Phase 11 — Plan/Goals/Settings/Import restyle + polish + PWA refresh (not started)
 
 Restyles Plan/Goals/Settings/Import onto the Phase 8 primitives (Switch for toggles,
 Progress for goal rings, Tabs/Dialog for Import's step flow), adopts `EmptyState`
 everywhere a list can be empty, refreshes the PWA manifest/icons/`viewport` theme-color for
-the new brand, and closes with a final adversarial + a11y sweep. Not started as of Phase 8.
+the new brand, and closes with a final adversarial + a11y sweep. Not started as of Phase 9.
 
 ---
 

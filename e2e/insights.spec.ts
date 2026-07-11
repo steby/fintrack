@@ -7,11 +7,16 @@ import { currentYearMonth } from '../lib/domain/today';
 const OWNER_EMAIL = requireEnv('SEED_OWNER_EMAIL');
 const OWNER_PASSWORD = requireEnv('SEED_OWNER_PASSWORD');
 
-test.describe('dashboard', () => {
+// Renamed from dashboard.spec.ts (spec.md Phase 9): the year-analytics widgets this file
+// asserts on moved off `/` in Phase 8 already; Phase 9 finally rewrites `/` itself (the
+// forecast-first Home — see home.spec.ts), so every assertion here now targets
+// `/insights`, the widgets' permanent home, instead of the old dashboard route.
+test.describe('insights', () => {
   test('a seeded year renders every widget without crashing', async ({ page }) => {
     await login(page, OWNER_EMAIL, OWNER_PASSWORD);
+    await page.goto('/insights');
 
-    await expect(page.getByText(/Household overview for \d{4}/)).toBeVisible();
+    await expect(page.getByText(/Year analytics for \d{4}/)).toBeVisible();
     // "Income"/"Expense" legitimately appear twice (stat tiles + the YoY card below) —
     // .first() just confirms the label renders somewhere, not a specific single instance.
     await expect(page.getByText('Income', { exact: true }).first()).toBeVisible();
@@ -21,18 +26,16 @@ test.describe('dashboard', () => {
     await expect(page.getByText('Cash flow')).toBeVisible();
     await expect(page.getByText('Expense by category')).toBeVisible();
     await expect(page.getByText('Cumulative savings')).toBeVisible();
-    await expect(page.getByText('Bank summary')).toBeVisible();
     await expect(page.getByText('Fixed vs. variable')).toBeVisible();
     await expect(page.getByText(/Year over year/)).toBeVisible();
   });
 
   test('an empty year (no entries) renders empty states, not a crash', async ({ page }) => {
     await login(page, OWNER_EMAIL, OWNER_PASSWORD);
-    await page.goto('/?year=2099');
+    await page.goto('/insights?year=2099');
 
-    await expect(page.getByText('Household overview for 2099')).toBeVisible();
+    await expect(page.getByText('Year analytics for 2099')).toBeVisible();
     await expect(page.getByText('No expense categories budgeted this year.')).toBeVisible();
-    await expect(page.getByText('No entries linked to a bank account this year.')).toBeVisible();
     await expect(page.getByText('No expenses recorded this year.')).toBeVisible();
     // Stat tiles show $0.00, not NaN/undefined, for a completely empty year.
     await expect(page.getByText('$0.00').first()).toBeVisible();
@@ -45,28 +48,28 @@ test.describe('dashboard', () => {
 
   test('an out-of-range year param is clamped instead of crashing', async ({ page }) => {
     await login(page, OWNER_EMAIL, OWNER_PASSWORD);
-    const expectedText = `Household overview for ${currentYearMonth().year}`;
+    const expectedText = `Year analytics for ${currentYearMonth().year}`;
 
-    await page.goto('/?year=99999');
+    await page.goto('/insights?year=99999');
     await expect(page.getByText(expectedText)).toBeVisible();
 
-    await page.goto('/?year=not-a-number');
+    await page.goto('/insights?year=not-a-number');
     await expect(page.getByText(expectedText)).toBeVisible();
   });
 
   // Phase 8's shell rewrite (app/(app)/layout.tsx) deleted the sidebar's YearNav
-  // quick-jump entirely (spec.md Phase 8 task 4) — the dashboard's own in-page
-  // YearPicker (unaffected this phase, still the same component) is the only year
-  // control left on this route now.
-  test('year picker navigates within the dashboard', async ({ page }) => {
+  // quick-jump entirely (spec.md Phase 8 task 4) — /insights' own in-page YearPicker
+  // (`basePath="/insights"`, unaffected this phase) is the only year control left.
+  test('year picker navigates within insights', async ({ page }) => {
     await login(page, OWNER_EMAIL, OWNER_PASSWORD);
+    await page.goto('/insights');
     const currentYear = currentYearMonth().year;
 
     await page.getByTestId('year-picker-prev').click();
-    await expect(page).toHaveURL(`/?year=${currentYear - 1}`);
+    await expect(page).toHaveURL(`/insights?year=${currentYear - 1}`);
 
     await page.getByTestId('year-picker-next').click();
-    await expect(page).toHaveURL(`/?year=${currentYear}`);
+    await expect(page).toHaveURL(`/insights?year=${currentYear}`);
   });
 
   test('theme toggle switches and persists across reload', async ({ page }) => {

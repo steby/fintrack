@@ -1,4 +1,4 @@
-import { and, eq, lt, or, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, lt, or, sql } from 'drizzle-orm';
 import { db } from './index';
 import { logger } from '../log';
 import { isUnusuallyLargeRowCount } from '../domain/query-limits';
@@ -16,6 +16,7 @@ import { bestEstimateCents, type DashboardEntryRow } from '../domain/dashboard';
 import type { NetWorthAccountInput } from '../domain/net-worth';
 import type { MatchCandidateEntry } from '../domain/csv';
 import type { UpcomingBillCandidate } from '../domain/reminders';
+import type { UpcomingEntryCandidate } from '../domain/affordability';
 import type { YearMonth } from '../domain/recurring';
 import { currentYearMonth } from '../domain/today';
 
@@ -472,6 +473,82 @@ export async function getUpcomingBillCandidates(
     );
 
   return rows;
+}
+
+// Candidates for lib/domain/affordability.ts's selectUpcomingItems — Phase 9's superset
+// of getUpcomingBillCandidates above, spanning the same kind of (year, month) bucket
+// list but LEFT-joining recurring_schedule (not INNER) so ad-hoc entries (no
+// recurring_schedule_id at all) are included too, with actualDateDay simply null for
+// them — the affordability engine's Home list wants "everything coming up," not just
+// fixed-day recurring bills the way the narrower reminder-email selection does. Also
+// left-joins categories for direction/name/color, which the email path never needed
+// (a plain digest of "these bills are due soon" has no use for a category dot).
+// Deliberately a separate query, not a shared helper with getUpcomingBillCandidates —
+// spec.md Phase 9: reminders.ts's cron email path must stay byte-identical, and having
+// its query share code with a second, actively-evolving consumer is exactly the kind of
+// coupling that risks a Phase 10/11 Home change silently altering cron behavior.
+export async function getUpcomingEntryCandidates(
+  householdId: string,
+  buckets: YearMonth[],
+): Promise<UpcomingEntryCandidate[]> {
+  if (buckets.length === 0) return [];
+
+  const rows = await db
+    .select({
+      id: monthlyEntries.id,
+      item: monthlyEntries.item,
+      year: monthlyEntries.year,
+      month: monthlyEntries.month,
+      actualDateDay: recurringSchedule.actualDateDay,
+      actualAmount: monthlyEntries.actualAmount,
+      budgetedAmount: monthlyEntries.budgetedAmount,
+      direction: categories.direction,
+      categoryName: categories.name,
+      categoryColor: categories.color,
+    })
+    .from(monthlyEntries)
+    .leftJoin(recurringSchedule, eq(monthlyEntries.recurringScheduleId, recurringSchedule.id))
+    .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
+    .where(
+      and(
+        eq(monthlyEntries.householdId, householdId),
+        or(
+          ...buckets.map((b) =>
+            and(eq(monthlyEntries.year, b.year), eq(monthlyEntries.month, b.month)),
+          ),
+        ),
+      ),
+    );
+
+  return rows;
+}
+
+// Lifetime per-account cash position, ACTUALIZED entries only, no year bound — the
+// affordability hero's cash lens (spec.md Phase 9 task 1: "Cash = opening balances +
+// sumNetCentsByAccount over ACTUALIZED entries only, all years through today"). Same
+// grouped-sum shape and reasoning as getAccountEntriesBeforeYear above (one row per
+// (bank_account_id, direction) instead of one per entry, so a household's cash position
+// is a handful of rows regardless of how many years of history exist) but with a
+// `WHERE actual_amount IS NOT NULL` filter instead of a `year <` bound — an unpaid
+// forecast row hasn't affected cash yet (see lib/domain/dashboard.ts's actualOnlyCents),
+// so it must never be summed here regardless of which year it falls in.
+export async function getActualizedCashRows(householdId: string): Promise<NetWorthPriorEntryRow[]> {
+  const rows = await db
+    .select({
+      bankAccountId: monthlyEntries.bankAccountId,
+      direction: categories.direction,
+      total: sql<string>`sum(${monthlyEntries.actualAmount})`,
+    })
+    .from(monthlyEntries)
+    .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
+    .where(and(eq(monthlyEntries.householdId, householdId), isNotNull(monthlyEntries.actualAmount)))
+    .groupBy(monthlyEntries.bankAccountId, categories.direction);
+
+  return rows.map((row) => ({
+    bankAccountId: row.bankAccountId,
+    direction: row.direction,
+    amountCents: parseAmountToCents(row.total),
+  }));
 }
 
 // Household members who've opted in to reminder/recap emails (users.notifyByEmail —

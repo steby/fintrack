@@ -12,6 +12,8 @@ import {
   getExportRows,
   getMatchCandidates,
   getNameLookup,
+  getUpcomingEntryCandidates,
+  getActualizedCashRows,
 } from './queries';
 
 async function makeHousehold(label: string) {
@@ -852,6 +854,273 @@ describe('getNameLookup', () => {
       });
       const lookup = await getNameLookup(householdA.id);
       expect(lookup.categoryIdByName.size).toBe(0);
+    } finally {
+      await cleanup(householdA.id);
+      await cleanup(householdB.id);
+    }
+  });
+});
+
+describe('getUpcomingEntryCandidates', () => {
+  it('returns an empty array for an empty bucket list, without querying the DB', async () => {
+    expect(await getUpcomingEntryCandidates('does-not-matter', [])).toEqual([]);
+  });
+
+  it('includes an ad-hoc entry (no recurring_schedule_id) with actualDateDay null', async () => {
+    const household = await makeHousehold('Upcoming candidates A');
+    try {
+      const [category] = await db
+        .insert(categories)
+        .values({ householdId: household.id, name: 'Misc', direction: 'expense' })
+        .returning();
+      await db.insert(monthlyEntries).values({
+        householdId: household.id,
+        year: 2026,
+        month: 7,
+        item: 'Car repair',
+        categoryId: category.id,
+        budgetedAmount: '150.00',
+      });
+
+      const rows = await getUpcomingEntryCandidates(household.id, [{ year: 2026, month: 7 }]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        item: 'Car repair',
+        actualDateDay: null,
+        direction: 'expense',
+        categoryName: 'Misc',
+        budgetedAmount: '150.00',
+      });
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  it('includes a recurring-generated entry with its schedule actualDateDay and category direction/color', async () => {
+    const household = await makeHousehold('Upcoming candidates B');
+    try {
+      const [category] = await db
+        .insert(categories)
+        .values({
+          householdId: household.id,
+          name: 'Housing',
+          direction: 'expense',
+          color: '#abcdef',
+        })
+        .returning();
+      const [schedule] = await db
+        .insert(recurringSchedule)
+        .values({
+          householdId: household.id,
+          item: 'Rent',
+          categoryId: category.id,
+          budgetedAmount: '2000.00',
+          frequency: 'Monthly',
+          actualDateDay: 1,
+        })
+        .returning();
+      await db.insert(monthlyEntries).values({
+        householdId: household.id,
+        year: 2026,
+        month: 7,
+        recurringScheduleId: schedule.id,
+        item: 'Rent',
+        categoryId: category.id,
+        budgetedAmount: '2000.00',
+      });
+
+      const rows = await getUpcomingEntryCandidates(household.id, [{ year: 2026, month: 7 }]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        item: 'Rent',
+        actualDateDay: 1,
+        direction: 'expense',
+        categoryColor: '#abcdef',
+      });
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  it('spans multiple (year, month) buckets in one call', async () => {
+    const household = await makeHousehold('Upcoming candidates C');
+    try {
+      await db.insert(monthlyEntries).values([
+        {
+          householdId: household.id,
+          year: 2026,
+          month: 12,
+          item: 'Dec item',
+          budgetedAmount: '10.00',
+        },
+        {
+          householdId: household.id,
+          year: 2027,
+          month: 1,
+          item: 'Jan item',
+          budgetedAmount: '20.00',
+        },
+      ]);
+
+      const rows = await getUpcomingEntryCandidates(household.id, [
+        { year: 2026, month: 12 },
+        { year: 2027, month: 1 },
+      ]);
+      expect(rows.map((r) => r.item).sort()).toEqual(['Dec item', 'Jan item']);
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  it('never returns rows from a different household (household scoping)', async () => {
+    const householdA = await makeHousehold('Upcoming candidates D-A');
+    const householdB = await makeHousehold('Upcoming candidates D-B');
+    try {
+      await db.insert(monthlyEntries).values({
+        householdId: householdB.id,
+        year: 2026,
+        month: 7,
+        item: 'Other household item',
+        budgetedAmount: '10.00',
+      });
+      const rows = await getUpcomingEntryCandidates(householdA.id, [{ year: 2026, month: 7 }]);
+      expect(rows).toEqual([]);
+    } finally {
+      await cleanup(householdA.id);
+      await cleanup(householdB.id);
+    }
+  });
+});
+
+describe('getActualizedCashRows', () => {
+  it('returns an empty array when nothing has been actualized', async () => {
+    const household = await makeHousehold('Actualized cash A');
+    try {
+      const [bank] = await db
+        .insert(bankAccounts)
+        .values({ householdId: household.id, name: 'Checking' })
+        .returning();
+      await db.insert(monthlyEntries).values({
+        householdId: household.id,
+        year: 2026,
+        month: 1,
+        item: 'Forecast only',
+        bankAccountId: bank.id,
+        budgetedAmount: '100.00',
+      });
+
+      const rows = await getActualizedCashRows(household.id);
+      expect(rows).toEqual([]);
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  it('sums only actualized entries, ignoring an unpaid forecast row entirely', async () => {
+    const household = await makeHousehold('Actualized cash B');
+    try {
+      const [category] = await db
+        .insert(categories)
+        .values({ householdId: household.id, name: 'Groceries', direction: 'expense' })
+        .returning();
+      const [bank] = await db
+        .insert(bankAccounts)
+        .values({ householdId: household.id, name: 'Checking' })
+        .returning();
+      await db.insert(monthlyEntries).values([
+        {
+          householdId: household.id,
+          year: 2026,
+          month: 1,
+          item: 'Paid grocery run',
+          categoryId: category.id,
+          bankAccountId: bank.id,
+          budgetedAmount: '50.00',
+          actualAmount: '48.50',
+        },
+        {
+          householdId: household.id,
+          year: 2026,
+          month: 2,
+          item: 'Unpaid forecast',
+          categoryId: category.id,
+          bankAccountId: bank.id,
+          budgetedAmount: '999.00', // must NOT be counted — no actualAmount
+        },
+      ]);
+
+      const rows = await getActualizedCashRows(household.id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        bankAccountId: bank.id,
+        direction: 'expense',
+        amountCents: 4850,
+      });
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  it('spans every year (no year bound), unlike getAccountEntriesBeforeYear', async () => {
+    const household = await makeHousehold('Actualized cash C');
+    try {
+      const [category] = await db
+        .insert(categories)
+        .values({ householdId: household.id, name: 'Salary', direction: 'income' })
+        .returning();
+      const [bank] = await db
+        .insert(bankAccounts)
+        .values({ householdId: household.id, name: 'Checking' })
+        .returning();
+      await db.insert(monthlyEntries).values([
+        {
+          householdId: household.id,
+          year: 2020,
+          month: 1,
+          item: 'Old pay',
+          categoryId: category.id,
+          bankAccountId: bank.id,
+          budgetedAmount: '1000.00',
+          actualAmount: '1000.00',
+        },
+        {
+          householdId: household.id,
+          year: 2030,
+          month: 1,
+          item: 'Far-future pay',
+          categoryId: category.id,
+          bankAccountId: bank.id,
+          budgetedAmount: '1000.00',
+          actualAmount: '1000.00',
+        },
+      ]);
+
+      const rows = await getActualizedCashRows(household.id);
+      expect(rows[0]).toMatchObject({ amountCents: 200000 });
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  it('never returns rows from a different household (household scoping)', async () => {
+    const householdA = await makeHousehold('Actualized cash D-A');
+    const householdB = await makeHousehold('Actualized cash D-B');
+    try {
+      const [bank] = await db
+        .insert(bankAccounts)
+        .values({ householdId: householdB.id, name: 'Other' })
+        .returning();
+      await db.insert(monthlyEntries).values({
+        householdId: householdB.id,
+        year: 2026,
+        month: 1,
+        item: 'Other',
+        bankAccountId: bank.id,
+        budgetedAmount: '10.00',
+        actualAmount: '10.00',
+      });
+      const rows = await getActualizedCashRows(householdA.id);
+      expect(rows).toEqual([]);
     } finally {
       await cleanup(householdA.id);
       await cleanup(householdB.id);

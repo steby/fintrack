@@ -475,3 +475,208 @@ describe('deleteEntryAction', () => {
     await cleanup(memberA.household.id, memberB.household.id);
   });
 });
+
+describe('markPaidAction', () => {
+  it('sets actualAmount to the budgeted amount and actualDate to today (UTC) for an unpaid entry', async () => {
+    const { markPaidAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Mark paid A');
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: 2026,
+        month: 1,
+        item: 'Rent',
+        budgetedAmount: '2000.00',
+      })
+      .returning();
+
+    mockToken = member.token;
+    const result = await markPaidAction(undefined, formData({ id: entry.id }));
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+    expect(result).toEqual({
+      success: true,
+      alreadyPaid: false,
+      previous: { actualAmount: null, actualDate: null },
+    });
+
+    const [reloaded] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entry.id));
+    expect(reloaded).toMatchObject({ actualAmount: '2000.00', actualDate: todayIso });
+
+    await cleanup(member.household.id);
+  });
+
+  it('is idempotent — double-tapping an already-paid entry is a no-op, not an error or a second write', async () => {
+    const { markPaidAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Mark paid B');
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: 2026,
+        month: 1,
+        item: 'Rent',
+        budgetedAmount: '2000.00',
+      })
+      .returning();
+
+    mockToken = member.token;
+    const first = await markPaidAction(undefined, formData({ id: entry.id }));
+    expect(first).toMatchObject({ success: true, alreadyPaid: false });
+
+    const second = await markPaidAction(undefined, formData({ id: entry.id }));
+    expect(second).toEqual({ success: true, alreadyPaid: true });
+
+    const [reloaded] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entry.id));
+    // Still exactly what the FIRST call set — the second call must not have re-run the
+    // update (e.g. overwriting a since-edited actualDate back to "today" a second time).
+    expect(reloaded.actualAmount).toBe('2000.00');
+
+    await cleanup(member.household.id);
+  });
+
+  it('carries forward a pre-existing actualDate (partial actualization) into `previous`, even though actualAmount was still null', async () => {
+    const { markPaidAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Mark paid C');
+    // A real, supported state (see lib/domain/entries.ts's shouldPropagate comment):
+    // a date recorded with the amount still blank.
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: 2026,
+        month: 1,
+        item: 'Rent',
+        budgetedAmount: '2000.00',
+        actualDate: '2026-01-03',
+      })
+      .returning();
+
+    mockToken = member.token;
+    const result = await markPaidAction(undefined, formData({ id: entry.id }));
+
+    expect(result).toEqual({
+      success: true,
+      alreadyPaid: false,
+      previous: { actualAmount: null, actualDate: '2026-01-03' },
+    });
+
+    await cleanup(member.household.id);
+  });
+
+  it('rejects a malformed id (adversarial: forged non-UUID input)', async () => {
+    const { markPaidAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Mark paid D');
+
+    mockToken = member.token;
+    const result = await markPaidAction(undefined, formData({ id: 'not-a-uuid' }));
+    expect(result).toEqual({ error: 'Invalid request.' });
+
+    await cleanup(member.household.id);
+  });
+
+  it('a viewer cannot mark an entry paid', async () => {
+    const { markPaidAction } = await import('./monthly');
+    const viewer = await makeHouseholdWithUser('viewer', 'Mark paid E');
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({ householdId: viewer.household.id, year: 2026, month: 1, item: 'Rent' })
+      .returning();
+
+    mockToken = viewer.token;
+    await expect(markPaidAction(undefined, formData({ id: entry.id }))).rejects.toThrow(
+      'You do not have permission to perform this action.',
+    );
+
+    await cleanup(viewer.household.id);
+  });
+
+  it('cannot mark paid an entry in a DIFFERENT household (cross-tenant probe)', async () => {
+    const { markPaidAction } = await import('./monthly');
+    const memberA = await makeHouseholdWithUser('member', 'Mark paid F-A');
+    const memberB = await makeHouseholdWithUser('member', 'Mark paid F-B');
+    const [entryInB] = await db
+      .insert(monthlyEntries)
+      .values({ householdId: memberB.household.id, year: 2026, month: 1, item: 'B Rent' })
+      .returning();
+
+    mockToken = memberA.token;
+    const result = await markPaidAction(undefined, formData({ id: entryInB.id }));
+    expect(result).toEqual({ error: 'Entry not found.' });
+
+    const [stillUnpaid] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entryInB.id));
+    expect(stillUnpaid.actualAmount).toBeNull();
+
+    await cleanup(memberA.household.id, memberB.household.id);
+  });
+});
+
+// spec.md Phase 9: lib/domain/reminders.ts (the cron email path) and
+// lib/db/queries.ts's getUpcomingBillCandidates are NOT modified by this phase's
+// affordability engine — lib/domain/affordability.ts's getUpcomingEntryCandidates is a
+// deliberately separate, superset query/pure-fn pair (see both files' own comments).
+// This test pins the OLD pair's end-to-end behavior against a real seeded fixture so a
+// future edit that accidentally touches either one is caught here, not just by the
+// pre-existing reminders.test.ts unit suite (which never hits a real DB row).
+describe('reminders freeze (regression guard — cron email path must stay byte-identical)', () => {
+  it('getUpcomingBillCandidates + selectUpcomingBills produce the same shape for a seeded fixture as before this phase', async () => {
+    const { getUpcomingBillCandidates } = await import('../../lib/db/queries');
+    const { selectUpcomingBills } = await import('../../lib/domain/reminders');
+    const member = await makeHouseholdWithUser('member', 'Reminders freeze A');
+
+    const today = new Date();
+    const [category] = await db
+      .insert(categories)
+      .values({ householdId: member.household.id, name: 'Bills', direction: 'expense' })
+      .returning();
+    const [schedule] = await db
+      .insert(recurringSchedule)
+      .values({
+        householdId: member.household.id,
+        item: 'Rent',
+        categoryId: category.id,
+        budgetedAmount: '2000.00',
+        frequency: 'Monthly',
+        actualDateDay: today.getUTCDate(), // due today -> inside the default 3-day window
+      })
+      .returning();
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: today.getUTCFullYear(),
+        month: today.getUTCMonth() + 1,
+        recurringScheduleId: schedule.id,
+        item: 'Rent',
+        categoryId: category.id,
+        budgetedAmount: '2000.00',
+      })
+      .returning();
+
+    const candidates = await getUpcomingBillCandidates(member.household.id, [
+      { year: today.getUTCFullYear(), month: today.getUTCMonth() + 1 },
+    ]);
+    const bills = selectUpcomingBills(candidates, today);
+
+    expect(bills).toHaveLength(1);
+    expect(bills[0]).toMatchObject({
+      id: entry.id,
+      item: 'Rent',
+      daysUntilDue: 0,
+      budgetedAmount: '2000.00',
+      dueDate: today.toISOString().slice(0, 10),
+    });
+
+    await cleanup(member.household.id);
+  });
+});
