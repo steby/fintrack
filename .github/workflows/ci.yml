@@ -19,6 +19,7 @@ jobs:
       SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
       SEED_OWNER_EMAIL: ${{ secrets.SEED_OWNER_EMAIL }}
       SEED_OWNER_PASSWORD: ${{ secrets.SEED_OWNER_PASSWORD }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
       CI: true
     steps:
       - name: Checkout
