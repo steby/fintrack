@@ -161,7 +161,10 @@ describe('changeMemberRoleAction / removeMemberAction — role and cross-househo
   it('demoting one of two owners is allowed — the household still has an owner left', async () => {
     const { changeMemberRoleAction } = await import('./members');
     const ownerA = await makeHouseholdWithUser('owner', 'Members two-owner demote A');
-    const { user: ownerBUser } = await makeHouseholdWithUser('owner', 'Members two-owner demote B');
+    const { user: ownerBUser, household: ownerBHousehold } = await makeHouseholdWithUser(
+      'owner',
+      'Members two-owner demote B',
+    );
     await db
       .update(users)
       .set({ householdId: ownerA.household.id })
@@ -175,7 +178,10 @@ describe('changeMemberRoleAction / removeMemberAction — role and cross-househo
 
     expect(result).toEqual({ success: true });
 
-    await cleanup(ownerA.household.id);
+    // ownerBHousehold is now empty (its only user was re-homed above) but the row
+    // itself still exists and must be cleaned up separately from ownerA's household —
+    // the same pattern the cross-household tests above already follow.
+    await cleanup(ownerA.household.id, ownerBHousehold.id);
   });
 });
 
@@ -219,10 +225,11 @@ describe('changeMemberRoleAction / removeMemberAction — last-owner protection 
   it('concurrently demoting both owners of a 2-owner household leaves exactly one owner, never zero', async () => {
     const { changeMemberRoleAction } = await import('./members');
     const ownerA = await makeHouseholdWithUser('owner', 'Members race demote A');
-    const { user: ownerBUser, token: tokenB } = await makeHouseholdWithUser(
-      'owner',
-      'Members race demote B',
-    );
+    const {
+      user: ownerBUser,
+      token: tokenB,
+      household: ownerBHousehold,
+    } = await makeHouseholdWithUser('owner', 'Members race demote B');
     await db
       .update(users)
       .set({ householdId: ownerA.household.id })
@@ -249,16 +256,19 @@ describe('changeMemberRoleAction / removeMemberAction — last-owner protection 
       .where(and(eq(users.householdId, ownerA.household.id), eq(users.role, 'owner')));
     expect(remainingOwners).toHaveLength(1);
 
-    await cleanup(ownerA.household.id);
+    // ownerBHousehold is now empty (its only user was re-homed above) but the row
+    // itself still exists and must be cleaned up separately from ownerA's household.
+    await cleanup(ownerA.household.id, ownerBHousehold.id);
   });
 
   it('concurrently removing both owners of a 2-owner household leaves exactly one owner, never zero', async () => {
     const { removeMemberAction } = await import('./members');
     const ownerA = await makeHouseholdWithUser('owner', 'Members race remove A');
-    const { user: ownerBUser, token: tokenB } = await makeHouseholdWithUser(
-      'owner',
-      'Members race remove B',
-    );
+    const {
+      user: ownerBUser,
+      token: tokenB,
+      household: ownerBHousehold,
+    } = await makeHouseholdWithUser('owner', 'Members race remove B');
     await db
       .update(users)
       .set({ householdId: ownerA.household.id })
@@ -289,6 +299,9 @@ describe('changeMemberRoleAction / removeMemberAction — last-owner protection 
       .where(and(eq(users.householdId, ownerA.household.id), eq(users.role, 'owner')));
     expect(remainingOwners).toHaveLength(1);
 
-    await cleanup(ownerA.household.id);
+    // ownerBHousehold is now empty (its only user was re-homed above, and either
+    // survived or was deleted by the race itself) but the row itself still exists and
+    // must be cleaned up separately from ownerA's household.
+    await cleanup(ownerA.household.id, ownerBHousehold.id);
   });
 });
