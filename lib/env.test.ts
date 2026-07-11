@@ -84,6 +84,28 @@ describe('loadEnv', () => {
     expect(result.APP_URL).toBe('http://localhost:3000');
   });
 
+  it('derives APP_URL from VERCEL_URL when APP_URL is unset (e.g. Preview deployments)', () => {
+    const result = loadEnv({
+      ...validBase,
+      VERCEL_URL: 'fintrack-abc123-steby.vercel.app',
+    });
+    expect(result.APP_URL).toBe('https://fintrack-abc123-steby.vercel.app');
+  });
+
+  it('lets an explicitly-set APP_URL win over VERCEL_URL (Production always sets its own)', () => {
+    const result = loadEnv({
+      ...validBase,
+      APP_URL: 'https://fintrack.steby.net',
+      VERCEL_URL: 'fintrack-abc123-steby.vercel.app',
+    });
+    expect(result.APP_URL).toBe('https://fintrack.steby.net');
+  });
+
+  it('falls back to the localhost default when neither APP_URL nor VERCEL_URL is set', () => {
+    const result = loadEnv(validBase);
+    expect(result.APP_URL).toBe('http://localhost:3000');
+  });
+
   it('treats a blank feature-flag value as absent and falls back to its default, same as the optional vars', () => {
     const result = loadEnv({
       ...validBase,

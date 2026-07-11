@@ -67,6 +67,17 @@ export function loadEnv(source: Record<string, string | undefined> = process.env
     Object.entries(source).map(([key, value]) => [key, value === '' ? undefined : value]),
   );
 
+  // Every Preview deployment gets its own fresh, unique URL — a static APP_URL would be
+  // wrong for every preview except whichever one it happened to be set to (this is exactly
+  // how invite links generated from a PR preview build ended up pointing at localhost).
+  // Vercel auto-injects VERCEL_URL (no protocol) with that exact deployment's own address
+  // on every environment it runs in, including Preview. Only synthesize from it when
+  // APP_URL isn't already explicitly set — Production always sets its own, to the real
+  // custom domain, and that must keep winning.
+  if (!normalized.APP_URL && normalized.VERCEL_URL) {
+    normalized.APP_URL = `https://${normalized.VERCEL_URL}`;
+  }
+
   const parsed = envSchema.safeParse(normalized);
   if (!parsed.success) {
     throw new Error(
