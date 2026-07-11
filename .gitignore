@@ -46,3 +46,6 @@ next-env.d.ts
 /playwright-report
 /test-results
 /blob-report
+
+# local-only generated reference docs
+/infra-reference.html
