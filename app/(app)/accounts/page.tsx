@@ -14,6 +14,7 @@ import {
 } from '../../../lib/domain/net-worth';
 import { parseYearParam } from '../../../lib/domain/month-params';
 import { formatSGD } from '../../../lib/format';
+import { InlineNote } from '@/components/ui/inline-note';
 import { Stat } from '@/components/ui/stat';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { NetWorthAboutSheet } from './net-worth-about-sheet';
@@ -62,12 +63,11 @@ export default async function AccountsPage({
           <h1 className="text-2xl font-semibold">Net worth</h1>
           <YearPicker year={year} basePath="/accounts" />
         </div>
-        <p className="flex max-w-xl items-center gap-2 text-sm text-muted-foreground">
-          <Landmark className="size-4 shrink-0" aria-hidden />
+        <InlineNote icon={Landmark}>
           Net-worth tracking (balances, the net-worth chart) is turned off for this deployment — ask
           whoever manages the app&apos;s environment to turn on FEATURE_NET_WORTH. Bank summary
           below still works either way.
-        </p>
+        </InlineNote>
         <BankSummaryTable accounts={bankSummary} />
       </div>
     );

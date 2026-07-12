@@ -4444,3 +4444,78 @@ query only) is fully addressed; Settings -> Categories' independent call to
 round-trip, per the task's explicit instruction not to change that caller's behavior.
 
 ---
+
+## Refactor: share inline feature-off note styling between accounts and import (2026-07-12)
+
+Third of three deliberately separate cleanup items tackled sequentially by request. The
+originating code-review finding framed this as "four pages express 'this feature is off'
+inconsistently" (Accounts, Import, Goals, Home). Re-reading all four before touching
+anything narrowed the scope: a prior bug-fix pass already changed Accounts' feature-off
+state from a full-page `EmptyState` early-return into a small inline note (Landmark icon +
+muted text) sitting ABOVE a still-fully-functional `BankSummaryTable` — structurally the
+same "partial degradation, rest of the page still works" shape as Goals' (plain
+header-copy-swap, no icon) and Home's (an inline "Add a bank account" CTA link inside
+`safe-to-spend-hero.tsx`). Only Import's feature-off state is a genuinely different
+shape — the whole page is unavailable until the `csv_import` kill-switch is turned on.
+Forcing Goals and Home into a shared component with Accounts/Import would have coupled
+three visually and semantically different patterns for no real benefit, so this pass is
+narrowed to just Accounts + Import, whose notes really were the same small idea (an icon
+plus a line of muted explanatory text) styled inconsistently for no reason. Goals and Home
+were read in full to confirm this and then left completely untouched.
+
+- `components/ui/inline-note.tsx` (new) — `InlineNote({ icon?, children, className? })`,
+  matching this codebase's existing small-presentational-component convention
+  (`data-slot` attribute, `cn()` for className merging, named export at the bottom — same
+  shape as `components/ui/stat.tsx` and `components/ui/empty-state.tsx`). Renders exactly
+  Accounts' pre-existing markup: `<p className="flex max-w-xl items-center gap-2 text-sm
+text-muted-foreground">{icon}{children}</p>`, icon at `size-4 shrink-0` with
+  `aria-hidden`.
+- `app/(app)/accounts/page.tsx`'s `FEATURE_NET_WORTH`-off note now renders via
+  `<InlineNote icon={Landmark}>` instead of hand-rolling the `<p>` + `<Landmark>` pair.
+  Pixel-for-pixel identical output (verified below) — this page's existing look is the
+  one every other change here matches, not the one that moved.
+- `app/(app)/import/page.tsx`'s `csv_import`-off note now renders via `<InlineNote
+icon={Upload}>`, replacing a plain icon-less `<p className="text-sm
+text-muted-foreground">`. This one **gains** an icon (`Upload`, for "CSV import is
+  off") and the `flex items-center gap-2` + `max-w-xl` treatment it didn't have before,
+  matching Accounts rather than the reverse. The second, unrelated `<p>` on the same page
+  (the read-only-viewer RBAC message, a permission gate rather than a feature-off note)
+  was deliberately left as its own plain `<p>`, out of scope.
+- Both pages' visible copy is byte-for-byte unchanged — confirmed via `git diff`, only
+  the wrapping markup changed (`<p>` + inline `<Icon>` -> `<InlineNote icon={...}>`).
+
+**Visually confirmed, not assumed:** rendered both call sites through
+`react-dom/server`'s `renderToStaticMarkup` (a throwaway script, run via `tsx`, deleted
+before committing — never part of the diff) importing the real `InlineNote` from
+`components/ui/inline-note.tsx`. Output for both: an identical
+`<p data-slot="inline-note" class="flex max-w-xl items-center gap-2 text-sm
+text-muted-foreground">` wrapper, differing only in which Lucide `<svg>` (`lucide-landmark`
+vs `lucide-upload`) and text follows — exactly the shared icon/spacing/typography shape
+this pass set out to produce, with the two pages' distinct copy preserved verbatim inside.
+
+**Test/CI status:** Unit 472/472 (unchanged — no new pure logic, and this codebase's
+existing convention is to not unit-test `components/ui/*.tsx` presentational components
+directly, confirmed no `components/ui/*.test.*` files exist at all). Integration 270/270
+(unchanged). Coverage 99.45% statements / 97.61% branches / 99.35% functions / 99.84%
+lines on the gated `lib/**` scope (unchanged — this pass is entirely outside `lib/**`).
+E2E: both runs 68/68 passed, zero retries, zero flakes, `CI=true` against a real `next
+build && next start`, run twice back-to-back. Zero spec needed a code change — confirmed
+via `git diff --stat -- e2e/` showing no changes at all. `e2e/phase5.spec.ts`'s `csv_import
+is off by default...` test (`getByText('CSV import is not enabled for this household.')`)
+passed unmodified: Playwright's text selector matches on the innermost element's
+normalized text content, and the `<p>`'s text content still contains that exact substring
+regardless of the icon now rendered alongside it as a sibling node. No existing spec
+covers Accounts' `FEATURE_NET_WORTH`-off state at all (the flag defaults `true` and no
+`e2e/*.spec.ts` toggles it off), so that path's correctness rests on the
+`renderToStaticMarkup` check above plus lint/typecheck/build. Lint, typecheck, build all
+clean; `npm run format` made no changes to any of the three source files (`accounts/page.tsx`,
+`import/page.tsx`, `inline-note.tsx`) — it did reflow this PROGRESS.md entry's own
+list-item indentation on the first pass, re-run and confirmed clean after.
+
+**Deferred / not done:** Nothing from this pass's own narrowed scope. Goals
+(`app/(app)/goals/page.tsx`) and Home (`app/(app)/page.tsx` /
+`app/(app)/home/safe-to-spend-hero.tsx`) were deliberately left untouched — their
+feature-off messaging is a different UX shape (plain copy-swap; inline CTA link) serving
+a different purpose than a small icon+note, not an oversight.
+
+---

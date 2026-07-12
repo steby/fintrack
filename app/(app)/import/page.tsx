@@ -1,6 +1,8 @@
+import { Upload } from 'lucide-react';
 import { requireUser } from '../../../lib/auth/guards';
 import { can } from '../../../lib/auth/rbac';
 import { isEnabled } from '../../../lib/flags';
+import { InlineNote } from '@/components/ui/inline-note';
 import { ImportForm } from './import-form';
 import { CsvImportToggle } from './csv-import-toggle';
 
@@ -17,12 +19,12 @@ export default async function ImportPage() {
     return (
       <div className="flex max-w-lg flex-col gap-3">
         <h1 className="text-2xl font-semibold">Import</h1>
-        <p className="text-sm text-muted-foreground">
+        <InlineNote icon={Upload}>
           CSV import is not enabled for this household.
           {can(user.role, 'manage_settings')
             ? ' Enabling it lets any member with edit access upload a CSV and reconcile it against existing entries.'
             : ' Ask an owner to enable it in order to import transactions from a CSV file.'}
-        </p>
+        </InlineNote>
         {can(user.role, 'manage_settings') && <CsvImportToggle />}
       </div>
     );
