@@ -4369,3 +4369,78 @@ build, and format all clean — `npm run format` needed no changes to any new fi
 split itself.
 
 ---
+
+## Refactor: dedupe current-month category-budget query on Home (2026-07-12)
+
+Second of three deliberately separate cleanup items tackled sequentially by request — this
+one only, a zero-behavior-change efficiency fix on a MONEY-MATH path. Home
+(`app/(app)/page.tsx`) fetched the current month's `monthly_entries` TWICE per page load:
+once directly via `getDashboardRowsForMonth` (feeding `computeBudgetRemaining` for the hero's
+"budget left this month" line), and once again inside `getCurrentMonthCategoryBudgets`'s own
+internal entries sub-query (feeding `<BudgetMini>`'s per-category progress bars) — same
+household, same year/month partition, two round-trips.
+
+- `lib/db/queries.ts`'s `getDashboardRowsForMonth` now also selects
+  `monthlyEntries.categoryId` (the `leftJoin` to `categories` it already does for `direction`
+  needed no new join) and returns it as part of its `Pick<DashboardEntryRow, ...>` shape.
+- `lib/domain/dashboard.ts` gained `CategoryBudgetInput`, `CategoryBudgetRow` (moved here from
+  `lib/db/queries.ts`, which now just re-exports the type for its two existing importers —
+  `home/budget-mini.tsx` and `dashboard/budget-health-card.tsx` — so neither needed a single
+  line changed), and `buildCategoryBudgetRows(entries, categories)`: the exact per-category
+  `spentByCategory` Map-building loop and `.filter().map()` that used to be inlined directly
+  inside `getCurrentMonthCategoryBudgets`, relocated verbatim (not rewritten) so it's a pure,
+  unit-testable function two callers can share.
+- `lib/db/queries.ts` gained `getCurrentMonthExpenseCategories(householdId)` — the
+  categories-only half of the old query (never touched `monthly_entries`, so there was no
+  duplicate round-trip to eliminate there, only query-text duplication to share).
+  `getCurrentMonthCategoryBudgets` is now a thin wrapper: the same two independent
+  sub-queries it always ran (categories via the new shared function, entries via its own
+  unchanged `monthly_entries` query), converted to cents, fed into `buildCategoryBudgetRows`.
+  Its own file, `app/(app)/settings/categories/page.tsx`, needed **zero changes** — same
+  function signature, same two round-trips, same output.
+- `app/(app)/page.tsx` (Home) no longer calls `getCurrentMonthCategoryBudgets` at all. It
+  fetches `getCurrentMonthExpenseCategories` (cheap, no entries scan) alongside its existing
+  `getDashboardRowsForMonth` call, then computes `budgetRows` locally via
+  `buildCategoryBudgetRows(currentMonthRows, currentMonthCategories)` — reusing the
+  current-month rows already fetched for `computeBudgetRemaining` instead of a second
+  `monthly_entries` scan. Gated behind `env.FEATURE_CATEGORY_BUDGETS` exactly as before
+  (skipped entirely when off, matching this file's existing feature-off-skip convention from
+  the prior cleanup pass's item 2g).
+
+**Hand-verified, not just green tests:** fixture — two capped expense categories (Groceries
+cap $400.00, Rent cap $1500.00), one uncapped expense category ("No cap"), entries: Groceries
+$50.00 budgeted / $45.00 actual, Groceries $30.00 budgeted / no actual, Rent $1500.00
+budgeted / $1500.00 actual, and one uncategorized (`categoryId: null`) entry for $9.99. By
+hand: Groceries spend = 4500 (actual) + 3000 (budgeted fallback, no actual yet) = **7500
+cents**; Rent spend = 150000 (actual) = **150000 cents**; "No cap" excluded (no budget set);
+the $9.99 uncategorized entry contributes to neither. Ran this exact fixture through the OLD
+pre-refactor code (via `git stash` back to the HEAD-committed `getCurrentMonthCategoryBudgets`,
+a temporary throwaway integration test, then `git stash pop` to restore — temp file never
+committed) and the NEW code (the equivalent case added permanently to
+`lib/db/queries.integration.test.ts`): both produced identically
+`{ name: 'Groceries', monthlyBudgetCents: 40000, spentCents: 7500 }` and
+`{ name: 'Rent', monthlyBudgetCents: 150000, spentCents: 150000 }`, to the cent.
+
+**Test/CI status:** Unit 472/472 (up from 466 — 6 new `buildCategoryBudgetRows` tests in
+`lib/domain/dashboard.test.ts`: exceeds-cap spend, budgeted-only fallback, `monthlyBudgetCents:
+null` exclusion, `categoryId: null` exclusion from the spend sum, multi-entry summing into one
+category, zero-entries-still-returns-the-row). Integration 270/270 (up from 266 — 4 new: a
+`getDashboardRowsForMonth` case asserting `categoryId: null` on an uncategorized entry, two
+`getCurrentMonthExpenseCategories` cases, and the hand-verified multi-category fixture above
+added permanently to `getCurrentMonthCategoryBudgets`'s suite). Coverage 99.45% statements /
+97.61% branches / 99.35% functions / 99.84% lines on the gated `lib/**` scope (gate 80%;
+`buildCategoryBudgetRows` itself is 100%-covered by its own unit tests). E2E: both runs 68/68
+passed, zero retries, zero flakes, `CI=true` against a real `next build && next start`, run
+twice back-to-back per the task's instruction (this pass touches Home and Settings ->
+Categories, both with existing coverage). `e2e/phase4.spec.ts`'s "setting a category budget
+cap and overspending shows red" test — the one spec that exercises BOTH the Settings ->
+Categories budget-cap display and Home's `budget-health-row` — passed unmodified; confirmed
+via `git diff --stat` that nothing under `e2e/` changed at all. Lint, typecheck, build, and
+format all clean (format made no changes to any touched file).
+
+**Deferred / not done:** Nothing — the task's own scope (Home's double current-month-entries
+query only) is fully addressed; Settings -> Categories' independent call to
+`getCurrentMonthCategoryBudgets` was deliberately left as its own, still-single, DB
+round-trip, per the task's explicit instruction not to change that caller's behavior.
+
+---

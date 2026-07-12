@@ -8,6 +8,7 @@ import {
   getDashboardRowsForMonth,
   getAccountsForNetWorth,
   getAccountEntriesBeforeYear,
+  getCurrentMonthExpenseCategories,
   getCurrentMonthCategoryBudgets,
   getExportRows,
   getMatchCandidates,
@@ -245,7 +246,7 @@ describe('getDashboardRowsForMonth', () => {
     }
   });
 
-  it('returns month/direction/amounts, matching getDashboardRows for the same rows', async () => {
+  it('returns month/direction/amounts/categoryId, matching getDashboardRows for the same rows', async () => {
     const household = await makeHousehold('Month-scoped dashboard query B');
     try {
       const [category] = await db
@@ -264,7 +265,44 @@ describe('getDashboardRowsForMonth', () => {
 
       const rows = await getDashboardRowsForMonth(household.id, 2026, 3);
       expect(rows).toEqual([
-        { month: 3, direction: 'expense', budgetedCents: 200000, actualCents: 200000 },
+        {
+          month: 3,
+          direction: 'expense',
+          budgetedCents: 200000,
+          actualCents: 200000,
+          categoryId: category.id,
+        },
+      ]);
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  // categoryId is what app/(app)/page.tsx (Home) now feeds into
+  // lib/domain/dashboard.ts's buildCategoryBudgetRows alongside these same rows, so an
+  // uncategorized entry must come back with categoryId: null (not undefined, not the
+  // row silently dropped) — buildCategoryBudgetRows relies on that exact null check to
+  // exclude it from any category's spend sum.
+  it('returns categoryId: null for an uncategorized entry', async () => {
+    const household = await makeHousehold('Month-scoped dashboard query B2');
+    try {
+      await db.insert(monthlyEntries).values({
+        householdId: household.id,
+        year: 2026,
+        month: 3,
+        item: 'Uncategorized',
+        budgetedAmount: '75.00',
+      });
+
+      const rows = await getDashboardRowsForMonth(household.id, 2026, 3);
+      expect(rows).toEqual([
+        {
+          month: 3,
+          direction: null,
+          budgetedCents: 7500,
+          actualCents: null,
+          categoryId: null,
+        },
       ]);
     } finally {
       await cleanup(household.id);
@@ -577,6 +615,58 @@ describe('getAccountEntriesBeforeYear', () => {
   });
 });
 
+describe('getCurrentMonthExpenseCategories', () => {
+  it('returns expense categories only, converting monthlyBudget to cents (null stays null)', async () => {
+    const household = await makeHousehold('Expense categories A');
+    try {
+      await db.insert(categories).values([
+        {
+          householdId: household.id,
+          name: 'Groceries',
+          direction: 'expense',
+          monthlyBudget: '400.00',
+        },
+        { householdId: household.id, name: 'No cap', direction: 'expense' },
+        {
+          householdId: household.id,
+          name: 'Salary',
+          direction: 'income',
+          monthlyBudget: '5000.00',
+        },
+      ]);
+
+      const rows = await getCurrentMonthExpenseCategories(household.id);
+      expect(rows).toHaveLength(2);
+      expect(rows).toContainEqual(
+        expect.objectContaining({ name: 'Groceries', monthlyBudgetCents: 40000 }),
+      );
+      expect(rows).toContainEqual(
+        expect.objectContaining({ name: 'No cap', monthlyBudgetCents: null }),
+      );
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  it('never returns categories from a different household (household scoping)', async () => {
+    const householdA = await makeHousehold('Expense categories B-A');
+    const householdB = await makeHousehold('Expense categories B-B');
+    try {
+      await db.insert(categories).values({
+        householdId: householdB.id,
+        name: 'Other',
+        direction: 'expense',
+        monthlyBudget: '100.00',
+      });
+      const rows = await getCurrentMonthExpenseCategories(householdA.id);
+      expect(rows).toEqual([]);
+    } finally {
+      await cleanup(householdA.id);
+      await cleanup(householdB.id);
+    }
+  });
+});
+
 describe('getCurrentMonthCategoryBudgets', () => {
   it('only returns expense categories with a monthly budget cap set', async () => {
     const household = await makeHousehold('Budget rows A');
@@ -644,6 +734,89 @@ describe('getCurrentMonthCategoryBudgets', () => {
 
       const rows = await getCurrentMonthCategoryBudgets(household.id);
       expect(rows[0].spentCents).toBe(17000); // 120.00 (actual) + 50.00 (budgeted fallback)
+    } finally {
+      await cleanup(household.id);
+    }
+  });
+
+  // Proves the getCurrentMonthExpenseCategories + buildCategoryBudgetRows split produces
+  // the exact same output the old single-function inline aggregation did — two capped
+  // categories, one uncapped, mixed actual/budgeted entries per category, and one
+  // uncategorized entry (categoryId: null) that must be silently excluded rather than
+  // crashing or landing in either category's sum. Hand-computed expected totals:
+  // Groceries = 45.00 (actual) + 30.00 (budgeted fallback) = 7500 cents; Rent = 1500.00
+  // (actual) = 150000 cents; "No cap" is excluded entirely (monthlyBudget unset); the
+  // uncategorized $9.99 entry contributes to neither.
+  it('hand-verified multi-category, mixed-actual/budgeted, null-categoryId fixture matches by-hand totals', async () => {
+    const household = await makeHousehold('Budget rows D');
+    try {
+      const [groceries, rent] = await db
+        .insert(categories)
+        .values([
+          {
+            householdId: household.id,
+            name: 'Groceries',
+            direction: 'expense',
+            monthlyBudget: '400.00',
+          },
+          {
+            householdId: household.id,
+            name: 'Rent',
+            direction: 'expense',
+            monthlyBudget: '1500.00',
+          },
+          { householdId: household.id, name: 'No cap', direction: 'expense' },
+        ])
+        .returning();
+      const now = new Date();
+      await db.insert(monthlyEntries).values([
+        {
+          householdId: household.id,
+          year: now.getFullYear(),
+          month: now.getMonth() + 1,
+          item: 'Groceries actualized',
+          categoryId: groceries.id,
+          budgetedAmount: '50.00',
+          actualAmount: '45.00',
+        },
+        {
+          householdId: household.id,
+          year: now.getFullYear(),
+          month: now.getMonth() + 1,
+          item: 'Groceries forecast',
+          categoryId: groceries.id,
+          budgetedAmount: '30.00',
+        },
+        {
+          householdId: household.id,
+          year: now.getFullYear(),
+          month: now.getMonth() + 1,
+          item: 'Rent actualized',
+          categoryId: rent.id,
+          budgetedAmount: '1500.00',
+          actualAmount: '1500.00',
+        },
+        {
+          householdId: household.id,
+          year: now.getFullYear(),
+          month: now.getMonth() + 1,
+          item: 'Uncategorized',
+          budgetedAmount: '9.99',
+        },
+      ]);
+
+      const rows = await getCurrentMonthCategoryBudgets(household.id);
+      expect(rows).toHaveLength(2);
+      expect(rows).toContainEqual(
+        expect.objectContaining({
+          name: 'Groceries',
+          monthlyBudgetCents: 40000,
+          spentCents: 7500,
+        }),
+      );
+      expect(rows).toContainEqual(
+        expect.objectContaining({ name: 'Rent', monthlyBudgetCents: 150000, spentCents: 150000 }),
+      );
     } finally {
       await cleanup(household.id);
     }

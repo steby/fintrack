@@ -11,13 +11,14 @@ import {
   getActualizedCashRows,
   getUpcomingEntryCandidates,
   getDashboardRowsForMonth,
-  getCurrentMonthCategoryBudgets,
+  getCurrentMonthExpenseCategories,
 } from '../../lib/db/queries';
 import { getSetting } from '../../lib/settings';
 import { sumNetCentsByAccount } from '../../lib/domain/net-worth';
 import { addMonths } from '../../lib/domain/recurring';
 import { currentYearMonth, utcStartOfDay } from '../../lib/domain/today';
 import { parseYearParam } from '../../lib/domain/month-params';
+import { buildCategoryBudgetRows } from '../../lib/domain/dashboard';
 import {
   parseHorizon,
   resolveHorizonDays,
@@ -69,7 +70,7 @@ export default async function HomePage({
     netWorthAccounts,
     actualizedRows,
     currentMonthRows,
-    budgetRows,
+    currentMonthCategories,
     topGoals,
   ] = await Promise.all([
     getSetting(user.householdId, 'affordability_horizon'),
@@ -78,7 +79,7 @@ export default async function HomePage({
     env.FEATURE_NET_WORTH ? getActualizedCashRows(user.householdId) : Promise.resolve([]),
     getDashboardRowsForMonth(user.householdId, current.year, current.month),
     env.FEATURE_CATEGORY_BUDGETS
-      ? getCurrentMonthCategoryBudgets(user.householdId)
+      ? getCurrentMonthExpenseCategories(user.householdId)
       : Promise.resolve([]),
     env.FEATURE_SAVINGS_GOALS
       ? db
@@ -137,6 +138,15 @@ export default async function HomePage({
     runwayPoints = buildRunway(currentCashCents, items, today, horizonDays);
   }
   const budgetRemaining = computeBudgetRemaining(currentMonthRows);
+  // Reuses the current-month rows already fetched above for computeBudgetRemaining
+  // instead of a second monthly_entries scan through getCurrentMonthCategoryBudgets
+  // (which Settings -> Categories still calls independently, unchanged) — see
+  // lib/db/queries.ts's getDashboardRowsForMonth doc comment for why categoryId is
+  // included on those rows now. Skipped entirely (not just computed-and-ignored) when
+  // the flag is off, matching this file's existing feature-off-skip convention.
+  const budgetRows = env.FEATURE_CATEGORY_BUDGETS
+    ? buildCategoryBudgetRows(currentMonthRows, currentMonthCategories)
+    : [];
 
   return (
     <div className="flex flex-col gap-6">

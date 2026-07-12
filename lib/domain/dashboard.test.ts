@@ -10,7 +10,9 @@ import {
   sumIncomeExpense,
   bestEstimateCents,
   actualOnlyCents,
+  buildCategoryBudgetRows,
   type DashboardEntryRow,
+  type CategoryBudgetInput,
 } from './dashboard';
 
 function row(overrides: Partial<DashboardEntryRow>): DashboardEntryRow {
@@ -271,5 +273,86 @@ describe('buildYoyDelta', () => {
     );
     expect(result.incomePercent).toBeNull();
     expect(result.incomeDeltaCents).toBe(0);
+  });
+});
+
+describe('buildCategoryBudgetRows', () => {
+  function category(overrides: Partial<CategoryBudgetInput>): CategoryBudgetInput {
+    return {
+      id: 'cat-1',
+      name: 'Groceries',
+      color: '#F59E0B',
+      monthlyBudgetCents: 40000,
+      ...overrides,
+    };
+  }
+
+  it('sums actualized spend that exceeds the budget cap (cap is informational, not clamped)', () => {
+    const rows = buildCategoryBudgetRows(
+      [{ categoryId: 'cat-1', budgetedCents: 40000, actualCents: 52000 }],
+      [category({ id: 'cat-1', monthlyBudgetCents: 40000 })],
+    );
+    expect(rows).toEqual([
+      {
+        categoryId: 'cat-1',
+        name: 'Groceries',
+        color: '#F59E0B',
+        monthlyBudgetCents: 40000,
+        spentCents: 52000,
+      },
+    ]);
+  });
+
+  it('falls back to budgeted cents for an entry with no actual yet', () => {
+    const rows = buildCategoryBudgetRows(
+      [{ categoryId: 'cat-1', budgetedCents: 3000, actualCents: null }],
+      [category({ id: 'cat-1' })],
+    );
+    expect(rows[0].spentCents).toBe(3000);
+  });
+
+  it('excludes a category with monthlyBudgetCents: null, even if it has spend', () => {
+    const rows = buildCategoryBudgetRows(
+      [{ categoryId: 'cat-uncapped', budgetedCents: 1000, actualCents: 1000 }],
+      [category({ id: 'cat-uncapped', name: 'No cap', monthlyBudgetCents: null })],
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('excludes an entry with categoryId: null from the spend sum instead of crashing', () => {
+    const rows = buildCategoryBudgetRows(
+      [
+        { categoryId: null, budgetedCents: 99999, actualCents: 99999 },
+        { categoryId: 'cat-1', budgetedCents: 500, actualCents: null },
+      ],
+      [category({ id: 'cat-1' })],
+    );
+    expect(rows[0].spentCents).toBe(500);
+  });
+
+  it('sums multiple entries into the same category', () => {
+    const rows = buildCategoryBudgetRows(
+      [
+        { categoryId: 'cat-1', budgetedCents: 1000, actualCents: 1100 },
+        { categoryId: 'cat-1', budgetedCents: 2000, actualCents: null },
+        { categoryId: 'cat-1', budgetedCents: 500, actualCents: 400 },
+      ],
+      [category({ id: 'cat-1' })],
+    );
+    // 1100 (actual) + 2000 (budgeted fallback) + 400 (actual) = 3500
+    expect(rows[0].spentCents).toBe(3500);
+  });
+
+  it('returns spentCents: 0 for a capped category with no entries at all', () => {
+    const rows = buildCategoryBudgetRows([], [category({ id: 'cat-1' })]);
+    expect(rows).toEqual([
+      {
+        categoryId: 'cat-1',
+        name: 'Groceries',
+        color: '#F59E0B',
+        monthlyBudgetCents: 40000,
+        spentCents: 0,
+      },
+    ]);
   });
 });

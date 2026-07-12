@@ -302,3 +302,54 @@ export function buildYoyDelta(
     expensePercent: percentDelta(current.expenseCents, prior.expenseCents),
   };
 }
+
+export interface CategoryBudgetInput {
+  id: string;
+  name: string;
+  color: string;
+  monthlyBudgetCents: number | null;
+}
+
+export interface CategoryBudgetRow {
+  categoryId: string;
+  name: string;
+  color: string;
+  monthlyBudgetCents: number | null;
+  spentCents: number;
+}
+
+// Per-category current-month spend against a budget cap (spec.md Phase 4's dashboard
+// "budget-health widget"). Lives here, not lib/db/queries.ts, so it's a pure function
+// testable without a live database — moved out of what used to be logic inlined
+// directly inside lib/db/queries.ts's getCurrentMonthCategoryBudgets, so that query and
+// app/(app)/page.tsx (Home) can share one implementation instead of each doing its own
+// entries scan of monthly_entries for the same household+current-month partition. Both
+// parameters are already in cents (never raw numeric(12,2) strings) — same
+// convert-in-the-query-layer, compute-in-cents convention every other function in this
+// file follows. Categories with no monthly cap set (monthlyBudgetCents === null) are
+// excluded from the result entirely — this widget only ever shows categories the
+// household has actually capped.
+export function buildCategoryBudgetRows(
+  entries: { categoryId: string | null; budgetedCents: number; actualCents: number | null }[],
+  categories: CategoryBudgetInput[],
+): CategoryBudgetRow[] {
+  const spentByCategory = new Map<string, number>();
+  for (const row of entries) {
+    if (row.categoryId === null) continue;
+    const cents = bestEstimateCents({
+      budgetedCents: row.budgetedCents,
+      actualCents: row.actualCents,
+    });
+    spentByCategory.set(row.categoryId, (spentByCategory.get(row.categoryId) ?? 0) + cents);
+  }
+
+  return categories
+    .filter((c) => c.monthlyBudgetCents !== null)
+    .map((c) => ({
+      categoryId: c.id,
+      name: c.name,
+      color: c.color,
+      monthlyBudgetCents: c.monthlyBudgetCents,
+      spentCents: spentByCategory.get(c.id) ?? 0,
+    }));
+}

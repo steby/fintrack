@@ -12,13 +12,27 @@ import {
   emailLog,
 } from './schema';
 import { parseAmountToCents } from '../money';
-import { bestEstimateCents, type DashboardEntryRow } from '../domain/dashboard';
+import {
+  buildCategoryBudgetRows,
+  type CategoryBudgetInput,
+  type CategoryBudgetRow,
+  type DashboardEntryRow,
+} from '../domain/dashboard';
 import type { NetWorthAccountInput } from '../domain/net-worth';
 import type { MatchCandidateEntry } from '../domain/csv';
 import type { UpcomingBillCandidate } from '../domain/reminders';
 import type { UpcomingEntryCandidate } from '../domain/affordability';
 import type { YearMonth } from '../domain/recurring';
 import { currentYearMonth } from '../domain/today';
+
+// Re-exported so existing importers (app/(app)/home/budget-mini.tsx,
+// app/(app)/dashboard/budget-health-card.tsx) can keep importing it from this file's
+// public surface unchanged — the type itself now lives in lib/domain/dashboard.ts
+// alongside the buildCategoryBudgetRows pure function that produces it, matching this
+// file's existing pattern of domain modules owning row/result types (DashboardEntryRow,
+// NetWorthAccountInput, MatchCandidateEntry, etc.) that queries.ts imports rather than
+// defines itself.
+export type { CategoryBudgetRow };
 
 // Matches lib/flags.ts's KillSwitchKey pattern: a small, hand-written union rather than
 // derived from the pgEnum, since Drizzle doesn't export a ready-made TS type for enum
@@ -179,17 +193,25 @@ export async function getIncomeExpenseRows(
 // transferring 11 months' worth of rows the recap never uses. buildMonthlySeries only
 // reads month/direction/budgetedCents/actualCents, so, like getIncomeExpenseRows
 // above, this also skips the bankAccounts join and category name/color columns.
+// `categoryId` is included (the leftJoin to `categories` already exists for
+// `direction`, so this is a zero-new-join column addition) so app/(app)/page.tsx (Home)
+// can also feed these same rows into lib/domain/dashboard.ts's buildCategoryBudgetRows,
+// instead of running a second, separate monthly_entries scan of the exact same
+// household+year+month partition the way it used to via getCurrentMonthCategoryBudgets.
 export async function getDashboardRowsForMonth(
   householdId: string,
   year: number,
   month: number,
-): Promise<Pick<DashboardEntryRow, 'month' | 'direction' | 'budgetedCents' | 'actualCents'>[]> {
+): Promise<
+  Pick<DashboardEntryRow, 'month' | 'direction' | 'budgetedCents' | 'actualCents' | 'categoryId'>[]
+> {
   const rows = await db
     .select({
       month: monthlyEntries.month,
       budgetedAmount: monthlyEntries.budgetedAmount,
       actualAmount: monthlyEntries.actualAmount,
       direction: categories.direction,
+      categoryId: monthlyEntries.categoryId,
     })
     .from(monthlyEntries)
     .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
@@ -206,6 +228,7 @@ export async function getDashboardRowsForMonth(
     budgetedCents: parseAmountToCents(row.budgetedAmount),
     actualCents: row.actualAmount === null ? null : parseAmountToCents(row.actualAmount),
     direction: row.direction,
+    categoryId: row.categoryId,
   }));
 }
 
@@ -285,33 +308,55 @@ export async function getAccountEntriesBeforeYear(
   }));
 }
 
-export interface CategoryBudgetRow {
-  categoryId: string;
-  name: string;
-  color: string;
-  monthlyBudgetCents: number | null;
-  spentCents: number;
+// Expense categories with their monthly budget cap, converted to cents (spec.md Phase 4's
+// dashboard "budget-health widget") — the categories-only half of the budget-cap fetch,
+// factored out so it can be shared by getCurrentMonthCategoryBudgets below (Settings ->
+// Categories) and app/(app)/page.tsx (Home), which needs this same category list but
+// computes spend from its own already-fetched current-month entries
+// (getDashboardRowsForMonth) rather than running a second monthly_entries query. Doesn't
+// touch monthly_entries at all, so unlike the entries half there was never a duplicate
+// DB round-trip to eliminate here — sharing it is purely a dedup of the query text.
+export async function getCurrentMonthExpenseCategories(
+  householdId: string,
+): Promise<CategoryBudgetInput[]> {
+  const rows = await db
+    .select({
+      id: categories.id,
+      name: categories.name,
+      color: categories.color,
+      monthlyBudget: categories.monthlyBudget,
+    })
+    .from(categories)
+    .where(and(eq(categories.householdId, householdId), eq(categories.direction, 'expense')));
+
+  return rows.map((c) => ({
+    id: c.id,
+    name: c.name,
+    color: c.color,
+    monthlyBudgetCents: c.monthlyBudget === null ? null : parseAmountToCents(c.monthlyBudget),
+  }));
 }
 
 // Current-month spend per expense category with a budget cap (spec.md Phase 4's
 // dashboard "budget-health widget") — deliberately scoped to the real current
 // month/year, independent of whatever year the dashboard itself is browsing: a
 // monthly cap is inherently about "right now," not a historical or future year view.
+// A thin wrapper over the same two independent sub-queries this always ran (categories
+// via getCurrentMonthExpenseCategories, entries via its own monthly_entries query below)
+// plus lib/domain/dashboard.ts's buildCategoryBudgetRows for the aggregation — the actual
+// per-category spend math used to be inlined here directly; it moved out, unchanged, so
+// app/(app)/page.tsx (Home) can run the identical aggregation over rows it already
+// fetched instead of via a second call to this function (see getDashboardRowsForMonth's
+// doc comment). This function's own output is unaffected by that split: same two
+// queries, same math, same result, for its one remaining caller
+// (app/(app)/settings/categories/page.tsx).
 export async function getCurrentMonthCategoryBudgets(
   householdId: string,
 ): Promise<CategoryBudgetRow[]> {
   const { year, month } = currentYearMonth();
 
-  const [categoryRows, entryRows] = await Promise.all([
-    db
-      .select({
-        id: categories.id,
-        name: categories.name,
-        color: categories.color,
-        monthlyBudget: categories.monthlyBudget,
-      })
-      .from(categories)
-      .where(and(eq(categories.householdId, householdId), eq(categories.direction, 'expense'))),
+  const [categoryInputs, entryRows] = await Promise.all([
+    getCurrentMonthExpenseCategories(householdId),
     db
       .select({
         categoryId: monthlyEntries.categoryId,
@@ -328,25 +373,14 @@ export async function getCurrentMonthCategoryBudgets(
       ),
   ]);
 
-  const spentByCategory = new Map<string, number>();
-  for (const row of entryRows) {
-    if (row.categoryId === null) continue;
-    const cents = bestEstimateCents({
+  return buildCategoryBudgetRows(
+    entryRows.map((row) => ({
+      categoryId: row.categoryId,
       budgetedCents: parseAmountToCents(row.budgetedAmount),
       actualCents: row.actualAmount === null ? null : parseAmountToCents(row.actualAmount),
-    });
-    spentByCategory.set(row.categoryId, (spentByCategory.get(row.categoryId) ?? 0) + cents);
-  }
-
-  return categoryRows
-    .filter((c) => c.monthlyBudget !== null)
-    .map((c) => ({
-      categoryId: c.id,
-      name: c.name,
-      color: c.color,
-      monthlyBudgetCents: c.monthlyBudget === null ? null : parseAmountToCents(c.monthlyBudget),
-      spentCents: spentByCategory.get(c.id) ?? 0,
-    }));
+    })),
+    categoryInputs,
+  );
 }
 
 export interface ExportRow {
