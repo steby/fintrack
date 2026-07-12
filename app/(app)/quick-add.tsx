@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useActionState } from 'react';
 import { Plus, ChevronDown } from 'lucide-react';
@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Fab } from '@/components/ui/fab';
 import { ResponsiveSheet } from '@/components/ui/responsive-sheet';
 import { parseYearParam, parseMonthParam } from '../../lib/domain/month-params';
+import { currentYearMonth } from '../../lib/domain/today';
 
 interface Option {
   id: string;
@@ -39,12 +40,24 @@ export function QuickAdd({
   // Defaults to whichever month the CURRENT page's URL is showing (e.g.
   // /monthly?year=&month=), falling back to the current month everywhere else
   // (spec.md Phase 10 edge case: "quick-add from a non-Money page defaults to
-  // currentYearMonth()") — parseYearParam/parseMonthParam already implement exactly
-  // that fallback-and-clamp behavior for the URL-param trust boundary, reused here
-  // rather than a second copy of the same default logic.
+  // currentYearMonth()").
+  //
+  // post-redesign bug-fix pass: year and month must be trusted as a PAIR, not parsed
+  // independently. /monthly always sets both together, but /insights only ever sets
+  // `year` (never `month`) — parsing them independently meant `/insights?year=2023`
+  // silently combined the URL's year=2023 with parseMonthParam(undefined)'s fallback
+  // to THIS month, filing a quick-add entry into "2023 + current month," a real,
+  // silently-wrong year/month combo the user never chose. Only trust the URL's
+  // year+month when BOTH are genuinely present together (the /monthly shape); if
+  // either is missing, default the WHOLE pair to currentYearMonth() instead of mixing
+  // a URL-sourced half with a currentYearMonth()-sourced half.
   const searchParams = useSearchParams();
-  const year = parseYearParam(searchParams.get('year') ?? undefined);
-  const month = parseMonthParam(searchParams.get('month') ?? undefined);
+  const rawYear = searchParams.get('year');
+  const rawMonth = searchParams.get('month');
+  const { year, month } =
+    rawYear !== null && rawMonth !== null
+      ? { year: parseYearParam(rawYear), month: parseMonthParam(rawMonth) }
+      : currentYearMonth();
 
   return (
     <>
@@ -117,16 +130,25 @@ function QuickAddForm({
   const [state, action, pending] = useActionState(addAdhocAction, undefined);
   const [showMore, setShowMore] = useState(false);
 
-  // Same "reacted to the latest state" pattern as the old adhoc-form.tsx (and
-  // entry-row.tsx's budget-override editor) — safe here specifically because closing
-  // the sheet on success only ever touches THIS component's own local state, never an
-  // external system the way markPaidAction's toast does; see mark-paid-button.tsx's
-  // load-bearing comment for why that one deliberately does NOT use this pattern.
-  const [reactedTo, setReactedTo] = useState(state);
-  if (state !== reactedTo) {
-    setReactedTo(state);
+  // post-redesign bug-fix pass: onSuccess() is the PARENT QuickAdd's setOpen(false) —
+  // a DIFFERENT component's state, not this one's own. Calling it synchronously during
+  // this component's own render (the render-time "reacted to" pattern used safely
+  // elsewhere in this codebase, e.g. goal-add-form.tsx) is the unsafe "update a
+  // different component's state during another component's render" pattern: React
+  // explicitly only sanctions that render-time trick when a component touches its OWN
+  // state, since doing so schedules a same-component re-render React already expects;
+  // reaching into an ANCESTOR's setState from here has no such guarantee and can tear
+  // or warn under concurrent rendering. Moved into a useEffect keyed on `state` so the
+  // parent's setOpen(false) fires as a proper effect after render commits, not during
+  // this component's render.
+  useEffect(() => {
     if (state?.success) onSuccess();
-  }
+    // onSuccess is a fresh closure from the parent every render (not memoized);
+    // depending on it here would fire this effect on every parent re-render, not just
+    // on a genuine state change — `state` is the one value that actually changes
+    // exactly when a submission completes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
 
   return (
     <form action={action} className="flex flex-col gap-3" data-testid="quick-add-form">

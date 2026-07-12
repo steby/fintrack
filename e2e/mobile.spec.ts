@@ -129,6 +129,16 @@ test.describe('mobile viewport: quick-add FAB and agenda default', () => {
     const markPaidButton = row.getByRole('button', { name: 'Mark paid' });
     await expect(markPaidButton).toBeVisible();
     await markPaidButton.tap();
+
+    // post-redesign bug-fix pass: "Mark paid" now opens a small confirm popup (a
+    // bottom Drawer at this viewport, same ResponsiveSheet primitive quick-add's own
+    // sheet uses) with an editable date field defaulting to today, instead of
+    // instantly marking paid — confirm by tapping the popup's own "Mark paid" button,
+    // scoped to data-testid="mark-paid-form" since the trigger and the popup's submit
+    // share the same label and briefly coexist while the popup is open.
+    const markPaidForm = page.getByTestId('mark-paid-form');
+    await expect(markPaidForm).toBeVisible();
+    await markPaidForm.getByRole('button', { name: 'Mark paid' }).tap();
     await expect(markPaidButton).toHaveCount(0);
 
     // Verified against the real DB, not a re-read of any uncontrolled input's value —

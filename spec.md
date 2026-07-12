@@ -1198,6 +1198,48 @@ forward.
 
 ---
 
+## Post-redesign bug-fix pass — spec corrections (2026-07-12)
+
+A code-review pass over the shipped Phase 8-11 redesign (10 finder angles + individual
+verification + live browser testing) found 12 real bugs, documented in full in
+`PROGRESS.md`'s own entry for this pass. Two of the fixes correct behavior this spec
+had previously documented differently; both are called out here rather than left as a
+silent drift between spec and shipped code:
+
+1. **Bank Summary is no longer gated behind `FEATURE_NET_WORTH`.** Phase 8's task 6
+   (line 559 above) described `BankSummaryTable` as living on `/accounts` "behind
+   `FEATURE_NET_WORTH` with a friendly feature-off `EmptyState`" — but
+   `buildBankSummary` only ever needed entries tagged to a bank account for the
+   selected year, nothing net-worth-specific (no opening-balance carry-forward), and
+   the pre-redesign dashboard had always rendered it unconditionally. Gating the WHOLE
+   `/accounts` page behind the flag (rather than just the genuinely net-worth-specific
+   pieces — `NetWorthChart`, `AccountBalancesTable`, the "Total net worth" hero) made
+   Bank Summary unreachable with the flag off, a real regression from the pre-redesign
+   behavior. Corrected: `/accounts` now always fetches and renders
+   `BankSummaryTable`; only `NetWorthChart`/`AccountBalancesTable`/the net-worth hero
+   stay behind `FEATURE_NET_WORTH`, with a smaller inline note (not a page-replacing
+   `EmptyState`) explaining net-worth tracking specifically is off.
+2. **Mark paid opens a small confirm popup with an editable date, instead of marking
+   paid instantly.** Phase 9's task 5 (and Phase 10's reuse of the same component)
+   described `mark-paid-button.tsx` as "one-tap" — correct at the time, since Phase 9
+   itself only ever reached this button from the CURRENT month. Phase 10 then made the
+   same button reachable from arbitrary past/future months via Monthly's chevrons,
+   which exposed a real bug: `markPaidAction` hardcoded `actualDate` to today
+   regardless of which month the entry actually belonged to, so marking a January bill
+   paid while browsing January in July recorded it as paid in July. Per explicit user
+   direction, this is now a deliberate UX change, not just a bug fix: clicking "Mark
+   paid" opens a small `ResponsiveSheet` (item name read-only, a date field defaulting
+   to today but editable, Cancel/"Mark paid") before the action fires. The
+   double-tap-idempotent, direct-call-inside-`startTransition`,
+   toast-fired-in-the-same-closure invariants `mark-paid-button.tsx`'s own comment
+   documents are all unchanged — only the trigger now opens a popup instead of firing
+   the action immediately.
+
+No Feature Matrix changes (no new flags, no flag defaults changed) — both corrections
+are behavior/UX clarifications to already-shipped surfaces, not new optional features.
+
+---
+
 ## Definition of Done (every phase)
 
 Workflow checklist verbatim: tests (unit+integration+E2E incl. failure paths) green; lint/

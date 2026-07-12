@@ -131,11 +131,28 @@ export async function overrideBudgetAction(
   if (!result[0]) {
     return { error: 'Entry not found.' };
   }
+  // Also revalidates Home (post-redesign bug-fix pass): a category-budget override
+  // changes this month's budgetedAmount, which Home's budget-remaining lens
+  // (computeBudgetRemaining, fed by getDashboardRowsForMonth) reads directly — without
+  // this, Home would show a stale figure until some other navigation happened to
+  // revalidate '/'. Same pattern as updateActualAction's and markPaidAction's own
+  // revalidatePath('/') just above/below.
+  revalidatePath('/');
   revalidatePath('/monthly');
   return { success: true };
 }
 
-const markPaidSchema = z.object({ id: z.string().uuid() });
+const markPaidSchema = z.object({
+  id: z.string().uuid(),
+  // Optional (post-redesign bug-fix pass — USER'S EXPLICIT SPEC: let the user correct
+  // the date before it's recorded, since Phase 10 made this button reachable from
+  // arbitrary past/future months via Monthly's chevrons, not just "today"). Reuses the
+  // existing dateInputSchema (same calendar-impossible-date rejection, same
+  // empty-string convention) rather than inventing a second date validator.
+  // Empty/absent defaults to today (UTC) server-side below — defense in depth against
+  // a stripped/missing field, not just relying on the client's own default.
+  actualDate: dateInputSchema.optional(),
+});
 
 export type MarkPaidActionState =
   | { error: string }
@@ -152,8 +169,13 @@ export type MarkPaidActionState =
     }
   | undefined;
 
-// One-tap "mark this bill paid" for Home's upcoming list (spec.md Phase 9) — sets
-// actualAmount to the entry's own budgetedAmount and actualDate to today (UTC). Double-
+// "Mark this bill paid" for Home's upcoming list (spec.md Phase 9) — sets actualAmount
+// to the entry's own budgetedAmount and actualDate to the given date, defaulting
+// server-side to today (UTC) if omitted/blank (post-redesign bug-fix pass: the client
+// popup — mark-paid-button.tsx — always sends an explicit date now, defaulting to
+// TODAY but user-editable, since this button is reachable from arbitrary past/future
+// months via Monthly's chevrons, not just "today"; this server-side default is defense
+// in depth for a stripped/missing field, not the primary source of the date). Double-
 // tap safe BY DESIGN, not by accident: an already-paid entry (actualAmount !== null) is
 // read back and returned as a no-op (`alreadyPaid: true`) rather than re-running the
 // update or erroring — two rapid taps (or a retried request) converge on the same paid
@@ -165,7 +187,10 @@ export async function markPaidAction(
 ): Promise<MarkPaidActionState> {
   const actingUser = await requireRole('write');
 
-  const parsed = markPaidSchema.safeParse({ id: formData.get('id') });
+  const parsed = markPaidSchema.safeParse({
+    id: formData.get('id'),
+    actualDate: formData.get('actualDate') || undefined,
+  });
   if (!parsed.success) {
     return { error: 'Invalid request.' };
   }
@@ -194,11 +219,16 @@ export async function markPaidAction(
     return { success: true, alreadyPaid: true };
   }
 
-  const todayIso = utcStartOfDay().toISOString().slice(0, 10);
+  const actualDate =
+    parsed.data.actualDate && parsed.data.actualDate !== ''
+      ? parsed.data.actualDate
+      : utcStartOfDay().toISOString().slice(0, 10);
   await db
     .update(monthlyEntries)
-    .set({ actualAmount: entry.budgetedAmount, actualDate: todayIso })
-    .where(eq(monthlyEntries.id, entry.id));
+    .set({ actualAmount: entry.budgetedAmount, actualDate })
+    .where(
+      and(eq(monthlyEntries.id, entry.id), eq(monthlyEntries.householdId, actingUser.householdId)),
+    );
 
   revalidatePath('/');
   revalidatePath('/monthly');
@@ -312,6 +342,12 @@ export async function addAdhocAction(
     paidByUserId: paidBy.value,
   });
 
+  // Also revalidates Home (post-redesign bug-fix pass): a quick-added entry can land
+  // in the CURRENT month (e.g. an actualAmount logged today), which Home's
+  // upcoming-list/safe-to-spend/budget-remaining figures all depend on — without this,
+  // Home would show stale data until some other navigation happened to revalidate '/'.
+  // Same pattern as updateActualAction's/markPaidAction's own revalidatePath('/').
+  revalidatePath('/');
   revalidatePath('/monthly');
   return { success: true };
 }
@@ -348,6 +384,12 @@ export async function deleteEntryAction(
   if (!result[0]) {
     return { error: 'Entry not found.' };
   }
+  // Also revalidates Home (post-redesign bug-fix pass): a deleted ad-hoc entry can be
+  // one Home is currently counting toward its upcoming list/safe-to-spend/
+  // budget-remaining figures — without this, Home would keep showing it until some
+  // other navigation happened to revalidate '/'. Same pattern as updateActualAction's/
+  // markPaidAction's own revalidatePath('/').
+  revalidatePath('/');
   revalidatePath('/monthly');
   return { success: true };
 }

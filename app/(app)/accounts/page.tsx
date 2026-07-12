@@ -14,7 +14,6 @@ import {
 } from '../../../lib/domain/net-worth';
 import { parseYearParam } from '../../../lib/domain/month-params';
 import { formatSGD } from '../../../lib/format';
-import { EmptyState } from '@/components/ui/empty-state';
 import { Stat } from '@/components/ui/stat';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { NetWorthAboutSheet } from './net-worth-about-sheet';
@@ -27,6 +26,16 @@ import { YearPicker } from '../dashboard/year-picker';
 // balance-walk (lib/domain/net-worth.ts) app/(app)/page.tsx (the dashboard) has always
 // run, lifted onto their own route (spec.md Phase 8). The old dashboard KEEPS rendering
 // all of this too, unchanged, until Phase 9 — the duplication is deliberate.
+//
+// post-redesign bug-fix pass: BankSummaryTable (buildBankSummary) needs only entries
+// tagged to a bank account for the selected year — no opening-balance carry-forward, no
+// FEATURE_NET_WORTH dependency at all — so it's fetched and rendered UNCONDITIONALLY
+// below. Only the genuinely net-worth-specific pieces (NetWorthChart,
+// AccountBalancesTable, the hero "Total net worth" Stat, and the opening-balance
+// carry-forward math feeding them) stay gated behind FEATURE_NET_WORTH. Previously the
+// whole page early-returned an EmptyState when the flag was off, which made
+// BankSummaryTable completely unreachable — a regression from the pre-redesign
+// dashboard, which rendered Bank Summary unconditionally, independent of this flag.
 export default async function AccountsPage({
   searchParams,
 }: {
@@ -36,26 +45,33 @@ export default async function AccountsPage({
   const params = await searchParams;
   const year = parseYearParam(params.year);
 
-  if (!env.FEATURE_NET_WORTH) {
-    return (
-      <div className="flex max-w-lg flex-col gap-3">
-        <h1 className="text-2xl font-semibold">Net worth</h1>
-        <EmptyState
-          icon={Landmark}
-          title="Net worth tracking is turned off"
-          description="This deployment has balances and net-worth tracking disabled. Ask whoever manages the app's environment to turn on FEATURE_NET_WORTH."
-        />
-      </div>
-    );
-  }
-
   const [currentRows, netWorthAccounts, priorYearsEntries] = await Promise.all([
     getDashboardRows(user.householdId, year),
-    getAccountsForNetWorth(user.householdId),
-    getAccountEntriesBeforeYear(user.householdId, year),
+    env.FEATURE_NET_WORTH ? getAccountsForNetWorth(user.householdId) : Promise.resolve([]),
+    env.FEATURE_NET_WORTH
+      ? getAccountEntriesBeforeYear(user.householdId, year)
+      : Promise.resolve([]),
   ]);
 
   const bankSummary = buildBankSummary(currentRows);
+
+  if (!env.FEATURE_NET_WORTH) {
+    return (
+      <div className="flex flex-col gap-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-semibold">Net worth</h1>
+          <YearPicker year={year} basePath="/accounts" />
+        </div>
+        <p className="flex max-w-xl items-center gap-2 text-sm text-muted-foreground">
+          <Landmark className="size-4 shrink-0" aria-hidden />
+          Net-worth tracking (balances, the net-worth chart) is turned off for this deployment — ask
+          whoever manages the app&apos;s environment to turn on FEATURE_NET_WORTH. Bank summary
+          below still works either way.
+        </p>
+        <BankSummaryTable accounts={bankSummary} />
+      </div>
+    );
+  }
 
   // Net worth is a lifetime running total, not something that resets every time a
   // different year is browsed — everything from years before `year` is folded into a

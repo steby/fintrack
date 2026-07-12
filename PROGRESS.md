@@ -3969,3 +3969,156 @@ import/export, cross-household scoping, the `min-w-0` layout fix) was re-verifie
 phase too, not just assumed to still hold.
 
 ---
+
+## `/code-review` pass on the Phase 8-11 redesign — 12 real bugs found and fixed (2026-07-12)
+
+A thorough code-review pass on the already-shipped Phase 8-11 redesign (10 finder
+angles + individual verification + live browser testing, same methodology as every
+prior `/code-review` entry in this log). All 12 findings CONFIRMED real and fixed —
+none deferred. This is a bug-fix pass, not a new numbered phase.
+
+**Fixed:**
+
+1. **Quick-add misfiled entries into the wrong year** (`app/(app)/quick-add.tsx`).
+   `year`/`month` were parsed INDEPENDENTLY from URL search params, so
+   `/insights?year=2023` (year set, month never set) silently combined the URL's
+   `year=2023` with `parseMonthParam(undefined)`'s fallback to THIS month — a quick-add
+   entry landed in "2023 + current month," a combo the user never chose. Fixed: only
+   trust the URL's year+month as a PAIR when `searchParams.get('year')` AND
+   `searchParams.get('month')` are BOTH non-null; otherwise default the whole pair to
+   `currentYearMonth()` together.
+2. **Mark paid now opens a small confirm popup with an editable date, instead of
+   marking paid instantly** (`app/(app)/home/mark-paid-button.tsx`,
+   `app/actions/monthly.ts`'s `markPaidAction`) — USER'S EXPLICIT SPEC. Root bug:
+   `markPaidAction` hardcoded `actualDate` to today regardless of which month the entry
+   belonged to, reachable since Phase 10 made this button reachable from arbitrary
+   past/future months via Monthly's chevrons. Fix: clicking "Mark paid" opens a
+   `ResponsiveSheet` (item name read-only, a date `<input type="date">` defaulting to
+   today but editable, Cancel/"Mark paid"); `markPaidAction` gained an optional
+   `actualDate` field (reusing the existing `dateInputSchema`), defaulting server-side
+   to today (UTC) if empty/absent — defense in depth, not the primary source of the
+   date. The documented direct-call-inside-`startTransition`/toast-in-the-same-closure
+   invariant (see that file's own long-standing comment) is unchanged; the popup closes
+   eagerly on confirm, before the action is even awaited, so it never depends on this
+   component surviving its own revalidation-driven unmount. All 3 call sites (Home's
+   upcoming-list, calendar-view's agenda/day-sheet rows, entry-row) needed no new props.
+3. **Three Server Actions didn't refresh Home** (`app/actions/monthly.ts`).
+   `addAdhocAction`, `overrideBudgetAction`, `deleteEntryAction` only called
+   `revalidatePath('/monthly')`; added `revalidatePath('/')` to each, matching
+   `updateActualAction`/`markPaidAction`'s existing pattern in the same file.
+4. **Bank Summary was unreachable when `FEATURE_NET_WORTH` is off**
+   (`app/(app)/accounts/page.tsx`). The whole page early-returned an `EmptyState` when
+   the flag was off, making `BankSummaryTable` (which only needs entries tagged to a
+   bank account, nothing net-worth-specific) unreachable — a regression from the
+   pre-redesign dashboard, which rendered it unconditionally. Fixed: `getDashboardRows`
+   and `buildBankSummary` now run regardless of the flag; only `NetWorthChart`/
+   `AccountBalancesTable`/the "Total net worth" hero stay gated, with a small inline
+   note (not a page-replacing `EmptyState`) when net-worth tracking specifically is off.
+5. **`entry-row.tsx`'s actual-amount/date inputs went stale after mark-paid**. The
+   uncontrolled `defaultValue` inputs only re-apply on mount, not on a prop update, so a
+   sibling `MarkPaidButton` click left the row visually self-contradictory (button gone,
+   amount column still blank) until navigating away and back. Fixed: the `<form>` now
+   carries `key={`${entry.id}-${entry.actualAmount ?? 'unpaid'}`}`, forcing a remount
+   (fresh `defaultValue`) exactly when paid state flips, stable during normal typing.
+6. **Overdue income mislabeled and optimistically counted as received**
+   (`lib/domain/affordability.ts`'s `selectUpcomingItems`). `overdue` had no direction
+   check, so an unpaid past-due INCOME candidate got `overdue: true` — rendered under
+   Home's red "Overdue" section despite being positive, and `buildRunway` applied it at
+   day 0 as if already received. Fixed with a one-line `&& candidate.direction ===
+'expense'` — a not-yet-due-and-unpaid past income item is now excluded from the
+   runway/list entirely (the app's existing conservative philosophy: income is never
+   assumed received early), not given a new "pending income" bucket.
+7. **`markPaidAction` missing household scope in its final UPDATE** — not currently
+   exploitable (a prior scoped SELECT already validates the id), but added
+   `eq(monthlyEntries.householdId, actingUser.householdId)` to the UPDATE's `where` to
+   match `updateActualAction`/`overrideBudgetAction`'s own defense-in-depth convention.
+8. **Quick-add fired a cross-component state update during render**
+   (`app/(app)/quick-add.tsx`). `QuickAddForm` called the parent's `setOpen(false)` (via
+   `onSuccess`) synchronously during its OWN render — the unsafe pattern, since React
+   only sanctions render-time `setState` for a component's OWN state, not an ancestor's.
+   Moved into a `useEffect` keyed on `state`. The stale in-code comment claiming the
+   pattern "only ever touches this component's own local state" was fixed to describe
+   what actually changed; the now-redundant `reactedTo` local-state-only tracking (which
+   existed solely to gate the `onSuccess()` call) was removed rather than kept as dead
+   code, since nothing else used it.
+9. **`responsive-sheet.tsx` lost form state on a mid-session viewport resize**. Dialog
+   and Drawer are structurally different subtrees; branching on the live `isDesktop`
+   value every render meant a real resize across 768px while a sheet was OPEN remounted
+   `children`, wiping in-progress form state. Fixed by locking the Dialog-vs-Drawer
+   choice for the duration of one "open" session — captured via the same
+   compare-to-previous-value, adjust-state-during-render idiom this codebase already
+   uses elsewhere (state, not a ref: eslint's `react-hooks/refs` rule correctly rejects
+   reading `ref.current` during render outside the narrow lazy-init-check idiom), reset
+   the moment `open` goes back to false so the next open re-evaluates fresh.
+10. **`e2e/phase4.spec.ts` leaked orphaned test debris every run**. Its category-budget
+    test creates an ad-hoc `monthly_entries` row named `` `${categoryName} overspend` ``
+    directly in the shared seed household; `afterAll` only deleted the category, and
+    `monthlyEntries.categoryId` has `onDelete: 'set null'`, so the delete ORPHANED the
+    entry (categoryId -> null) instead of removing it. Fixed (test-only, per the task's
+    explicit scope — no existing accumulated debris was touched): the test now captures
+    the created entry's id and `afterAll` deletes that `monthly_entries` row explicitly.
+11. **Stale `/?year=N` bookmarks landed on "now" with no indication**
+    (`app/(app)/page.tsx`). Added a lightweight courtesy redirect: a present, valid,
+    DIFFERENT-from-current year redirects to `/insights?year=<that year>` (the page
+    that's actually year-scoped now); absent or already-current year renders Home
+    unchanged.
+12. **`clampedDueDate` duplicated a third time**. `lib/domain/reminders.ts` had the
+    original private version; `lib/domain/affordability.ts` had an intentional
+    duplicate (per the redesign's own plan, since it couldn't modify `reminders.ts`);
+    `lib/domain/entries.ts`'s `entryPaidState` inlined a third copy. Fixed by exporting
+    `clampedDueDate` from `reminders.ts` and having both `affordability.ts` and
+    `entries.ts` import the one implementation — `reminders.ts`'s own behavior (the cron
+    email path) is unchanged; only its visibility changed, confirmed by its own
+    unchanged test suite staying green.
+
+**Live verification beyond green tests (the trickier fixes — #1, #2, #9 — each got a
+real before/after, not just a passing suite):**
+
+- **Fix 1**: a throwaway script drove the running production server directly — logged
+  in, visited `/insights?year=2023`, quick-added a real entry, and read the DB directly:
+  the entry landed in the CURRENT year/month (2026-07), not 2023. A second check
+  confirmed `/monthly?year=2023&month=6` (both params present) still correctly targets
+  June 2023 — the pair-trust path still works when it's supposed to.
+- **Fix 2**: the same script seeded a real recurring item with `actual_date_day = 10`,
+  opened the calendar grid's day-10 cell (a `ResponsiveSheet`), clicked "Mark paid" on
+  the entry inside it — confirming the NESTED popup (a `ResponsiveSheet` inside an
+  already-open `ResponsiveSheet`, the trickiest call site) opens without stalling or
+  crashing, defaults its date field to today, and persists a hand-edited custom date
+  (`2026-02-01`) exactly, verified via `to_char(actual_date, 'YYYY-MM-DD')` against the
+  live DB (a raw `pg` client's default `DATE` parsing reinterprets through the local
+  machine's timezone offset, which produced one initial false-negative red herring —
+  resolved by reading the column as text instead of relying on driver-parsed `Date`
+  objects).
+- **Fix 9**: a genuine before/after. With the ORIGINAL `responsive-sheet.tsx` restored
+  temporarily (rebuilt, restarted), the same script opened quick-add, typed a real item
+  name, resized the page from 1280px to 390px wide mid-session, and confirmed the field
+  reset to `""` — reproducing the bug exactly as described. Restored the fix, rebuilt,
+  reran: the typed text survived the identical resize. Re-confirmed once more after
+  restoring to be sure the working tree matched what was verified.
+- All debris created by these verification scripts (test recurring items/entries named
+  `Fix1/Fix2/Fix9 ...`) was deleted afterward via the same live DB connection — this is
+  cleanup of debris created BY this session's own verification, not the separately
+  scoped "clean up already-accumulated debris" task the task description explicitly
+  said was out of scope.
+
+**Test/CI status:** Unit 462/462 (up from 461 — one new `affordability.test.ts` case
+for Fix 6). Integration 266/266 (up from 264 — two new `markPaidAction` cases for
+Fix 2: custom-date persists exactly, calendar-impossible custom date rejected).
+Coverage unchanged at 99.43% stmts / 97.58% branch / 99.32% funcs / 99.84% lines on the
+gated `lib/**` scope (gate 80%; every touched line in `affordability.ts`/`entries.ts`/
+`reminders.ts` stayed fully covered). E2E 68/68 (same count as before — one test
+renamed/expanded for Fix 2's popup flow, not added), run twice back-to-back with
+`CI=true` against a real `next build && next start` after every substantive change,
+including once more as the final pre-commit gate run. Lint/typecheck/format all clean.
+
+**Deviations from the task's instructions, logged rather than silent:** none of
+substance — every fix matches its described scope. One minor scope note: Fix 9's lock
+doesn't apply to `net-worth-about-sheet.tsx`'s one UNCONTROLLED `ResponsiveSheet` usage
+(no `open`/`onOpenChange` passed, so there's no `open` transition to lock onto) — a
+reasonable trade-off, since that sheet only ever shows static informational text with
+no form state to lose, and the fix's own instructions called for a surgical, low-risk
+change rather than restructuring every call site.
+
+**Deferred / not done:** Nothing — all 12 findings fixed, none deferred.
+
+---

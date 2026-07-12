@@ -107,7 +107,16 @@ test.describe('Home: forecast-first affordability', () => {
       const budgetLeft = page.getByTestId('budget-left-value');
       const beforeCents = parseSGDToCents(await budgetLeft.innerText());
 
+      // post-redesign bug-fix pass: "Mark paid" now opens a small confirm popup with an
+      // editable date field (defaulting to today) instead of instantly marking paid —
+      // the trigger and the popup's own submit button share the label "Mark paid" and
+      // briefly coexist once the popup is open, so the confirm click is scoped to
+      // data-testid="mark-paid-form" (same disambiguation approach as
+      // goal-add-form.tsx's own trigger/submit-share-a-label pattern).
       await row.getByRole('button', { name: 'Mark paid' }).click();
+      const markPaidForm = page.getByTestId('mark-paid-form');
+      await expect(markPaidForm).toBeVisible();
+      await markPaidForm.getByRole('button', { name: 'Mark paid' }).click();
       await expect(page.getByText(`Marked "${itemName}" paid`)).toBeVisible();
       await expect(row).toHaveCount(0);
 

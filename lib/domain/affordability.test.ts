@@ -164,6 +164,22 @@ describe('selectUpcomingItems', () => {
     expect(result).toEqual([]);
   });
 
+  it('an unpaid, past-due, current-month INCOME candidate is excluded entirely — never marked "overdue" (post-redesign bug-fix pass)', () => {
+    // Same shape as the expense-overdue case above (actualDateDay: 1, so daysUntilDue
+    // is -8 relative to `today`), but direction: 'income' — a paycheck that hasn't
+    // landed isn't a missed bill. Only an expense can be "overdue"; an income
+    // candidate whose due day already passed and horizon is 0 has daysUntilDue < 0
+    // and is NOT overdue, so it falls into the `!overdue && daysUntilDue < 0` exclusion
+    // branch and never appears in the result at all (no separate "pending income"
+    // bucket — a deliberately minimal fix, not a new UI concept).
+    const result = selectUpcomingItems(
+      [candidate({ actualDateDay: 1, direction: 'income' })],
+      today,
+      0,
+    );
+    expect(result).toEqual([]);
+  });
+
   it('sorts by due date, then item name', () => {
     const result = selectUpcomingItems(
       [

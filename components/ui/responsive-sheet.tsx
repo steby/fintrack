@@ -53,6 +53,27 @@ interface ResponsiveSheetProps {
 // Renders a centered Dialog at >= md, a bottom Drawer below it — same content, same
 // trigger, the presentation swaps based on viewport. Used for any form/detail surface
 // that needs to work identically on desktop and mobile (quick-add, goal edit, generate).
+//
+// post-redesign bug-fix pass: Dialog and Drawer are two STRUCTURALLY DIFFERENT
+// subtrees, so branching on the live `isDesktop` value on every render means a real
+// viewport resize across the 768px breakpoint WHILE a sheet is open (e.g. rotating a
+// tablet, or a desktop window dragged narrow) remounts `children` — wiping any
+// in-progress form state (a half-filled quick-add form, an in-progress goal edit) with
+// no warning. Rare trigger, real bug. Fixed with a surgical, low-risk lock: state (not
+// a ref — eslint's react-hooks/refs rule correctly rejects reading ref.current during
+// render outside the narrow lazy-init-check idiom) captures `isDesktop`'s value at the
+// exact moment `open` transitions from false to true, using the same
+// "compare-to-previous-value, adjust state during render" idiom this codebase already
+// uses elsewhere for local-only state (e.g. quick-add.tsx/goal-add-form.tsx's
+// `reactedTo` pattern) rather than a useEffect (which would run one render late,
+// letting that first render briefly use the wrong, unlocked value). Render then uses
+// the LOCKED value for the rest of this "open" session instead of the live
+// `isDesktop` — a resize mid-session no longer swaps the subtree out from under the
+// user. The lock resets (available to be captured fresh) the moment `open` goes back
+// to false, so the NEXT time this sheet opens it re-evaluates the viewport fresh, same
+// as before this fix. Deliberately NOT a rewrite unifying Dialog/Drawer into one
+// shared tree — that's a bigger, riskier change to a primitive used everywhere in this
+// app.
 function ResponsiveSheet({
   open,
   onOpenChange,
@@ -61,7 +82,18 @@ function ResponsiveSheet({
   description,
   children,
 }: ResponsiveSheetProps) {
-  const isDesktop = useIsDesktop();
+  const liveIsDesktop = useIsDesktop();
+  const [lockedIsDesktop, setLockedIsDesktop] = React.useState<boolean | null>(null);
+  const [prevOpen, setPrevOpen] = React.useState(open);
+
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    // Capture on the false -> true transition; release on the true -> false one, so
+    // the NEXT open re-evaluates the viewport fresh instead of reusing a stale lock.
+    setLockedIsDesktop(open ? liveIsDesktop : null);
+  }
+
+  const isDesktop = open ? (lockedIsDesktop ?? liveIsDesktop) : liveIsDesktop;
 
   if (isDesktop) {
     return (

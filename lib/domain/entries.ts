@@ -1,4 +1,4 @@
-import { daysInMonth } from './reminders';
+import { clampedDueDate } from './reminders';
 import { utcDaysBetween } from './today';
 
 export interface PropagationCandidate {
@@ -79,11 +79,10 @@ export function entryPaidState(entry: PaidStateCandidate, today: Date): PaidStat
   if (entry.actualDateDay === null) return 'unscheduled';
 
   // Month-end clamping for a configured day that doesn't exist in a shorter month (e.g.
-  // day 31 in February) — same rule as reminders.ts's clampedDueDate and
-  // affordability.ts's own copy of it; daysInMonth is the one shared primitive all three
-  // clamp through.
-  const clampedDay = Math.min(entry.actualDateDay, daysInMonth(entry.year, entry.month));
-  const dueDate = new Date(Date.UTC(entry.year, entry.month - 1, clampedDay));
+  // day 31 in February) — reminders.ts's exported clampedDueDate is the one shared
+  // implementation affordability.ts and this classifier both import, rather than each
+  // maintaining its own copy of the same clamp-then-construct-a-Date logic.
+  const dueDate = clampedDueDate(entry.year, entry.month, entry.actualDateDay);
   const daysUntilDue = utcDaysBetween(today, dueDate);
 
   // Due exactly today is "upcoming," not "overdue" (daysUntilDue < 0, not <= 0) — a bill

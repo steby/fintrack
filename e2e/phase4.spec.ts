@@ -4,7 +4,14 @@ import { eq, inArray } from 'drizzle-orm';
 import { createTestDb } from './test-db';
 import { requireEnv } from './env';
 import { login } from './login';
-import { categories, bankAccounts, goals, users, households } from '../lib/db/schema';
+import {
+  categories,
+  bankAccounts,
+  goals,
+  users,
+  households,
+  monthlyEntries,
+} from '../lib/db/schema';
 import { currentYearMonth } from '../lib/domain/today';
 
 const OWNER_EMAIL = requireEnv('SEED_OWNER_EMAIL');
@@ -20,6 +27,10 @@ test.describe('Phase 4: category budgets, goals, net worth', () => {
   const categoryName = `E2E Budget Category ${Date.now()}`;
   const goalName = `E2E Goal ${Date.now()}`;
   const accountName = `E2E NetWorth Account ${Date.now()}`;
+  // Captured once the "overspend" test creates its ad-hoc entry, so afterAll can
+  // delete that specific row by id (see the fix note below) rather than relying on
+  // the category-delete cascade.
+  let overspendEntryId: string | undefined;
 
   test.beforeAll(async () => {
     const [owner] = await testDb
@@ -39,6 +50,15 @@ test.describe('Phase 4: category budgets, goals, net worth', () => {
   });
 
   test.afterAll(async () => {
+    // Fix (post-redesign bug-fix pass): monthlyEntries.categoryId has `onDelete:
+    // 'set null'`, so deleting the category below ORPHANS the ad-hoc "overspend" entry
+    // (categoryId -> null) instead of removing it — a real, silent debris leak into the
+    // shared seed household on every run. Delete the entry itself FIRST, explicitly, by
+    // the id captured when the test created it — don't rely on the category-delete
+    // cascade to clean it up, since (as this bug demonstrates) there isn't one.
+    if (overspendEntryId) {
+      await testDb.delete(monthlyEntries).where(eq(monthlyEntries.id, overspendEntryId));
+    }
     await testDb.delete(categories).where(eq(categories.name, categoryName));
     await testDb.delete(goals).where(inArray(goals.name, [goalName, `${goalName} renamed`]));
     await testDb.delete(bankAccounts).where(eq(bankAccounts.name, accountName));
@@ -78,6 +98,15 @@ test.describe('Phase 4: category budgets, goals, net worth', () => {
     await expect(
       page.getByTestId('entry-row').filter({ hasText: `${categoryName} overspend` }),
     ).toBeVisible();
+
+    // Capture the created ad-hoc entry's id for afterAll's explicit cleanup (see its
+    // own comment) — categoryId's `onDelete: 'set null'` means deleting the category
+    // alone would orphan this row instead of removing it.
+    const [overspendEntry] = await testDb
+      .select({ id: monthlyEntries.id })
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.item, `${categoryName} overspend`));
+    overspendEntryId = overspendEntry?.id;
 
     await page.goto('/settings/categories');
     const overspentRow = page.getByTestId('category-row').filter({ hasText: categoryName });

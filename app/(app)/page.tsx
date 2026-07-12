@@ -1,5 +1,6 @@
 import { CalendarClock } from 'lucide-react';
 import { eq } from 'drizzle-orm';
+import { redirect } from 'next/navigation';
 import { requireUser } from '../../lib/auth/guards';
 import { can } from '../../lib/auth/rbac';
 import { env } from '../../lib/env';
@@ -16,6 +17,7 @@ import { getSetting } from '../../lib/settings';
 import { sumNetCentsByAccount } from '../../lib/domain/net-worth';
 import { addMonths } from '../../lib/domain/recurring';
 import { currentYearMonth, utcStartOfDay } from '../../lib/domain/today';
+import { parseYearParam } from '../../lib/domain/month-params';
 import {
   parseHorizon,
   resolveHorizonDays,
@@ -36,8 +38,26 @@ import { GoalsMini } from './home/goals-mini';
 // Answers "can I cover what's coming": a cash lens (primary, when trustworthy) and a
 // budget-remaining lens (secondary, always shown; promoted to primary when the cash
 // lens isn't trustworthy) — see safe-to-spend-hero.tsx for the exact promotion rule.
-export default async function HomePage() {
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const user = await requireUser();
+
+  // post-redesign bug-fix pass: Home ignored `?year=` entirely, so a stale
+  // `/?year=2023`-style bookmark (from before Phase 8 moved year-scoped widgets off
+  // this page) silently rendered "now" with no indication the requested year was
+  // dropped. A lightweight courtesy redirect instead: a present, valid, and DIFFERENT
+  // year sends the visitor to the page that's actually year-scoped now (/insights)
+  // rather than pretending the bookmark still means "today." Absent or already-current
+  // year renders Home normally — no behavior change for the common case.
+  const params = await searchParams;
+  const requestedYear = parseYearParam(params.year);
+  if (params.year !== undefined && requestedYear !== currentYearMonth().year) {
+    redirect(`/insights?year=${requestedYear}`);
+  }
+
   const canManage = can(user.role, 'write');
   const today = utcStartOfDay();
   const current = currentYearMonth(today);

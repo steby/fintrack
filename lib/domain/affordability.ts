@@ -1,4 +1,4 @@
-import { daysInMonth } from './reminders';
+import { daysInMonth, clampedDueDate } from './reminders';
 import { utcDaysBetween, utcStartOfDay, currentYearMonth } from './today';
 import { parseAmountToCents } from '../money';
 
@@ -82,14 +82,6 @@ export function resolveHorizonDays(h: Horizon, today: Date): number {
   return daysInMonth(start.getUTCFullYear(), start.getUTCMonth() + 1) - start.getUTCDate();
 }
 
-// Mirrors reminders.ts's private clampedDueDate (day 29-31 clamping for short months) —
-// duplicated rather than imported because reminders.ts doesn't export it and this file
-// must not modify reminders.ts (spec.md Phase 9: the cron email path stays untouched).
-function clampedDueDate(year: number, month: number, day: number): Date {
-  const clampedDay = Math.min(day, daysInMonth(year, month));
-  return new Date(Date.UTC(year, month - 1, clampedDay));
-}
-
 // Selects and shapes every candidate worth showing on Home's upcoming list within
 // [0, horizonDays] days from today, PLUS any current-month overdue unpaid expense
 // regardless of horizon (an overdue bill must never silently drop off the list just
@@ -115,7 +107,18 @@ export function selectUpcomingItems(
     const daysUntilDue = utcDaysBetween(today, dueDate);
 
     const isCurrentMonth = candidate.year === current.year && candidate.month === current.month;
-    const overdue = daysUntilDue < 0 && isCurrentMonth;
+    // Only an EXPENSE can be "overdue" (post-redesign bug-fix pass) — a past-due,
+    // unpaid INCOME candidate isn't a bill you've missed, it's a paycheck that hasn't
+    // landed yet. Without the direction check, an unpaid past-due income item got
+    // `overdue: true`, which rendered under Home's red "Overdue" section despite being
+    // a positive amount, AND (worse) made buildRunway apply it at day 0 as if already
+    // received — optimistically counting money that hasn't arrived. Per this app's
+    // existing conservative philosophy (spec.md: income is never assumed received
+    // early), the correct fix is to simply exclude a not-yet-due-and-unpaid past
+    // income item from the runway/list entirely (the `!overdue && daysUntilDue < 0`
+    // branch below then filters it out), not to invent a separate "pending income"
+    // bucket for it.
+    const overdue = daysUntilDue < 0 && isCurrentMonth && candidate.direction === 'expense';
 
     if (!overdue && (daysUntilDue < 0 || daysUntilDue > horizonDays)) continue;
 

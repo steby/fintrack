@@ -110,7 +110,24 @@ export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canMana
           // (spec.md Phase 10), reusing the same MarkPaidButton/markPaidAction pattern
           // Home's upcoming list already uses, not a second implementation.
           <div className="flex flex-col items-end gap-1">
-            <form action={actualAction} className="flex flex-col items-end gap-1">
+            {/* key changes exactly when this entry's paid state flips (post-redesign
+                bug-fix pass): the amount/date inputs below are deliberately
+                UNCONTROLLED (defaultValue, not value — see the onBlur comment), which
+                only re-applies defaultValue on MOUNT, never on a prop update. A sibling
+                MarkPaidButton click revalidates this row with a new
+                entry.actualAmount/actualDate but, without a key change, React reuses
+                the existing <form>/<input> DOM nodes and their stale defaultValue,
+                leaving the row visually self-contradictory (the Mark paid button gone,
+                the amount column still blank) until the user navigates away and back.
+                Keying on `${entry.id}-${paid-state}` forces a remount (fresh
+                defaultValue) exactly when paid state changes, while staying stable
+                during normal typing (entry.actualAmount doesn't change mid-edit, only
+                after a submit completes). */}
+            <form
+              key={`${entry.id}-${entry.actualAmount ?? 'unpaid'}`}
+              action={actualAction}
+              className="flex flex-col items-end gap-1"
+            >
               <input type="hidden" name="id" value={entry.id} />
               <input
                 type="number"

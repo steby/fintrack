@@ -569,7 +569,12 @@ describe('deleteEntryAction', () => {
 });
 
 describe('markPaidAction', () => {
-  it('sets actualAmount to the budgeted amount and actualDate to today (UTC) for an unpaid entry', async () => {
+  // No `actualDate` field sent at all (the default path — defense in depth against a
+  // stripped/missing field, matching what the client would send if the user never
+  // touched the popup's date input away from its own default) — must fall back to
+  // today (UTC) server-side, exactly as before the post-redesign bug-fix pass that
+  // added the field.
+  it('sets actualAmount to the budgeted amount and actualDate to today (UTC) for an unpaid entry, when actualDate is left at its default (omitted)', async () => {
     const { markPaidAction } = await import('./monthly');
     const member = await makeHouseholdWithUser('member', 'Mark paid A');
     const [entry] = await db
@@ -598,6 +603,77 @@ describe('markPaidAction', () => {
       .from(monthlyEntries)
       .where(eq(monthlyEntries.id, entry.id));
     expect(reloaded).toMatchObject({ actualAmount: '2000.00', actualDate: todayIso });
+
+    await cleanup(member.household.id);
+  });
+
+  // post-redesign bug-fix pass (USER'S EXPLICIT SPEC): the mark-paid popup lets the
+  // user correct the date before it's recorded — e.g. a January bill marked paid in
+  // July should persist AS January, not today. A non-today, non-empty actualDate sent
+  // by the client must be persisted exactly, not silently overridden by the server's
+  // own "today" default (that default only applies when the field is genuinely
+  // omitted/blank, per the test above).
+  it('accepts a custom (non-today) actualDate from the popup and persists that exact date, not today', async () => {
+    const { markPaidAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Mark paid A2');
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: 2026,
+        month: 1,
+        item: 'January Rent',
+        budgetedAmount: '2000.00',
+      })
+      .returning();
+
+    mockToken = member.token;
+    const result = await markPaidAction(
+      undefined,
+      formData({ id: entry.id, actualDate: '2026-01-05' }),
+    );
+
+    expect(result).toEqual({
+      success: true,
+      alreadyPaid: false,
+      previous: { actualAmount: null, actualDate: null },
+    });
+
+    const [reloaded] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entry.id));
+    expect(reloaded).toMatchObject({ actualAmount: '2000.00', actualDate: '2026-01-05' });
+
+    await cleanup(member.household.id);
+  });
+
+  it('rejects a calendar-impossible custom actualDate (adversarial: forged form field)', async () => {
+    const { markPaidAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Mark paid A3');
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: 2026,
+        month: 2,
+        item: 'Rent',
+        budgetedAmount: '2000.00',
+      })
+      .returning();
+
+    mockToken = member.token;
+    const result = await markPaidAction(
+      undefined,
+      formData({ id: entry.id, actualDate: '2026-02-30' }),
+    );
+    expect(result).toEqual({ error: 'Invalid request.' });
+
+    const [stillUnpaid] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entry.id));
+    expect(stillUnpaid.actualAmount).toBeNull();
 
     await cleanup(member.household.id);
   });

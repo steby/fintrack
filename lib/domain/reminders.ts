@@ -45,8 +45,12 @@ export function daysInMonth(year: number, month: number): number {
 
 // Clamps a recurring item's configured day-of-month (e.g. 31) to whatever the target
 // month actually has (e.g. 30 in April, 28/29 in February) — spec.md's "month-end
-// clamping for day 29-31" edge case.
-function clampedDueDate(year: number, month: number, day: number): Date {
+// clamping for day 29-31" edge case. Exported (post-redesign bug-fix pass) so
+// lib/domain/affordability.ts and lib/domain/entries.ts's entryPaidState can import
+// this single implementation instead of each maintaining its own copy — same
+// reasoning as daysInMonth's own export above. This function's own behavior is
+// unchanged; only its visibility changed.
+export function clampedDueDate(year: number, month: number, day: number): Date {
   const clampedDay = Math.min(day, daysInMonth(year, month));
   return new Date(Date.UTC(year, month - 1, clampedDay));
 }

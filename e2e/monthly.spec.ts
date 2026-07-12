@@ -247,18 +247,23 @@ test.describe('monthly entries', () => {
     await expect(page.getByTestId('entry-row').filter({ hasText: adhocName })).toHaveCount(0);
   });
 
-  // Phase 10: one-tap mark-paid, exercised through list view's compact inline button
-  // (entry-row.tsx). Verified against the REAL DB, not the amount input's own value —
-  // that input is deliberately uncontrolled (see the load-bearing onBlur comment in
-  // entry-row.tsx), so its `defaultValue` does NOT re-apply after a server round trip
-  // that revalidates the SAME component instance (React keeps the existing DOM node
-  // since `key={entry.id}` is unchanged); the "generate, enter an actual..." test above
-  // already established this exact pattern (DB poll, not toHaveValue) for the same
-  // reason. What DOES reliably reflect fresh server state is a conditionally-rendered
-  // element like the MarkPaidButton itself (entry-row.tsx only renders it when
-  // `entry.actualAmount === null`, re-evaluated fresh on every render) — asserting it
-  // disappears is a real, non-uncontrolled-input signal, used alongside the DB poll.
-  test('one-tap mark-paid sets actual = budgeted, and the button disappears once paid', async ({
+  // Phase 10 (mark-paid reachable from list view's compact inline button,
+  // entry-row.tsx) + post-redesign bug-fix pass (clicking "Mark paid" now opens a
+  // small confirm popup with an editable date field, defaulting to today, instead of
+  // instantly marking paid — USER'S EXPLICIT SPEC, since markPaidAction used to
+  // hardcode today's date regardless of which month the entry actually belongs to).
+  // This test edits the date to a real, non-today value and verifies against the REAL
+  // DB that the CUSTOM date was persisted, not today's — not the amount/date inputs'
+  // own values, which are deliberately uncontrolled (see the load-bearing onBlur
+  // comment in entry-row.tsx), so their `defaultValue` does NOT re-apply after a
+  // server round trip that revalidates the SAME component instance; the "generate,
+  // enter an actual..." test above already established this exact pattern (DB poll,
+  // not toHaveValue) for the same reason. What DOES reliably reflect fresh server
+  // state is a conditionally-rendered element like the MarkPaidButton itself
+  // (entry-row.tsx only renders it when `entry.actualAmount === null`, re-evaluated
+  // fresh on every render) — asserting it disappears is a real, non-uncontrolled-input
+  // signal, used alongside the DB poll.
+  test('mark-paid popup: editing the date to a custom value persists that exact date, and the button disappears once paid', async ({
     page,
   }) => {
     await page.goto('/login');
@@ -284,17 +289,29 @@ test.describe('monthly entries', () => {
     await expect(markPaidButton).toBeVisible();
 
     await markPaidButton.click();
+    // The trigger and the popup's own submit button share the label "Mark paid" and
+    // coexist once the popup is open (same trigger/submit-share-a-label pattern as
+    // goal-add-form.tsx) — scoped to data-testid="mark-paid-form" per the plan's own
+    // Playwright strict-mode guidance, not disambiguated by renaming either one.
+    const markPaidForm = page.getByTestId('mark-paid-form');
+    await expect(markPaidForm).toBeVisible();
+    await markPaidForm.locator('input[type="date"]').fill('2026-01-15');
+    await markPaidForm.getByRole('button', { name: 'Mark paid' }).click();
     await expect(markPaidButton).toHaveCount(0);
 
-    const persistedActual = async () => {
+    const persistedRow = async () => {
       const [persisted] = await testDb
-        .select({ actualAmount: monthlyEntries.actualAmount })
+        .select({
+          actualAmount: monthlyEntries.actualAmount,
+          actualDate: monthlyEntries.actualDate,
+        })
         .from(monthlyEntries)
         .where(eq(monthlyEntries.item, markPaidName));
       if (!persisted) throw new Error(`No monthly_entries row found for "${markPaidName}"`);
-      return persisted.actualAmount;
+      return persisted;
     };
-    await expect.poll(persistedActual).toBe('42.00');
+    await expect.poll(async () => (await persistedRow()).actualAmount).toBe('42.00');
+    expect((await persistedRow()).actualDate).toBe('2026-01-15');
   });
 
   // Phase 10: `‹ July 2026 ›` chevrons crossing a year boundary — Dec's "next" chevron
