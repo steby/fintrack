@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { shouldPropagate, getDifference } from './entries';
+import { shouldPropagate, getDifference, entryPaidState } from './entries';
 
 describe('shouldPropagate', () => {
   it('propagates a plain forecast row (no actual, not overridden)', () => {
@@ -89,6 +89,72 @@ describe('getDifference', () => {
         favorable: true,
       },
     );
+  });
+});
+
+describe('entryPaidState', () => {
+  const today = new Date('2026-07-12T00:00:00Z');
+
+  it('paid beats everything, even an entry with no due day at all', () => {
+    expect(
+      entryPaidState({ actualAmount: '50.00', actualDateDay: null, year: 2026, month: 7 }, today),
+    ).toBe('paid');
+  });
+
+  it('paid beats an overdue due day', () => {
+    expect(
+      entryPaidState({ actualAmount: '50.00', actualDateDay: 1, year: 2026, month: 7 }, today),
+    ).toBe('paid');
+  });
+
+  it('no due day (ad-hoc, or a recurring item with none configured) is unscheduled', () => {
+    expect(
+      entryPaidState({ actualAmount: null, actualDateDay: null, year: 2026, month: 7 }, today),
+    ).toBe('unscheduled');
+  });
+
+  it('clamps day 31 to Feb 28 in a non-leap year and reports overdue once that date has passed', () => {
+    expect(
+      entryPaidState({ actualAmount: null, actualDateDay: 31, year: 2026, month: 2 }, today),
+    ).toBe('overdue');
+  });
+
+  it('clamps day 31 to Feb 29 in a leap year', () => {
+    const leapToday = new Date('2024-03-01T00:00:00Z');
+    expect(
+      entryPaidState({ actualAmount: null, actualDateDay: 31, year: 2024, month: 2 }, leapToday),
+    ).toBe('overdue');
+    // Still upcoming the day before the clamped due date.
+    expect(
+      entryPaidState(
+        { actualAmount: null, actualDateDay: 31, year: 2024, month: 2 },
+        new Date('2024-02-28T00:00:00Z'),
+      ),
+    ).toBe('upcoming');
+  });
+
+  it('due exactly today is upcoming, not overdue (the today boundary)', () => {
+    expect(
+      entryPaidState({ actualAmount: null, actualDateDay: 12, year: 2026, month: 7 }, today),
+    ).toBe('upcoming');
+  });
+
+  it('due tomorrow is upcoming', () => {
+    expect(
+      entryPaidState({ actualAmount: null, actualDateDay: 13, year: 2026, month: 7 }, today),
+    ).toBe('upcoming');
+  });
+
+  it('an unpaid entry from a past month is overdue too, not just the current month (unlike affordability.ts)', () => {
+    expect(
+      entryPaidState({ actualAmount: null, actualDateDay: 15, year: 2026, month: 1 }, today),
+    ).toBe('overdue');
+  });
+
+  it('an unpaid entry from a future month is upcoming, not overdue', () => {
+    expect(
+      entryPaidState({ actualAmount: null, actualDateDay: 5, year: 2026, month: 12 }, today),
+    ).toBe('upcoming');
   });
 });
 

@@ -1,30 +1,29 @@
+import { cookies } from 'next/headers';
 import { eq, and, sql } from 'drizzle-orm';
 import { requireUser } from '../../../lib/auth/guards';
 import { can } from '../../../lib/auth/rbac';
-import { env } from '../../../lib/env';
 import { db } from '../../../lib/db';
 import {
   monthlyEntries,
   categories,
   bankAccounts,
   recurringSchedule,
-  users,
 } from '../../../lib/db/schema';
 import { parseYearParam, parseMonthParam, parseViewParam } from '../../../lib/domain/month-params';
 import { deriveMonthStatus, type MonthStatus } from '../../../lib/domain/month-status';
 import { addMonths } from '../../../lib/domain/recurring';
+import { entryPaidState } from '../../../lib/domain/entries';
 import { parseAmountToCents } from '../../../lib/money';
-import { MONTH_FULL } from '../../../lib/format';
 import { isEnabled } from '../../../lib/flags';
 import { generateEntriesForRange } from '../../../lib/generate-entries';
 import { autoGenerateGuard } from '../../../lib/domain/auto-generate-guard';
-import { currentYearMonth } from '../../../lib/domain/today';
+import { currentYearMonth, utcStartOfDay } from '../../../lib/domain/today';
+import { MonthHeader } from './month-header';
 import { MonthTabs } from './month-tabs';
 import { ViewToggle } from './view-toggle';
 import { SummaryBar } from './summary-bar';
 import { CalendarView } from './calendar-view';
 import { ListView } from './list-view';
-import { AdhocForm } from './adhoc-form';
 import type { MonthlyEntryRow } from './types';
 
 export default async function MonthlyPage({
@@ -37,7 +36,14 @@ export default async function MonthlyPage({
   const params = await searchParams;
   const year = parseYearParam(params.year);
   const month = parseMonthParam(params.month);
-  const view = parseViewParam(params.view);
+  // cookies() is async in this Next.js version (v16) — the `fintrack_view` cookie is a
+  // client-writable trust boundary exactly like the URL param, so it goes through the
+  // SAME parseViewParam allowlist rather than being trusted directly (spec.md Phase 10:
+  // "parse and clamp it exactly like URL params"). Read-only here — writing happens
+  // client-side from view-toggle.tsx, never during this render (`.set` only works in a
+  // Server Action/Route Handler, per this Next.js version's docs).
+  const cookieStore = await cookies();
+  const view = parseViewParam(params.view, cookieStore.get('fintrack_view')?.value);
 
   // On-load hook (spec.md Phase 2): keeps the next 3 months (this one included) always
   // materialized without the household needing to remember to click Generate. Guarded
@@ -60,9 +66,6 @@ export default async function MonthlyPage({
     autoGenerateGuard.recordRun(user.householdId);
   }
 
-  // allCategories/allAccounts/members only feed AdhocForm below, which only renders for
-  // canManage users — skip these three queries entirely for viewers instead of running
-  // and discarding them on every read-only page view.
   const entriesPromise = db
     .select({
       id: monthlyEntries.id,
@@ -100,36 +103,21 @@ export default async function MonthlyPage({
     .from(monthlyEntries)
     .where(and(eq(monthlyEntries.householdId, user.householdId), eq(monthlyEntries.year, year)))
     .groupBy(monthlyEntries.month);
-  const categoriesPromise = canManage
-    ? db
-        .select({ id: categories.id, name: categories.name, direction: categories.direction })
-        .from(categories)
-        .where(eq(categories.householdId, user.householdId))
-        .orderBy(categories.direction, categories.sortOrder)
-    : Promise.resolve([]);
-  const accountsPromise = canManage
-    ? db
-        .select({ id: bankAccounts.id, name: bankAccounts.name })
-        .from(bankAccounts)
-        .where(eq(bankAccounts.householdId, user.householdId))
-        .orderBy(bankAccounts.sortOrder)
-    : Promise.resolve([]);
-  const membersPromise = canManage
-    ? db
-        .select({ id: users.id, name: users.name })
-        .from(users)
-        .where(eq(users.householdId, user.householdId))
-    : Promise.resolve([]);
 
-  const [entries, monthCounts, allCategories, allAccounts, members] = await Promise.all([
-    entriesPromise,
-    monthCountsPromise,
-    categoriesPromise,
-    accountsPromise,
-    membersPromise,
-  ]);
+  const [entries, monthCounts] = await Promise.all([entriesPromise, monthCountsPromise]);
 
-  const typedEntries: MonthlyEntryRow[] = entries;
+  // The ONE paid/overdue/upcoming/unscheduled classification, computed once here and
+  // shared by all three views (spec.md Phase 10) — calendar/agenda/list all just read
+  // entry.paidState, none of them re-derive "what counts as overdue" themselves, and
+  // none of them need a raw `today` Date to cross the server/client boundary.
+  const today = utcStartOfDay();
+  const typedEntries: MonthlyEntryRow[] = entries.map((entry) => ({
+    ...entry,
+    paidState: entryPaidState(
+      { actualAmount: entry.actualAmount, actualDateDay: entry.scheduledDay, year, month },
+      today,
+    ),
+  }));
 
   const statuses: MonthStatus[] = Array.from({ length: 12 }, (_, i) => {
     const info = monthCounts.find((c) => c.month === i + 1);
@@ -159,26 +147,12 @@ export default async function MonthlyPage({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">
-            {MONTH_FULL[month - 1]} {year}
-          </h1>
-          {/* `status` is a MonthStatus union value, not external input (same false
-              positive as lib/auth/rbac.ts's MATRIX[role]). */}
+      <div className="flex flex-col items-center gap-1 md:items-start">
+        <MonthHeader year={year} month={month} view={view} />
+        <p className="text-sm text-muted-foreground">
           {/* eslint-disable-next-line security/detect-object-injection */}
-          <p className="mt-1 text-sm text-muted-foreground">{statusLabel[status]}</p>
-        </div>
-        {canManage && (
-          <AdhocForm
-            year={year}
-            month={month}
-            categories={allCategories}
-            accounts={allAccounts}
-            members={members}
-            entryAttributionEnabled={env.FEATURE_ENTRY_ATTRIBUTION}
-          />
-        )}
+          {statusLabel[status]}
+        </p>
       </div>
 
       <MonthTabs year={year} month={month} view={view} statuses={statuses} />
@@ -198,17 +172,28 @@ export default async function MonthlyPage({
       )}
 
       {!hasEntries ? (
-        <p className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
+        <p className="rounded-2xl border border-dashed p-8 text-center text-sm text-muted-foreground">
           No entries for this month. Go to the{' '}
           <a href="/recurring" className="underline">
-            Recurring schedule
+            Plan
           </a>{' '}
-          and generate a forecast.
+          page and generate a forecast.
         </p>
       ) : view === 'list' ? (
         <ListView entries={typedEntries} canManage={canManage} />
       ) : (
-        <CalendarView year={year} month={month} entries={typedEntries} agenda={view === 'agenda'} />
+        <CalendarView
+          year={year}
+          month={month}
+          entries={typedEntries}
+          agenda={view === 'agenda'}
+          canManage={canManage}
+          today={{
+            year: today.getUTCFullYear(),
+            month: today.getUTCMonth() + 1,
+            day: today.getUTCDate(),
+          }}
+        />
       )}
     </div>
   );

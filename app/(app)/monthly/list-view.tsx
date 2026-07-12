@@ -31,7 +31,7 @@ export function ListView({
               <h2 className="text-sm font-semibold tracking-wide text-muted-foreground uppercase">
                 {group.arrow} {group.label}
               </h2>
-              <div className="overflow-x-auto rounded-md border">
+              <div className="overflow-x-auto rounded-2xl border bg-card shadow-card">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">

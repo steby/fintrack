@@ -3,6 +3,7 @@ import {
   parseYearParam,
   parseMonthParam,
   parseViewParam,
+  monthNav,
   isValidCalendarDate,
 } from './month-params';
 
@@ -54,15 +55,60 @@ describe('parseMonthParam', () => {
 });
 
 describe('parseViewParam', () => {
-  it('recognizes agenda and list', () => {
+  it('recognizes all three explicit modes from the URL param', () => {
     expect(parseViewParam('agenda')).toBe('agenda');
     expect(parseViewParam('list')).toBe('list');
+    expect(parseViewParam('calendar')).toBe('calendar');
   });
 
-  it('defaults to calendar for anything else, including garbage', () => {
-    expect(parseViewParam('calendar')).toBe('calendar');
-    expect(parseViewParam(undefined)).toBe('calendar');
-    expect(parseViewParam('<script>')).toBe('calendar');
+  it('defaults to agenda (not calendar — Phase 10 changed the default) when nothing is present', () => {
+    expect(parseViewParam(undefined)).toBe('agenda');
+  });
+
+  it('defaults to agenda for URL garbage, ignoring any cookie fallback entirely (adversarial: ?view=<script>)', () => {
+    expect(parseViewParam('<script>')).toBe('agenda');
+  });
+
+  it('takes the first value when given an array (repeated query param)', () => {
+    expect(parseViewParam(['list', 'calendar'])).toBe('list');
+  });
+
+  it('falls back to a valid cookie value when the URL param is absent', () => {
+    expect(parseViewParam(undefined, 'list')).toBe('list');
+    expect(parseViewParam(undefined, 'calendar')).toBe('calendar');
+  });
+
+  it('the URL param wins over a valid cookie value', () => {
+    expect(parseViewParam('calendar', 'list')).toBe('calendar');
+  });
+
+  it('falls back to agenda when the cookie is garbage/tampered (adversarial: a forged fintrack_view cookie)', () => {
+    expect(parseViewParam(undefined, '<script>alert(1)</script>')).toBe('agenda');
+    expect(parseViewParam(undefined, '')).toBe('agenda');
+    expect(parseViewParam(undefined, 'AGENDA')).toBe('agenda'); // case-sensitive, no normalization
+  });
+});
+
+describe('monthNav', () => {
+  it('steps within a year', () => {
+    expect(monthNav(2026, 7)).toEqual({
+      prev: { year: 2026, month: 6 },
+      next: { year: 2026, month: 8 },
+    });
+  });
+
+  it('crosses the year boundary forward (Dec -> Jan)', () => {
+    expect(monthNav(2026, 12)).toEqual({
+      prev: { year: 2026, month: 11 },
+      next: { year: 2027, month: 1 },
+    });
+  });
+
+  it('crosses the year boundary backward (Jan -> Dec)', () => {
+    expect(monthNav(2026, 1)).toEqual({
+      prev: { year: 2025, month: 12 },
+      next: { year: 2026, month: 2 },
+    });
   });
 });
 

@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import {
   Home,
   Calendar,
@@ -8,14 +9,27 @@ import {
   Settings as SettingsIcon,
 } from 'lucide-react';
 import { requireUser } from '../../lib/auth/guards';
+import { can } from '../../lib/auth/rbac';
+import { env } from '../../lib/env';
+import { getEntryFormOptions } from '../../lib/db/queries';
 import { logoutAction } from '../actions/auth';
 import { Button } from '@/components/ui/button';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { NavLink } from './nav-link';
 import { BottomNav } from './bottom-nav';
+import { QuickAdd } from './quick-add';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
+  const canManage = can(user.role, 'write');
+  // Global quick-add (spec.md Phase 10) needs these three option lists on EVERY page,
+  // not just /monthly (which used to fetch them itself, canManage-gated, purely for its
+  // own now-removed adhoc-form.tsx) — skipped entirely for a viewer, who never sees a
+  // quick-add trigger at all (same "don't even run a write-form's setup query for a
+  // read-only user" convention the old per-page version already followed).
+  const entryFormOptions = canManage
+    ? await getEntryFormOptions(user.householdId)
+    : { categories: [], accounts: [], members: [] };
 
   return (
     <div className="flex min-h-screen">
@@ -112,6 +126,25 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         {children}
       </main>
       <BottomNav />
+      {/* Rendered OUTSIDE <aside> on purpose — that sidebar is `hidden` below md, and
+          quick-add.tsx's Fab is the mobile entry point (spec.md Phase 10); nesting it
+          inside the sidebar would make the Fab disappear below md along with it. A
+          viewer (no write access) gets neither trigger — server-gated by canManage, not
+          just hidden via CSS, matching every other write affordance in this shell.
+          Suspense wraps it per Next's own useSearchParams guidance (quick-add.tsx reads
+          the viewed month from the URL) — every (app) route is already forced dynamic
+          by this layout's own requireUser() cookie read, so this is defense-in-depth
+          rather than a functional requirement here. */}
+      {canManage && (
+        <Suspense fallback={null}>
+          <QuickAdd
+            categories={entryFormOptions.categories}
+            accounts={entryFormOptions.accounts}
+            members={entryFormOptions.members}
+            entryAttributionEnabled={env.FEATURE_ENTRY_ATTRIBUTION}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

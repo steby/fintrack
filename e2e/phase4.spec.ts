@@ -59,14 +59,20 @@ test.describe('Phase 4: category budgets, goals, net worth', () => {
     // No spend yet this month — bar renders but nothing is over cap.
     await expect(row.getByText('$0.00 / $50.00 this month')).toBeVisible();
 
-    // Add an ad-hoc entry against this category for the current month, over the cap.
-    // List view specifically — the default (calendar) view renders ad-hoc entries as
-    // small chip cards without a data-testid="entry-row", which list view provides.
+    // Add an ad-hoc entry against this category for the current month, over the cap, via
+    // the Phase 10 global quick-add sheet (the per-page "Ad-hoc entry" button/form it
+    // replaced is gone — spec.md Phase 10: "rename/refactor adhoc-form.tsx ->
+    // quick-add.tsx"). List view specifically — a chip/row card view renders ad-hoc
+    // entries without a data-testid="entry-row", which list view provides.
     const { year: nowYear, month: nowMonth } = currentYearMonth();
     await page.goto(`/monthly?year=${nowYear}&month=${nowMonth}&view=list`);
-    await page.getByRole('button', { name: 'Ad-hoc entry' }).click();
+    await page.getByRole('button', { name: 'New entry' }).click();
     await page.getByPlaceholder('e.g. Car Repair').fill(`${categoryName} overspend`);
     await page.locator('select[name="categoryId"]').selectOption({ label: `↓ ${categoryName}` });
+    // Quick-add's primary "Amount" field is actualAmount — addAdhocAction mirrors it
+    // into budgetedAmount too when the "More options" budgeted field is left blank
+    // (app/actions/monthly.ts's own comment), so this still produces the $75.00 spend
+    // this assertion expects regardless of which of the two fields budgeting.ts reads.
     await page.getByPlaceholder('0.00').fill('75.00');
     await page.getByRole('button', { name: 'Add entry' }).click();
     await expect(

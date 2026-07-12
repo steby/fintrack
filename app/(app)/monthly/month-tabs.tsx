@@ -9,6 +9,49 @@ const STATUS_DOT: Record<MonthStatus, string> = {
   closed: 'bg-emerald-500',
 };
 
+function Pill({
+  year,
+  view,
+  name,
+  m,
+  isActive,
+  status,
+}: {
+  year: number;
+  view: string;
+  name: string;
+  m: number;
+  isActive: boolean;
+  status: MonthStatus;
+}) {
+  return (
+    <Link
+      href={`/monthly?year=${year}&month=${m}&view=${view}`}
+      data-testid="month-tab"
+      className={`flex shrink-0 snap-start items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm ${
+        isActive ? 'bg-muted font-semibold' : 'hover:bg-muted/50'
+      }`}
+    >
+      {/* `status` is narrowed to the MonthStatus union by Pill's own prop type, not
+          external input (same false positive as lib/auth/rbac.ts's MATRIX[role]). */}
+      {/* eslint-disable-next-line security/detect-object-injection */}
+      <span className={`size-1.5 rounded-full ${STATUS_DOT[status]}`} aria-hidden />
+      {name}
+    </Link>
+  );
+}
+
+// Two renders of the SAME 12 months (Phase 10 — spec.md's task 3): a flex-wrap grid at
+// md+ (unchanged from before this phase) and a horizontally scrollable, snap-scrolling
+// single row below md, where a wrapped 12-pill grid would eat 3+ rows of a phone
+// screen. Deliberately two separate containers (not one set of elements re-styled with
+// responsive classes) — this project's own established convention for a
+// desktop/mobile nav split (see bottom-nav.tsx vs the sidebar's NavLink list) is
+// tolerating small, non-mechanical duplication like this over a single element trying
+// to serve two very different layouts; distinct container testids
+// (month-tabs-desktop/month-tabs-mobile) let a future E2E test scope a locator to
+// whichever one the current viewport is actually showing, per the plan's own
+// Playwright strict-mode warning (bare month names/testids repeat across the page).
 export function MonthTabs({
   year,
   month,
@@ -21,29 +64,52 @@ export function MonthTabs({
   statuses: MonthStatus[];
 }) {
   return (
-    <div className="flex flex-wrap gap-1 border-b pb-2">
-      {MONTH_SHORT.map((name, i) => {
-        const m = i + 1;
-        const isActive = m === month;
-        return (
-          <Link
-            key={name}
-            href={`/monthly?year=${year}&month=${m}&view=${view}`}
-            data-testid="month-tab"
-            className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm ${
-              isActive ? 'bg-muted font-semibold' : 'hover:bg-muted/50'
-            }`}
-          >
-            {/* `i` is bounded by MONTH_SHORT.map's own array (fixed length 12), and
-                statuses[i]'s value is narrowed to the MonthStatus union — neither is
-                external/untrusted input (same false positive as lib/auth/rbac.ts's
-                MATRIX[role]). */}
-            {/* eslint-disable-next-line security/detect-object-injection */}
-            <span className={`size-1.5 rounded-full ${STATUS_DOT[statuses[i]]}`} aria-hidden />
-            {name}
-          </Link>
-        );
-      })}
-    </div>
+    <>
+      <div
+        data-testid="month-tabs-desktop"
+        className="hidden flex-wrap gap-1 border-b pb-2 md:flex"
+      >
+        {MONTH_SHORT.map((name, i) => {
+          // `i` is bounded by MONTH_SHORT's own fixed 12-length array, not external
+          // input (same false positive as lib/auth/rbac.ts's MATRIX[role]). Pulled into
+          // its own statement (not inlined in the JSX below) so this disable comment
+          // reliably stays on the line directly above the flagged access regardless of
+          // how Prettier wraps the Pill call's own props.
+          // eslint-disable-next-line security/detect-object-injection
+          const status = statuses[i];
+          return (
+            <Pill
+              key={name}
+              year={year}
+              view={view}
+              name={name}
+              m={i + 1}
+              isActive={i + 1 === month}
+              status={status}
+            />
+          );
+        })}
+      </div>
+      <div
+        data-testid="month-tabs-mobile"
+        className="flex snap-x snap-mandatory gap-1 overflow-x-auto border-b pb-2 md:hidden"
+      >
+        {MONTH_SHORT.map((name, i) => {
+          // eslint-disable-next-line security/detect-object-injection
+          const status = statuses[i];
+          return (
+            <Pill
+              key={name}
+              year={year}
+              view={view}
+              name={name}
+              m={i + 1}
+              isActive={i + 1 === month}
+              status={status}
+            />
+          );
+        })}
+      </div>
+    </>
   );
 }

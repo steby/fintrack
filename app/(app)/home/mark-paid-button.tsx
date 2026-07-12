@@ -1,6 +1,6 @@
 'use client';
 
-import { useTransition } from 'react';
+import { useTransition, type ComponentProps } from 'react';
 import { markPaidAction, updateActualAction } from '../../actions/monthly';
 import { Button } from '@/components/ui/button';
 import { useToastManager } from '@/components/ui/toast';
@@ -34,10 +34,23 @@ export function MarkPaidButton({
   entryId,
   item,
   amountCents,
+  // Phase 10: Monthly's calendar/agenda/list views reuse this exact component (per the
+  // plan's own instruction — "do NOT rebuild it with useActionState") but need a more
+  // compact visual treatment than Home's upcoming-list row (a table cell, an agenda
+  // line, a day-sheet list item — all tighter spaces than Home's card). Purely
+  // cosmetic — every prop below only reaches the underlying Button's className/variant/
+  // size; the startTransition/toast logic above is untouched and always runs the same
+  // way regardless of which view rendered this instance.
+  size = 'sm',
+  variant = 'outline',
+  className,
 }: {
   entryId: string;
   item: string;
   amountCents: number;
+  size?: ComponentProps<typeof Button>['size'];
+  variant?: ComponentProps<typeof Button>['variant'];
+  className?: string;
 }) {
   const [pending, startTransition] = useTransition();
   const toastManager = useToastManager();
@@ -79,7 +92,14 @@ export function MarkPaidButton({
   }
 
   return (
-    <Button type="button" size="sm" variant="outline" disabled={pending} onClick={handleClick}>
+    <Button
+      type="button"
+      size={size}
+      variant={variant}
+      className={className}
+      disabled={pending}
+      onClick={handleClick}
+    >
       {pending ? 'Marking…' : 'Mark paid'}
     </Button>
   );

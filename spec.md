@@ -784,12 +784,208 @@ depend on) — just a real thing to know when writing a Playwright locator again
 `e2e/home.spec.ts`'s empty-state test targets `getByRole('button', ...)` accordingly,
 with a comment explaining why.
 
-### Phase 10 — Money page: paid-state everywhere, one-tap entry, month nav, global quick-add (not started)
+### Phase 10 — Money page: paid-state everywhere, one-tap entry, month nav, global quick-add
 
-Adds paid/upcoming/overdue state to all three Monthly views, cross-year month navigation,
-a `fintrack_view` cookie-persisted view preference, and a global quick-add (the Phase 8
-`Fab` primitive, finally mounted, + a desktop header button) opening a `ResponsiveSheet`
-with the ad-hoc entry form. Not started as of Phase 9.
+**Ready:** AC = calendar + agenda show paid/upcoming/overdue per entry (list already did,
+via the presence/absence of an actual amount); mark-paid available in all three views;
+`‹ July 2026 ›` chevrons cross year boundaries; a `fintrack_view` cookie persists the
+view preference (URL param still wins; a garbage/tampered cookie falls back to the
+documented default); a global quick-add (Phase 8's `Fab`, mounted for the first time, +
+a desktop trigger) opens a `ResponsiveSheet` with the ad-hoc entry form, defaulting to
+the viewed (else current) month. Edge cases: Dec<->Jan chevrons; garbage/tampered
+cookie -> default, never a crash; mark-paid from the calendar day sheet revalidates
+without the sheet closing; quick-add from a non-Money page defaults to
+`currentYearMonth()`; the inline actual-entry keyboard flow in entry-row.tsx preserved
+verbatim; Playwright strict mode vs repeated month labels/button names. Trust
+boundaries: the `fintrack_view` cookie (parsed/clamped identically to a URL param,
+never trusted directly); quick-add reuses `addAdhocAction`'s existing zod validation
+plus a new optional `actualDate` field, validated through the same `dateInputSchema`
+`updateActualAction` already uses.
+
+1. **Pure logic**: `lib/domain/month-params.ts` gained `parseViewParam(raw, cookieValue?)`
+   — URL param wins when valid; else the cookie, if valid; else `'agenda'` (changed from
+   `'calendar'`, Phase 2's original default — there's no way to know a request's
+   viewport server-side, and agenda reads acceptably at any width without a
+   client-side correction; a desktop user who prefers the grid is one click away, and
+   that choice then sticks via the cookie) — and `monthNav(year, month)`, a thin
+   `{ prev, next }` wrapper around `lib/domain/recurring.ts`'s already-property-tested
+   `addMonths`, so a chevron click is provably using the same rollover logic
+   generate/auto-generate already rely on, not a second copy. `lib/domain/entries.ts`
+   gained `entryPaidState(entry, today): 'paid' | 'overdue' | 'upcoming' | 'unscheduled'`
+   — the ONE classifier all three Monthly views share (paid beats everything; no due
+   day -> unscheduled; day-31-in-Feb clamping via the same `daysInMonth` reminders.ts
+   and affordability.ts already clamp through; due exactly today -> upcoming, not
+   overdue). Deliberately broader than affordability.ts's own overdue notion: this
+   classifier isn't restricted to the current calendar month (a still-unpaid entry from
+   any past month a view happens to render is "overdue" here, since its job is "what
+   does this ONE entry look like," not "what belongs in a forward-looking forecast
+   window").
+2. **View cookie**: read in `app/(app)/monthly/page.tsx` via `const store = await
+cookies()` (async in this Next.js version) — read-only during render, matching this
+   version's rule that `.set`/`.delete` only work in a Server Action/Route Handler.
+   Written from `view-toggle.tsx`, a client component, via a plain
+   `document.cookie = 'fintrack_view=<v>;path=/;max-age=31536000'` on click — a
+   non-sensitive UI preference, so a client-side write avoids a Server Action round
+   trip for a nav click; safe specifically because `parseViewParam` re-validates it
+   identically to a URL param on every read.
+3. **Month header** — new `app/(app)/monthly/month-header.tsx`: `‹ <Month Year> ›`
+   links built from `monthNav`, plus a "Today" quick link when not already on the
+   current month. `month-tabs.tsx` split into two renders of the same 12 pills (own
+   testids `month-tabs-desktop`/`month-tabs-mobile`) — `hidden md:flex` (unchanged
+   wrapped-grid layout) at md+, a horizontally scrollable `overflow-x-auto` snap row
+   below md, where the wrapped grid would eat 3+ rows of a phone screen.
+4. **Paid-state in views**: `calendar-view.tsx` (converted to a client component — the
+   day-cell-click sheet below needs local state) reads each entry's pre-computed
+   `paidState` (see task 1) and styles chips accordingly (paid = muted + "✓ " prefix;
+   overdue = a `ring-warning` ring + warning text; upcoming = unchanged category-color
+   dot). A day cell with entries (`canManage`, grid mode only) is clickable/keyboard-
+   activatable and opens a `ResponsiveSheet` listing that day's entries with a
+   per-entry `MarkPaidButton` (reused directly from `app/(app)/home/mark-paid-button
+.tsx`, extended with optional `size`/`variant`/`className` props — its
+   `startTransition`+direct-call logic from Phase 9 untouched) and a "View in list"
+   link; the sheet stays mounted (not just while open) so a mark-paid inside it
+   re-renders with fresh `entries` without the sheet flashing closed. Agenda mode rows
+   get a state icon (check/warning/category dot) + an inline `MarkPaidButton` for
+   unpaid entries. `entry-row.tsx` (list) gained a compact ghost `MarkPaidButton`
+   beside the actual-amount inputs for unpaid rows — the load-bearing inline
+   keyboard flow (Enter/Escape/blur, with its onBlur comment) is untouched, just
+   wrapped in an extra flex container so the button can sit beside it.
+5. **Global quick-add** — `adhoc-form.tsx` retired; a new `app/(app)/quick-add.tsx`
+   (top-level, not nested under `monthly/`, since it's now genuinely global) renders a
+   `Fab` (mobile) and a fixed-position desktop button (spec.md's own "top of sidebar OR
+   a fixed header slot" choice — the fixed slot, since nesting in the sidebar would
+   hide the Fab too below md, where that `<aside>` is `hidden`), both toggling one
+   `ResponsiveSheet`'s `open` state (not its `trigger` prop, which only accepts a
+   single element). Mounted once in `app/(app)/layout.tsx` (Suspense-wrapped, since the
+   sheet reads the viewed month via `useSearchParams`), gated server-side by
+   `canManage` — a viewer gets neither trigger, not just a hidden one. Fields: Item,
+   Amount (bound to `actualAmount` — the primary "log what just happened" flow),
+   Category, Account, Date, then a "More options" disclosure for a
+   budgeted-vs-actual split and `paid_by` (`FEATURE_ENTRY_ATTRIBUTION`-gated, as
+   before). `addAdhocAction` gained an optional `actualDate` field (validated through
+   the existing `dateInputSchema`) and now mirrors a blank budgeted amount to the
+   actual amount when one was given (rather than defaulting to 0) — a quick-logged
+   $50 lunch with no explicit budget shouldn't register as "$50 over budget" by
+   default; leaving both blank still defaults to 0, unchanged. New
+   `lib/db/queries.ts`'s `getEntryFormOptions(householdId)` replaces what used to be
+   three inline queries duplicated only inside `monthly/page.tsx` (categories/
+   accounts/members option lists), since quick-add now needs them on every page.
+6. **Restyle**: `summary-bar.tsx` collapsed from 6 flat figures to an income/expense/net
+   trio via the `Stat` primitive and the `--income`/`--expense`/`--warning` semantic
+   tokens (retiring this page's own emerald/red Tailwind-literal convention, per Phase
+   8's page-by-page retirement plan — `entry-row.tsx`'s Difference column retired the
+   same literals while it was already being touched this phase). `view-toggle.tsx`
+   rewritten on the Phase 8 `Tabs` primitive (its real intended home, per that phase's
+   own notes) — each `Tabs.Tab` renders AS a real `next/link` via Base UI's `render`
+   composition prop, so navigation/prefetch stay ordinary browser behavior; the cookie
+   write happens in the same click. List/calendar containers got the `bg-card
+shadow-card` tokens (not the literal `<Card>` component, which sets
+   `overflow-hidden` — these containers need `overflow-x-auto` for wide content).
+7. **E2E**: `e2e/monthly.spec.ts` — ad-hoc creation moved to the quick-add sheet ("New
+   entry: add then delete"); new one-tap mark-paid test (list view, verified via a DB
+   poll — the amount input is deliberately uncontrolled, so its `defaultValue` doesn't
+   re-apply after a same-instance revalidation, the same reason the pre-existing
+   "generate, enter an actual" test already polls the DB instead of re-reading the
+   input); new Dec->Jan chevron test; new cookie-vs-URL-param precedence test. `e2e/
+mobile.spec.ts` gained a new describe block: agenda-default-view test, and a FAB ->
+   Drawer -> quick-add -> one-tap-mark-paid test (touch events, DB-verified). `e2e/
+phase4.spec.ts`'s ad-hoc-entry step repointed at the quick-add sheet.
+8. **Adversarial pass, and a real naming bug found live (not by the test suite as
+   written, but by watching it fail):** the very first version of the quick-add
+   trigger's label was "Quick add" — the full local E2E gate passed lint/typecheck/
+   unit/integration/build, but the FIRST E2E run against a real production build broke
+   a pre-existing, untouched test (`categories.spec.ts`'s bank-account create/delete
+   flow, `getByRole('button', { name: 'Add' }).last()`): Playwright's role-name
+   matching is a case-insensitive SUBSTRING match by default, not exact, so "Quick add"
+   silently satisfied that query too — and since this trigger is mounted on EVERY
+   `(app)` page via the layout, appearing AFTER each page's own main content in DOM
+   order, it became the new `.last()` match everywhere a pre-existing test relied on
+   positional disambiguation among "Add"-ish buttons (categories, recurring, phase4).
+   Root-caused by re-running the failing spec and reading the "element not found"
+   error carefully (the account was never created — clicking `.last()` had silently
+   opened the quick-add sheet instead of submitting the account form). Fixed by
+   renaming the trigger to "New entry" (shares no substring with "Add" in any form)
+   and confirmed via two full, clean local E2E runs (64/64 both times) after rebuilding
+   — the stale build from before the rename was the reason a first re-run attempt
+   still showed the old failure, a reminder to always rebuild after a source change
+   before trusting a fresh E2E run. Cookie/URL precedence, cross-year chevrons, and
+   Dialog-vs-Drawer breakpoint switching were all exercised both by the committed E2E
+   suite and by a separate live-verification pass (below). Full local gate green;
+   commit.
+
+**A live-verification finding that turned out to be a test-harness artifact, not a
+product bug (logged for honesty, not swept under the rug):** a throwaway script
+driving the real production server directly (same method as Phases 8-9's own
+adversarial passes) initially appeared to show the day-sheet's mark-paid action
+updating the UI ("Paid" label, sheet stays open) without the database reflecting the
+new `actualAmount` even after several seconds of polling from the SAME script. Chased
+across several isolated repros: first ruled out an ambiguous-target theory (a day with
+TWO unpaid entries sharing it, one already seeded — confirmed real via a genuine
+Playwright strict-mode violation the investigation surfaced, and a legitimate scenario
+the product itself handles correctly via one distinct button per entry); then ruled out
+duplicate rows (confirmed exactly one row exists per test entry). The anomaly remained
+intermittent and NOT reproducible via the properly-engineered, `expect.poll`-based
+committed E2E suite (which passed cleanly twice in full), nor via most of several
+otherwise-identical manual repros (which succeeded, DB correctly updated, most of the
+time) — only a minority of quick, freshly-spun-up one-off script invocations against
+Neon's serverless Postgres showed the delay. Most likely explanation: connection/
+read-latency specific to a brand-new script process establishing its own fresh
+Postgres connection each run, as opposed to the actual Next.js server's warm, pooled
+connection real users hit — not a deterministic defect in `markPaidAction` itself.
+Flagged honestly rather than either hand-waved away or over-claimed as a fixed bug:
+the mechanism is verified correct by the authoritative, repeatable signal (the
+committed E2E suite, twice clean) and by a majority of direct manual repros; a lingering,
+narrow possibility of a genuine intermittent issue under real Neon connection pressure
+is not fully ruled out to 100% certainty within this phase's time budget.
+
+**Deviations from the literal plan, logged rather than silent:**
+
+1. `quick-add.tsx` lives at `app/(app)/quick-add.tsx`, not nested under `monthly/` —
+   the plan's literal "rename/refactor adhoc-form.tsx -> quick-add.tsx" wording
+   suggested keeping its old location, but since it's now mounted globally in
+   `app/(app)/layout.tsx` (the parent of every route, not just `/monthly`), its real
+   home is alongside the layout that owns it.
+2. The desktop quick-add trigger and the Fab are both labeled "New entry", not
+   anything containing "Add" — see the naming-collision bug above; a deliberate,
+   debugged departure from the plan's own "+ Add" sketch.
+3. `addAdhocAction`'s budgeted-amount default when left blank now mirrors a given
+   actual amount (rather than defaulting to 0) — a small, deliberate UX fix
+   enabled by quick-add's new single-primary-amount-field design, not present in the
+   old two-box adhoc-form.tsx and not explicitly called for by the plan, but directly
+   serving its "Amount (actual)" primary-field framing.
+4. Card surfaces use the `bg-card`/`shadow-card` tokens directly rather than the
+   `<Card>` component itself, for containers that need `overflow-x-auto` (the `<Card>`
+   component sets `overflow-hidden`, which would clip horizontal scrolling on the wide
+   calendar grid/list tables).
+
+**Test/CI status:** Unit 461/461 (up from 444 — new `entryPaidState`/`monthNav`/
+cookie-aware `parseViewParam` tests). Integration 264/264 (up from 260 — new
+`addAdhocAction` `actualDate`/budgeted-mirroring tests). Coverage: 99.44% statements /
+97.58% branches / 99.32% functions / 99.84% lines on the gated `lib/**` scope (gate is
+80%; every new pure function is 100%-covered by its own direct tests). E2E 64/64 (up
+from 59), the final run executed with `CI=true` against a real `next build && next
+start` — the exact settings GitHub Actions uses — run twice back-to-back clean after
+the naming-collision fix, plus once more after the final `npm run format` pass and
+rebuild. Lint/typecheck/format all clean (`npm run format` reformatted 8 files on its
+one substantive run this phase, all whitespace-only; `npm run format:check` clean
+afterward).
+
+**Live verification (real, not assumed):** a throwaway script drove the running
+production server directly (same method as Phases 8-9): confirmed a garbage/`<script>`
+`fintrack_view` cookie value renders `/monthly` at 200 (not a crash) and falls back to
+the agenda tab (`data-active` present on it, confirmed via a real DOM read, not test
+mocks); confirmed the Dec 2026 -> Jan 2027 chevron navigates and updates the header
+text live; confirmed clicking a calendar day cell with real seeded/generated entries
+opens the day sheet (Base UI `Dialog` at desktop width, `Drawer` at a 390px/Pixel-7
+viewport), that mark-paid inside it updates the row and the sheet stays open, and that
+Escape closes it; confirmed the mobile FAB ("New entry") is the only such trigger
+reachable in the accessibility tree at that viewport (the desktop button is
+`display:none` there) and opens a Drawer, not a Dialog. See the live-verification
+finding above for the one anomaly this pass surfaced and its investigation.
+
+**Deferred / not done:** Nothing from this phase's own task list. Phase 11 (Plan/
+Goals/Settings/Import restyle, PWA refresh) remains not started, per the plan's own
+phase boundaries.
 
 ### Phase 11 — Plan/Goals/Settings/Import restyle + polish + PWA refresh (not started)
 

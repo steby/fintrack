@@ -35,6 +35,7 @@ test.describe('monthly entries', () => {
   // idempotency check unexpectedly counting leftover rows from a prior E2E run).
   const renamedItemName = `${itemName} propagated`;
   const adhocName = `E2E Adhoc ${Date.now()}`;
+  const markPaidName = `E2E MarkPaid ${Date.now()}`;
   const categoryName = `E2E Monthly Category ${Date.now()}`;
 
   test.beforeAll(async () => {
@@ -79,6 +80,7 @@ test.describe('monthly entries', () => {
       .delete(recurringSchedule)
       .where(inArray(recurringSchedule.item, [itemName, renamedItemName]));
     await testDb.delete(monthlyEntries).where(eq(monthlyEntries.item, adhocName));
+    await testDb.delete(monthlyEntries).where(eq(monthlyEntries.item, markPaidName));
     await testDb.delete(categories).where(eq(categories.name, categoryName));
     await testDb.delete(users).where(eq(users.email, VIEWER_EMAIL));
     await closeTestDb();
@@ -221,7 +223,12 @@ test.describe('monthly entries', () => {
   // one that failed when Dependabot PR #9 (react-dom bump) tipped it over 30s.
   // Standalone, it gets its own full budget instead of inheriting timing pressure from
   // everything that ran before it in that test.
-  test('ad-hoc entry: add then delete', async ({ page }) => {
+  //
+  // Phase 10: ad-hoc creation now goes through the GLOBAL quick-add sheet (the "Quick
+  // add" header button at this desktop viewport — quick-add.tsx's Fab is the
+  // md:hidden counterpart, covered separately by e2e/mobile.spec.ts), not a per-page
+  // "Ad-hoc entry" button/form (that component, adhoc-form.tsx, no longer exists).
+  test('quick add: add then delete', async ({ page }) => {
     await page.goto('/login');
     await page.getByLabel('Email').fill(OWNER_EMAIL);
     await page.getByLabel('Password').fill(OWNER_PASSWORD);
@@ -229,8 +236,8 @@ test.describe('monthly entries', () => {
     await expect(page).toHaveURL('/');
 
     await page.goto(currentMonthUrl());
-    await page.getByRole('button', { name: 'Ad-hoc entry' }).click();
-    await page.getByPlaceholder('e.g. Car Repair').fill(adhocName);
+    await page.getByRole('button', { name: 'New entry' }).click();
+    await page.getByTestId('quick-add-form').getByPlaceholder('e.g. Car Repair').fill(adhocName);
     await page.getByRole('button', { name: 'Add entry' }).click();
     const adhocRow = page.getByTestId('entry-row').filter({ hasText: adhocName });
     await expect(adhocRow).toBeVisible();
@@ -238,6 +245,110 @@ test.describe('monthly entries', () => {
 
     await adhocRow.getByRole('button', { name: 'Delete' }).click();
     await expect(page.getByTestId('entry-row').filter({ hasText: adhocName })).toHaveCount(0);
+  });
+
+  // Phase 10: one-tap mark-paid, exercised through list view's compact inline button
+  // (entry-row.tsx). Verified against the REAL DB, not the amount input's own value —
+  // that input is deliberately uncontrolled (see the load-bearing onBlur comment in
+  // entry-row.tsx), so its `defaultValue` does NOT re-apply after a server round trip
+  // that revalidates the SAME component instance (React keeps the existing DOM node
+  // since `key={entry.id}` is unchanged); the "generate, enter an actual..." test above
+  // already established this exact pattern (DB poll, not toHaveValue) for the same
+  // reason. What DOES reliably reflect fresh server state is a conditionally-rendered
+  // element like the MarkPaidButton itself (entry-row.tsx only renders it when
+  // `entry.actualAmount === null`, re-evaluated fresh on every render) — asserting it
+  // disappears is a real, non-uncontrolled-input signal, used alongside the DB poll.
+  test('one-tap mark-paid sets actual = budgeted, and the button disappears once paid', async ({
+    page,
+  }) => {
+    await page.goto('/login');
+    await page.getByLabel('Email').fill(OWNER_EMAIL);
+    await page.getByLabel('Password').fill(OWNER_PASSWORD);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL('/');
+
+    // Quick-add's primary "Amount" field is actualAmount; leaving it blank and setting
+    // ONLY the "More options" budgeted amount produces a genuinely unpaid forecast row
+    // (actualAmount null) with a real, non-zero budgetedAmount to mark paid against.
+    await page.goto(currentMonthUrl());
+    await page.getByRole('button', { name: 'New entry' }).click();
+    const sheet = page.getByTestId('quick-add-form');
+    await sheet.getByPlaceholder('e.g. Car Repair').fill(markPaidName);
+    await sheet.getByRole('button', { name: 'More options' }).click();
+    await sheet.locator('input[name="budgetedAmount"]').fill('42.00');
+    await sheet.getByRole('button', { name: 'Add entry' }).click();
+
+    const row = page.getByTestId('entry-row').filter({ hasText: markPaidName });
+    await expect(row).toBeVisible();
+    const markPaidButton = row.getByRole('button', { name: 'Mark paid' });
+    await expect(markPaidButton).toBeVisible();
+
+    await markPaidButton.click();
+    await expect(markPaidButton).toHaveCount(0);
+
+    const persistedActual = async () => {
+      const [persisted] = await testDb
+        .select({ actualAmount: monthlyEntries.actualAmount })
+        .from(monthlyEntries)
+        .where(eq(monthlyEntries.item, markPaidName));
+      if (!persisted) throw new Error(`No monthly_entries row found for "${markPaidName}"`);
+      return persisted.actualAmount;
+    };
+    await expect.poll(persistedActual).toBe('42.00');
+  });
+
+  // Phase 10: `‹ July 2026 ›` chevrons crossing a year boundary — Dec's "next" chevron
+  // must land on January of the FOLLOWING year, not silently stay in the same year or
+  // wrap incorrectly (lib/domain/month-params.ts's monthNav, unit-tested in isolation;
+  // this confirms the real link renders and navigates correctly end to end).
+  test('month chevrons cross the year boundary (Dec -> Jan)', async ({ page }) => {
+    await page.goto('/login');
+    await page.getByLabel('Email').fill(OWNER_EMAIL);
+    await page.getByLabel('Password').fill(OWNER_PASSWORD);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL('/');
+
+    await page.goto('/monthly?year=2026&month=12&view=list');
+    await expect(page.getByTestId('month-header-label')).toHaveText('December 2026');
+
+    await page.getByTestId('month-nav-next').click();
+    await expect(page).toHaveURL(/year=2027&month=1&view=list/);
+    await expect(page.getByTestId('month-header-label')).toHaveText('January 2027');
+
+    await page.getByTestId('month-nav-prev').click();
+    await expect(page).toHaveURL(/year=2026&month=12&view=list/);
+  });
+
+  // Phase 10 trust boundary: the fintrack_view cookie is client-writable; the URL
+  // param must always win over it, even a stale/valid-but-different cookie value (not
+  // just outright garbage — the garbage/adversarial case is covered by
+  // lib/domain/month-params.test.ts's unit tests, which is the right layer for pure
+  // parsing logic; this confirms the real cookie read in page.tsx honors the same
+  // precedence end to end).
+  test('the view URL param wins over a stale fintrack_view cookie', async ({ page, context }) => {
+    await page.goto('/login');
+    await page.getByLabel('Email').fill(OWNER_EMAIL);
+    await page.getByLabel('Password').fill(OWNER_PASSWORD);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL('/');
+
+    await context.addCookies([
+      {
+        name: 'fintrack_view',
+        value: 'calendar',
+        url: new URL(page.url()).origin,
+      },
+    ]);
+
+    // currentMonthUrl() already pins view=list — the cookie says calendar, the URL says
+    // list; list must win. Scope to the view-toggle container (not a bare testid) per
+    // the plan's own Playwright strict-mode warning.
+    await page.goto(currentMonthUrl());
+    await expect(page.getByTestId('view-toggle')).toBeVisible();
+    await expect(page.getByTestId('view-toggle').getByTestId('view-toggle-list')).toHaveAttribute(
+      'data-active',
+      '',
+    );
   });
 
   // Split out from the mega-test above (previously tacked onto its tail) — this is a
@@ -269,8 +380,14 @@ test.describe('monthly entries', () => {
     await expect(page).toHaveURL('/');
 
     await page.goto(currentMonthUrl());
-    await expect(page.getByRole('button', { name: 'Ad-hoc entry' })).toHaveCount(0);
+    // Phase 10: the global quick-add trigger ("New entry" at this desktop viewport) is
+    // server-gated by canManage in app/(app)/layout.tsx — a viewer never gets it
+    // rendered at all, not merely hidden via CSS.
+    await expect(page.getByRole('button', { name: 'New entry' })).toHaveCount(0);
     await expect(page.locator('input[name="actualAmount"]')).toHaveCount(0);
+    // Nor the one-tap mark-paid button, even on an unpaid entry a prior test may have
+    // left behind — mark-paid is a write action same as any other.
+    await expect(page.getByRole('button', { name: 'Mark paid' })).toHaveCount(0);
   });
 
   test('an invalid amount is rejected with a visible error (spec.md Phase 2 failure-path requirement)', async ({
@@ -283,16 +400,20 @@ test.describe('monthly entries', () => {
     await expect(page).toHaveURL('/');
 
     await page.goto(currentMonthUrl());
-    await page.getByRole('button', { name: 'Ad-hoc entry' }).click();
-    await page.getByPlaceholder('e.g. Car Repair').fill(`E2E Invalid Amount ${Date.now()}`);
+    await page.getByRole('button', { name: 'New entry' }).click();
+    const sheet = page.getByTestId('quick-add-form');
+    await sheet.getByPlaceholder('e.g. Car Repair').fill(`E2E Invalid Amount ${Date.now()}`);
     // 11 digits — a syntactically valid HTML5 <input type="number"> value (so the
     // browser's own min/step constraint validation doesn't intercept the submission
     // before it reaches the server), but one that overflows numeric(12,2)'s 10-digit
     // integer-part limit, which addAdhocAction's zod schema now rejects gracefully
-    // instead of the Postgres "numeric field overflow" this used to crash with.
-    await page.getByPlaceholder('0.00').fill('99999999999');
-    await page.getByRole('button', { name: 'Add entry' }).click();
+    // instead of the Postgres "numeric field overflow" this used to crash with. Fills
+    // quick-add's PRIMARY "Amount" field (actualAmount), unlike the old adhoc-form.tsx
+    // version of this test, which filled the always-visible "Budgeted" field — the
+    // error text differs accordingly (actual, not budgeted).
+    await sheet.getByPlaceholder('0.00').fill('99999999999');
+    await sheet.getByRole('button', { name: 'Add entry' }).click();
 
-    await expect(page.getByText('Enter a valid, non-negative budgeted amount.')).toBeVisible();
+    await expect(sheet.getByText('Enter a valid, non-negative actual amount.')).toBeVisible();
   });
 });

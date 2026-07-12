@@ -220,6 +220,13 @@ const addAdhocSchema = z.object({
   categoryId: uuidOrEmpty,
   budgetedAmount: z.string().optional(),
   actualAmount: z.string().optional(),
+  // Optional (Phase 10's global quick-add — spec.md: "fields Item, Amount (actual),
+  // Category, Account, Date"): when a quick-add records something that already
+  // happened, the date it happened is worth capturing alongside the actual amount, the
+  // same pair updateActualAction already treats as a unit. Reuses dateInputSchema
+  // (below) rather than inventing a second date validator — same calendar-impossible-
+  // date rejection (e.g. "2026-02-30"), same empty-string-means-"no date" convention.
+  actualDate: dateInputSchema.optional(),
   bankAccountId: uuidOrEmpty,
   paidByUserId: uuidOrEmpty,
 });
@@ -237,6 +244,7 @@ export async function addAdhocAction(
     categoryId: formData.get('categoryId') || undefined,
     budgetedAmount: formData.get('budgetedAmount') || undefined,
     actualAmount: formData.get('actualAmount') || undefined,
+    actualDate: formData.get('actualDate') || undefined,
     bankAccountId: formData.get('bankAccountId') || undefined,
     paidByUserId: formData.get('paidByUserId') || undefined,
   });
@@ -244,13 +252,26 @@ export async function addAdhocAction(
     return { error: parsed.error.issues[0]?.message ?? 'Invalid entry.' };
   }
 
-  const budgeted = moneyInputSchema.safeParse(parsed.data.budgetedAmount || '0');
-  if (!budgeted.success) {
-    return { error: 'Enter a valid, non-negative budgeted amount.' };
-  }
   const actual = optionalMoneyInputSchema.safeParse(parsed.data.actualAmount || '');
   if (!actual.success) {
     return { error: 'Enter a valid, non-negative actual amount.' };
+  }
+  // Quick-add's primary flow (spec.md Phase 10) only exposes ONE visible "Amount" field
+  // (bound to actualAmount — logging something that already happened), with a
+  // budgeted-vs-actual split available only behind "More options". If that field is
+  // left blank while an actual amount WAS given, default budgeted to the same value
+  // rather than 0 — a quick-logged $50 lunch with no explicit budget shouldn't register
+  // as "$50 over budget" by default (entry-row.tsx's Difference column would otherwise
+  // show a misleading swing for the common case). Leaving BOTH amount fields blank
+  // still defaults budgeted to 0, unchanged from the original ad-hoc-form behavior (a
+  // pure, not-yet-happened forecast row with nothing spent yet).
+  const budgetedRaw =
+    parsed.data.budgetedAmount ||
+    (actual.data !== null ? parsed.data.actualAmount : undefined) ||
+    '0';
+  const budgeted = moneyInputSchema.safeParse(budgetedRaw);
+  if (!budgeted.success) {
+    return { error: 'Enter a valid, non-negative budgeted amount.' };
   }
   // Rejected server-side regardless of whether the UI hides the field when the flag is
   // off (same pattern as categories.ts's monthlyBudget gate) — a forged form submission
@@ -286,6 +307,7 @@ export async function addAdhocAction(
     categoryId: category.value,
     budgetedAmount: centsToAmount(budgeted.data),
     actualAmount: actual.data === null ? null : centsToAmount(actual.data),
+    actualDate: parsed.data.actualDate ? parsed.data.actualDate : null,
     bankAccountId: account.value,
     paidByUserId: paidBy.value,
   });

@@ -1,3 +1,5 @@
+import type { PaidState } from '../../../lib/domain/entries';
+
 export interface MonthlyEntryRow {
   id: string;
   item: string;
@@ -13,4 +15,9 @@ export interface MonthlyEntryRow {
   categoryDirection: 'income' | 'expense' | null;
   accountName: string | null;
   scheduledDay: number | null;
+  // Phase 10: computed once, server-side, by page.tsx via lib/domain/entries.ts's
+  // entryPaidState — the ONE classifier all three views (calendar, agenda, list) share,
+  // so calendar/agenda/entry-row never need their own copy of "what does overdue mean"
+  // or a raw `today` Date crossing the server/client boundary just to recompute it.
+  paidState: PaidState;
 }

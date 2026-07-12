@@ -51,6 +51,40 @@ export async function resolveOptionalRef(
   return { ok: true, value: raw };
 }
 
+export interface EntryFormOptions {
+  categories: { id: string; name: string; direction: 'income' | 'expense' }[];
+  accounts: { id: string; name: string }[];
+  members: { id: string; name: string }[];
+}
+
+// Powers both the Monthly page's list-view category filter context and, as of Phase 10,
+// the GLOBAL quick-add sheet mounted in app/(app)/layout.tsx — extracted from what used
+// to be three inline queries duplicated only inside app/(app)/monthly/page.tsx, since
+// quick-add now needs the exact same three option lists on EVERY page, not just
+// /monthly. Same ordering (category direction then sortOrder; account sortOrder) the
+// old inline version used, so the select dropdowns' item order doesn't change for
+// existing users.
+export async function getEntryFormOptions(householdId: string): Promise<EntryFormOptions> {
+  const [categoryRows, accountRows, memberRows] = await Promise.all([
+    db
+      .select({ id: categories.id, name: categories.name, direction: categories.direction })
+      .from(categories)
+      .where(eq(categories.householdId, householdId))
+      .orderBy(categories.direction, categories.sortOrder),
+    db
+      .select({ id: bankAccounts.id, name: bankAccounts.name })
+      .from(bankAccounts)
+      .where(eq(bankAccounts.householdId, householdId))
+      .orderBy(bankAccounts.sortOrder),
+    db
+      .select({ id: users.id, name: users.name })
+      .from(users)
+      .where(eq(users.householdId, householdId)),
+  ]);
+
+  return { categories: categoryRows, accounts: accountRows, members: memberRows };
+}
+
 // Warning (not truncating) ceiling for the two "every entry ever" queries below
 // (getAccountEntriesBeforeYear, getExportRows) — spec.md Phase 7 calls for "pagination
 // caps on list queries", but both of these are correctness-critical: one feeds a

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { formatSGD } from '../../../lib/format';
 import { parseAmountToCents } from '../../../lib/money';
 import { getDifference } from '../../../lib/domain/entries';
+import { MarkPaidButton } from '../home/mark-paid-button';
 import type { MonthlyEntryRow } from './types';
 
 export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canManage: boolean }) {
@@ -102,51 +103,69 @@ export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canMana
       </td>
       <td className="p-2 text-right">
         {canManage ? (
-          <form action={actualAction} className="flex flex-col items-end gap-1">
-            <input type="hidden" name="id" value={entry.id} />
-            <input
-              type="number"
-              name="actualAmount"
-              step="0.01"
-              min="0"
-              placeholder="—"
-              defaultValue={entry.actualAmount ?? ''}
-              disabled={actualPending}
-              className="h-9 w-24 rounded border bg-background px-1.5 text-right text-sm tabular-nums"
-              // Commit on blur, not on every keystroke — React's onChange fires per
-              // character (it's wired to the native "input" event), which combined with
-              // disabled={actualPending} would submit mid-typing and eat keystrokes typed
-              // while a prior submission is still in flight. onBlur + explicit Enter/Esc
-              // handling matches the reference app's native onchange (fires on blur/commit
-              // only) and spec.md's "keyboard-friendly: Enter saves, Esc cancels."
-              onBlur={(e) => e.currentTarget.form?.requestSubmit()}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.currentTarget.form?.requestSubmit();
-                } else if (e.key === 'Escape') {
-                  e.currentTarget.value = entry.actualAmount ?? '';
-                  e.currentTarget.blur();
-                }
-              }}
-            />
-            <input
-              type="date"
-              name="actualDate"
-              defaultValue={entry.actualDate ?? ''}
-              disabled={actualPending}
-              aria-label="Actual date"
-              className="h-9 w-32 rounded border bg-background px-1.5 text-right text-xs tabular-nums"
-              onBlur={(e) => e.currentTarget.form?.requestSubmit()}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.currentTarget.form?.requestSubmit();
-                } else if (e.key === 'Escape') {
-                  e.currentTarget.value = entry.actualDate ?? '';
-                  e.currentTarget.blur();
-                }
-              }}
-            />
-          </form>
+          // The <form> below is the load-bearing inline actual-entry keyboard flow
+          // (Enter saves, Escape reverts, blur commits — see the onBlur comment on the
+          // amount input) — preserved verbatim, not restructured. This wrapping div only
+          // adds a sibling "Mark paid" one-tap button beside it for still-unpaid rows
+          // (spec.md Phase 10), reusing the same MarkPaidButton/markPaidAction pattern
+          // Home's upcoming list already uses, not a second implementation.
+          <div className="flex flex-col items-end gap-1">
+            <form action={actualAction} className="flex flex-col items-end gap-1">
+              <input type="hidden" name="id" value={entry.id} />
+              <input
+                type="number"
+                name="actualAmount"
+                step="0.01"
+                min="0"
+                placeholder="—"
+                defaultValue={entry.actualAmount ?? ''}
+                disabled={actualPending}
+                className="h-9 w-24 rounded border bg-background px-1.5 text-right text-sm tabular-nums"
+                // Commit on blur, not on every keystroke — React's onChange fires per
+                // character (it's wired to the native "input" event), which combined with
+                // disabled={actualPending} would submit mid-typing and eat keystrokes typed
+                // while a prior submission is still in flight. onBlur + explicit Enter/Esc
+                // handling matches the reference app's native onchange (fires on blur/commit
+                // only) and spec.md's "keyboard-friendly: Enter saves, Esc cancels."
+                onBlur={(e) => e.currentTarget.form?.requestSubmit()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.currentTarget.form?.requestSubmit();
+                  } else if (e.key === 'Escape') {
+                    e.currentTarget.value = entry.actualAmount ?? '';
+                    e.currentTarget.blur();
+                  }
+                }}
+              />
+              <input
+                type="date"
+                name="actualDate"
+                defaultValue={entry.actualDate ?? ''}
+                disabled={actualPending}
+                aria-label="Actual date"
+                className="h-9 w-32 rounded border bg-background px-1.5 text-right text-xs tabular-nums"
+                onBlur={(e) => e.currentTarget.form?.requestSubmit()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.currentTarget.form?.requestSubmit();
+                  } else if (e.key === 'Escape') {
+                    e.currentTarget.value = entry.actualDate ?? '';
+                    e.currentTarget.blur();
+                  }
+                }}
+              />
+            </form>
+            {entry.actualAmount === null && (
+              <MarkPaidButton
+                entryId={entry.id}
+                item={entry.item}
+                amountCents={budgetedCents}
+                size="xs"
+                variant="ghost"
+                className="text-muted-foreground"
+              />
+            )}
+          </div>
         ) : (
           <div className="flex flex-col items-end gap-0.5">
             <span className="tabular-nums">
@@ -161,13 +180,7 @@ export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canMana
       </td>
       <td className="p-2 text-right tabular-nums">
         {difference ? (
-          <span
-            className={
-              difference.favorable
-                ? 'text-emerald-600 dark:text-emerald-400'
-                : 'text-red-600 dark:text-red-400'
-            }
-          >
+          <span className={difference.favorable ? 'text-income' : 'text-expense'}>
             {difference.favorable ? '+' : ''}
             {formatSGD(difference.cents)}
           </span>

@@ -1,3 +1,6 @@
+import { daysInMonth } from './reminders';
+import { utcDaysBetween } from './today';
+
 export interface PropagationCandidate {
   actualCents: number | null;
   actualDate: string | null;
@@ -41,4 +44,53 @@ export function getDifference(entry: DifferenceInput): Difference | null {
       ? entry.actualCents - entry.budgetedCents
       : entry.budgetedCents - entry.actualCents;
   return { cents, favorable: cents >= 0 };
+}
+
+export type PaidState = 'paid' | 'overdue' | 'upcoming' | 'unscheduled';
+
+export interface PaidStateCandidate {
+  actualAmount: string | null;
+  // From the linked recurring_schedule row (or null for an ad-hoc entry, or a recurring
+  // item with no fixed day) — same "no known due day" shape as
+  // lib/domain/affordability.ts's UpcomingEntryCandidate/reminders.ts's
+  // UpcomingBillCandidate, kept as its own separate field name (not imported from
+  // either) since this classifier is Monthly-view-specific: unlike affordability.ts, it
+  // classifies EVERY entry across every month a view happens to render, not just a
+  // forward-looking window from "today."
+  actualDateDay: number | null;
+  year: number;
+  month: number;
+}
+
+// The ONE paid/overdue/upcoming/unscheduled classifier shared by all three Monthly
+// views (calendar, agenda, list — spec.md Phase 10: "paid/upcoming/overdue state
+// visible in calendar AND agenda views... mark-paid available in all three"), so the
+// three views can never silently disagree about what "overdue" means. Deliberately
+// broader than lib/domain/affordability.ts's selectUpcomingItems: that module only ever
+// looks at the current + next month within a forward horizon (Home's forecast), while
+// this classifies a single entry from WHATEVER month a Monthly-page view happens to be
+// showing right now, including past months (an unpaid entry from three months ago is
+// still "overdue," not silently reclassified as something else just because it's out of
+// affordability.ts's horizon window).
+export function entryPaidState(entry: PaidStateCandidate, today: Date): PaidState {
+  // Paid beats everything else, regardless of due day/date — an entry with an actual
+  // amount recorded already happened; it can never also be "overdue" or "upcoming."
+  if (entry.actualAmount !== null) return 'paid';
+  if (entry.actualDateDay === null) return 'unscheduled';
+
+  // Month-end clamping for a configured day that doesn't exist in a shorter month (e.g.
+  // day 31 in February) — same rule as reminders.ts's clampedDueDate and
+  // affordability.ts's own copy of it; daysInMonth is the one shared primitive all three
+  // clamp through.
+  const clampedDay = Math.min(entry.actualDateDay, daysInMonth(entry.year, entry.month));
+  const dueDate = new Date(Date.UTC(entry.year, entry.month - 1, clampedDay));
+  const daysUntilDue = utcDaysBetween(today, dueDate);
+
+  // Due exactly today is "upcoming," not "overdue" (daysUntilDue < 0, not <= 0) — a bill
+  // due today hasn't been missed yet. Unlike affordability.ts's selectUpcomingItems,
+  // "overdue" here is NOT restricted to the current calendar month: a still-unpaid entry
+  // from any past month a view happens to render is just as overdue as one from this
+  // month, since this classifier's job is "what does THIS entry look like," not "what
+  // belongs in a forward-looking forecast window."
+  return daysUntilDue < 0 ? 'overdue' : 'upcoming';
 }

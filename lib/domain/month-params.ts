@@ -5,6 +5,7 @@
 // a malformed URL should render the current month, not 500.
 
 import { currentYearMonth } from './today';
+import { addMonths, type YearMonth } from './recurring';
 
 export type ViewMode = 'calendar' | 'agenda' | 'list';
 
@@ -33,11 +34,39 @@ export function parseMonthParam(raw: RawParam): number {
   return n;
 }
 
-export function parseViewParam(raw: RawParam): ViewMode {
+function isViewMode(value: string | undefined): value is ViewMode {
+  return value === 'calendar' || value === 'agenda' || value === 'list';
+}
+
+// Phase 10 (spec.md): the URL param wins when present and valid; otherwise a
+// `fintrack_view` cookie value is used, IF it's valid; otherwise the default is
+// `'agenda'` — this changed from `'calendar'` (Phase 2's original default) because
+// there's no way to know a request's viewport server-side, and agenda is the one view
+// that reads acceptably at any width without a client round-trip to correct it (a
+// desktop user who prefers the calendar grid is one click away, and that choice then
+// sticks via the cookie). `cookieValue` is a client-writable trust boundary exactly
+// like `raw` (view-toggle.tsx's own comment explains why a plain document.cookie write
+// is acceptable for this non-sensitive UI preference) — both are parsed through the
+// same `isViewMode` allowlist, so a forged/garbage cookie can never do worse than fall
+// back to the documented default, never propagate into a query or crash.
+export function parseViewParam(raw: RawParam, cookieValue?: string): ViewMode {
   const value = firstValue(raw);
-  if (value === 'agenda') return 'agenda';
-  if (value === 'list') return 'list';
-  return 'calendar';
+  if (isViewMode(value)) return value;
+  if (isViewMode(cookieValue)) return cookieValue;
+  return 'agenda';
+}
+
+// Trivial prev/next wrapper around lib/domain/recurring.ts's addMonths (already
+// property-tested there for year-boundary correctness in both directions) — exists so
+// month-header.tsx doesn't hand-roll its own "month +/- 1, roll over the year" math, and
+// so a Dec<->Jan chevron click is provably using the exact same rollover logic the
+// generate/auto-generate windows already rely on, not a second, independently-written
+// copy of it.
+export function monthNav(year: number, month: number): { prev: YearMonth; next: YearMonth } {
+  return {
+    prev: addMonths({ year, month }, -1),
+    next: addMonths({ year, month }, 1),
+  };
 }
 
 // Shared by app/actions/monthly.ts's dateInputSchema and lib/domain/csv.ts's

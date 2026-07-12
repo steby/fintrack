@@ -1,7 +1,10 @@
 import 'dotenv/config';
 import { test, expect, devices } from '@playwright/test';
+import { eq } from 'drizzle-orm';
 import { requireEnv } from './env';
 import { login } from './login';
+import { createTestDb } from './test-db';
+import { monthlyEntries } from '../lib/db/schema';
 
 // spec.md Phase 7: "mobile-viewport Playwright run of core flows." Scoped to this one
 // file via test.use (not a whole new Playwright project in playwright.config.ts) — the
@@ -67,5 +70,77 @@ test.describe('mobile viewport: core flows', () => {
     // The login form itself must render usably at this viewport (a real failure mode
     // this guards against: a layout regression that only breaks below md).
     await expect(page.getByLabel('Email')).toBeVisible();
+  });
+});
+
+// Phase 10: the global quick-add FAB (mobile's ONLY entry point to ad-hoc entry — the
+// desktop "New entry" header button is `md:hidden`'s complement) and the
+// agenda-by-default view preference. A separate describe block (own item name +
+// cleanup) rather than folding into the block above — these tests create real
+// monthly_entries rows the read-only nav tests above don't.
+test.describe('mobile viewport: quick-add FAB and agenda default', () => {
+  const { db: testDb, close: closeTestDb } = createTestDb();
+  const fabItemName = `E2E Mobile FAB ${Date.now()}`;
+
+  test.afterAll(async () => {
+    await testDb.delete(monthlyEntries).where(eq(monthlyEntries.item, fabItemName));
+    await closeTestDb();
+  });
+
+  test('agenda is the default Monthly view with no view param and no cookie', async ({ page }) => {
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
+    await page.goto('/monthly');
+    await expect(page.getByTestId('view-toggle').getByTestId('view-toggle-agenda')).toHaveAttribute(
+      'data-active',
+      '',
+    );
+  });
+
+  test('the FAB opens a bottom Drawer sheet; quick-add + one-tap mark-paid both work by touch', async ({
+    page,
+  }) => {
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
+    await page.goto('/monthly');
+
+    // aria-label="New entry" (quick-add.tsx's Fab) — deliberately NOT "Add entry"/
+    // "Add"/"Quick add"; this component is mounted on EVERY (app) page and a label
+    // sharing the substring "add" broke a real, pre-existing E2E test elsewhere (see
+    // quick-add.tsx's own comment). The desktop "New entry" button has `display:none`
+    // below md (and vice versa above md), so exactly one of the two is ever reachable
+    // via role queries at a given viewport regardless.
+    const fab = page.getByRole('button', { name: 'New entry' });
+    await expect(fab).toBeVisible();
+    await fab.tap();
+
+    const sheet = page.getByTestId('quick-add-form');
+    await expect(sheet).toBeVisible();
+    await sheet.getByPlaceholder('e.g. Car Repair').fill(fabItemName);
+    // Leave the primary Amount field blank and set a budgeted amount via "More
+    // options" — a real unpaid forecast row to exercise mark-paid against, same shape
+    // as e2e/monthly.spec.ts's desktop equivalent.
+    await sheet.getByRole('button', { name: 'More options' }).tap();
+    await sheet.locator('input[name="budgetedAmount"]').fill('15.00');
+    await sheet.getByRole('button', { name: 'Add entry' }).tap();
+
+    // Ad-hoc, no scheduled day -> agenda's "No scheduled day" section, rendered as an
+    // AgendaRow (calendar-view.tsx) with an inline Mark paid button for unpaid rows.
+    const row = page.getByTestId('agenda-entry-row').filter({ hasText: fabItemName });
+    await expect(row).toBeVisible();
+    const markPaidButton = row.getByRole('button', { name: 'Mark paid' });
+    await expect(markPaidButton).toBeVisible();
+    await markPaidButton.tap();
+    await expect(markPaidButton).toHaveCount(0);
+
+    // Verified against the real DB, not a re-read of any uncontrolled input's value —
+    // see e2e/monthly.spec.ts's equivalent desktop test for why that's the right check.
+    const persistedActual = async () => {
+      const [persisted] = await testDb
+        .select({ actualAmount: monthlyEntries.actualAmount })
+        .from(monthlyEntries)
+        .where(eq(monthlyEntries.item, fabItemName));
+      if (!persisted) throw new Error(`No monthly_entries row found for "${fabItemName}"`);
+      return persisted.actualAmount;
+    };
+    await expect.poll(persistedActual).toBe('15.00');
   });
 });

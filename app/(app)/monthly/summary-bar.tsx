@@ -1,5 +1,13 @@
+import { Stat } from '@/components/ui/stat';
 import { formatSGD } from '../../../lib/format';
 
+// Phase 10 restyle (spec.md task 6: "6 figures -> income/expense/net trio with money
+// tokens"): the old layout showed budgeted/actual as 6 separate flat figures; this
+// collapses each pair into one Stat (actual as the headline, budgeted as the sub-line)
+// and colors them via the semantic --income/--expense/--warning tokens instead of the
+// emerald/red Tailwind literals the pre-redesign version used — this page's own
+// retirement of that older convention (see app/globals.css's Phase 8 comment: "retired
+// page-by-page... through Phase 11").
 export function SummaryBar({
   budgetedIncomeCents,
   actualIncomeCents,
@@ -14,38 +22,29 @@ export function SummaryBar({
   const netBudgeted = budgetedIncomeCents - budgetedExpenseCents;
   const netActual = actualIncomeCents - actualExpenseCents;
 
-  const emerald = 'text-emerald-600 dark:text-emerald-400';
-  const red = 'text-red-600 dark:text-red-400';
-
-  const items: { label: string; cents: number; positiveClass?: string }[] = [
-    { label: 'Budgeted income', cents: budgetedIncomeCents, positiveClass: emerald },
-    { label: 'Actual income', cents: actualIncomeCents, positiveClass: emerald },
-    { label: 'Budgeted expense', cents: budgetedExpenseCents, positiveClass: red },
-    { label: 'Actual expense', cents: actualExpenseCents, positiveClass: red },
-    {
-      label: 'Net budgeted',
-      cents: netBudgeted,
-      positiveClass: netBudgeted >= 0 ? emerald : red,
-    },
-    {
-      label: 'Net actual',
-      cents: netActual,
-      positiveClass: netActual >= 0 ? emerald : red,
-    },
-  ];
-
   return (
-    <div className="flex flex-wrap items-center gap-6 rounded-md border p-4">
-      {items.map((item) => (
-        <div key={item.label} className="flex flex-col gap-0.5">
-          <span className="text-[0.65rem] font-medium tracking-wide text-muted-foreground uppercase">
-            {item.label}
-          </span>
-          <span className={`font-semibold tabular-nums ${item.positiveClass ?? ''}`}>
-            {formatSGD(item.cents)}
-          </span>
-        </div>
-      ))}
+    <div
+      data-testid="summary-bar"
+      className="grid grid-cols-1 gap-4 rounded-2xl border bg-card p-4 shadow-card sm:grid-cols-3"
+    >
+      <Stat
+        label="Income"
+        value={formatSGD(actualIncomeCents)}
+        subLine={`Budgeted ${formatSGD(budgetedIncomeCents)}`}
+        tone="income"
+      />
+      <Stat
+        label="Expenses"
+        value={formatSGD(actualExpenseCents)}
+        subLine={`Budgeted ${formatSGD(budgetedExpenseCents)}`}
+        tone="expense"
+      />
+      <Stat
+        label="Net"
+        value={formatSGD(netActual)}
+        subLine={`Budgeted ${formatSGD(netBudgeted)}`}
+        tone={netActual >= 0 ? 'income' : 'expense'}
+      />
     </div>
   );
 }

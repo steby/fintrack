@@ -258,6 +258,98 @@ describe('addAdhocAction', () => {
     await cleanup(member.household.id);
   });
 
+  // Phase 10: the global quick-add sheet's primary flow logs something that already
+  // happened (item + actual amount + date), not just a forecast row — addAdhocSchema
+  // gained an optional actualDate field for exactly this, reusing dateInputSchema's
+  // existing calendar-validity check rather than a second date validator.
+  it('records an actualDate when the quick-add form supplies one', async () => {
+    const { addAdhocAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Monthly adhoc quick-add A');
+
+    mockToken = member.token;
+    const result = await addAdhocAction(
+      undefined,
+      formData({
+        year: '2026',
+        month: '3',
+        item: 'Lunch',
+        actualAmount: '12.50',
+        actualDate: '2026-03-15',
+      }),
+    );
+
+    expect(result).toEqual({ success: true });
+    const [entry] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.householdId, member.household.id));
+    // budgetedAmount mirrors actualAmount when left blank (see addAdhocAction's own
+    // comment) — a quick-logged transaction with no explicit budget shouldn't register
+    // as wildly over/under budget by default.
+    expect(entry).toMatchObject({
+      actualAmount: '12.50',
+      actualDate: '2026-03-15',
+      budgetedAmount: '12.50',
+    });
+
+    await cleanup(member.household.id);
+  });
+
+  it('still defaults budgetedAmount to 0 when BOTH amount fields are left blank (unchanged behavior)', async () => {
+    const { addAdhocAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Monthly adhoc quick-add D');
+
+    mockToken = member.token;
+    await addAdhocAction(undefined, formData({ year: '2026', month: '3', item: 'Placeholder' }));
+
+    const [entry] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.householdId, member.household.id));
+    expect(entry.budgetedAmount).toBe('0.00');
+
+    await cleanup(member.household.id);
+  });
+
+  it('leaves actualDate null when none is supplied (a plain forecast row, unchanged behavior)', async () => {
+    const { addAdhocAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Monthly adhoc quick-add B');
+
+    mockToken = member.token;
+    await addAdhocAction(
+      undefined,
+      formData({ year: '2026', month: '3', item: 'Car Repair', budgetedAmount: '250.00' }),
+    );
+
+    const [entry] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.householdId, member.household.id));
+    expect(entry.actualDate).toBeNull();
+
+    await cleanup(member.household.id);
+  });
+
+  it('rejects a calendar-impossible actualDate instead of silently rolling it over (adversarial)', async () => {
+    const { addAdhocAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Monthly adhoc quick-add C');
+
+    mockToken = member.token;
+    const result = await addAdhocAction(
+      undefined,
+      formData({ year: '2026', month: '3', item: 'Lunch', actualDate: '2026-02-30' }),
+    );
+    expect(result).toEqual({ error: 'Enter a valid date (YYYY-MM-DD)' });
+
+    const rows = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.householdId, member.household.id));
+    expect(rows).toHaveLength(0);
+
+    await cleanup(member.household.id);
+  });
+
   it('rejects a category/account/paidBy from a DIFFERENT household (cross-tenant probe)', async () => {
     const { addAdhocAction } = await import('./monthly');
     const memberA = await makeHouseholdWithUser('member', 'Monthly adhoc B-A');
