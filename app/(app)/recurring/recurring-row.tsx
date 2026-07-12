@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState, useTransition } from 'react';
+import { useActionState, useState } from 'react';
 import {
   updateRecurringAction,
   deleteRecurringAction,
@@ -9,6 +9,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import { useAction } from '../../../lib/hooks/use-action';
 import { formatSGD } from '../../../lib/format';
 import { parseAmountToCents } from '../../../lib/money';
 
@@ -54,22 +55,22 @@ export function RecurringRow({
     deleteRecurringAction,
     undefined,
   );
-  // Direct-call + startTransition (not useActionState + <form>) — the Switch primitive
-  // has no native form submission of its own the way a checkbox input does, so there's
-  // no boilerplate saved by routing this through useActionState the way the other two
+  // Direct-call + startTransition (via the shared useAction hook — see
+  // lib/hooks/use-action.ts — not useActionState + <form>) — the Switch primitive has
+  // no native form submission of its own the way a checkbox input does, so there's no
+  // boilerplate saved by routing this through useActionState the way the other two
   // actions on this row do; a plain async call is simpler and matches the
   // toggle-in-a-list-row shape app/(app)/home/mark-paid-button.tsx documents (this one
   // has no toast, but the same "call directly, don't depend on this component's own
   // state to observe the result" reasoning applies).
-  const [togglePending, startToggleTransition] = useTransition();
+  const { pending: togglePending, run: runToggle } = useAction(toggleRecurringAction);
   const [toggleError, setToggleError] = useState<string | null>(null);
 
   function handleToggle() {
     setToggleError(null);
-    startToggleTransition(async () => {
-      const formData = new FormData();
-      formData.set('id', item.id);
-      const result = await toggleRecurringAction(undefined, formData);
+    const formData = new FormData();
+    formData.set('id', item.id);
+    runToggle(formData, (result) => {
       if (result?.error) setToggleError(result.error);
     });
   }

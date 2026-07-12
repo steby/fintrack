@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Check, AlertTriangle } from 'lucide-react';
 import { formatSGDCompact, formatSGD, MONTH_FULL } from '../../../lib/format';
@@ -9,8 +9,31 @@ import { daysInMonth } from '../../../lib/domain/reminders';
 import { ResponsiveSheet } from '@/components/ui/responsive-sheet';
 import { MarkPaidButton } from '../home/mark-paid-button';
 import type { MonthlyEntryRow } from './types';
+import type { PaidState } from '../../../lib/domain/entries';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// Shared row-renderer styling helpers (maintainability pass) — GridChip, AgendaRow,
+// UnscheduledChip, and DaySheetRow below each used to hand-roll their own copy of
+// these two small conditionals. Pulled out once, used everywhere, purely a
+// style-string extraction: no row renderer's actual output changed.
+function directionDotClass(direction: MonthlyEntryRow['categoryDirection']): string {
+  return direction === 'income'
+    ? 'bg-income'
+    : direction === 'expense'
+      ? 'bg-expense'
+      : 'bg-muted-foreground';
+}
+
+function paidTextClass(state: PaidState): string {
+  return state === 'paid'
+    ? 'text-muted-foreground line-through decoration-muted-foreground/50'
+    : '';
+}
+
+function paidPrefix(state: PaidState): string {
+  return state === 'paid' ? '✓ ' : '';
+}
 
 // Phase 10: client component (it wasn't before) so a day cell can open a per-day
 // ResponsiveSheet — the local `openDay` state is what requires it. `today` arrives as
@@ -39,26 +62,33 @@ export function CalendarView({
   const firstDayOfWeek = new Date(year, month - 1, 1).getDay();
   const isCurrentMonth = year === today.year && month === today.month;
 
-  const byDay = new Map<number, MonthlyEntryRow[]>();
-  const unscheduled: MonthlyEntryRow[] = [];
-  for (const entry of entries) {
-    if (entry.scheduledDay) {
-      // Clamp to the last real day of the month (spec.md's Phase 6 email-reminder logic
-      // already establishes "month-end clamping for day 29-31" as the intended handling
-      // for a scheduled day that doesn't exist in a shorter month) — without this, an
-      // entry with scheduledDay=31 silently vanished from Feb/30-day months entirely,
-      // since cells only spans 1..totalDaysInMonth and a truthy scheduledDay never
-      // falls through to the "unscheduled" bucket either.
-      const day = Math.min(entry.scheduledDay, totalDaysInMonth);
-      const list = byDay.get(day) ?? [];
-      list.push(entry);
-      byDay.set(day, list);
-    } else {
-      unscheduled.push(entry);
+  // Memoized on its actual inputs (entries, totalDaysInMonth) rather than recomputed on
+  // every render — this component's own `openDay` state (opening/closing the day-sheet)
+  // changes far more often than `entries` ever does, and none of that local UI state
+  // should force a re-walk of every entry into fresh Map/array allocations.
+  const { byDay, unscheduled, cells } = useMemo(() => {
+    const byDay = new Map<number, MonthlyEntryRow[]>();
+    const unscheduled: MonthlyEntryRow[] = [];
+    for (const entry of entries) {
+      if (entry.scheduledDay) {
+        // Clamp to the last real day of the month (spec.md's Phase 6 email-reminder
+        // logic already establishes "month-end clamping for day 29-31" as the intended
+        // handling for a scheduled day that doesn't exist in a shorter month) — without
+        // this, an entry with scheduledDay=31 silently vanished from Feb/30-day months
+        // entirely, since cells only spans 1..totalDaysInMonth and a truthy
+        // scheduledDay never falls through to the "unscheduled" bucket either.
+        const day = Math.min(entry.scheduledDay, totalDaysInMonth);
+        const list = byDay.get(day) ?? [];
+        list.push(entry);
+        byDay.set(day, list);
+      } else {
+        unscheduled.push(entry);
+      }
     }
-  }
+    const cells = Array.from({ length: totalDaysInMonth }, (_, i) => i + 1);
+    return { byDay, unscheduled, cells };
+  }, [entries, totalDaysInMonth]);
 
-  const cells = Array.from({ length: totalDaysInMonth }, (_, i) => i + 1);
   const openDayEntries = openDay !== null ? (byDay.get(openDay) ?? []) : [];
 
   return (
@@ -224,17 +254,11 @@ function GridChip({ entry }: { entry: MonthlyEntryRow }) {
     >
       <span className="flex items-center gap-1 truncate">
         <span
-          className={`size-1.5 shrink-0 rounded-full ${
-            entry.categoryDirection === 'income'
-              ? 'bg-income'
-              : entry.categoryDirection === 'expense'
-                ? 'bg-expense'
-                : 'bg-muted-foreground'
-          }`}
+          className={`size-1.5 shrink-0 rounded-full ${directionDotClass(entry.categoryDirection)}`}
           aria-hidden
         />
         <span className={`truncate ${state === 'overdue' ? 'font-semibold text-warning' : ''}`}>
-          {state === 'paid' && '✓ '}
+          {paidPrefix(state)}
           {entry.item}
         </span>
       </span>
@@ -265,26 +289,12 @@ function AgendaRow({ entry, canManage }: { entry: MonthlyEntryRow; canManage: bo
           <AlertTriangle className="size-4 shrink-0 text-warning" aria-label="Overdue" />
         ) : (
           <span
-            className={`size-2 shrink-0 rounded-full ${
-              entry.categoryDirection === 'income'
-                ? 'bg-income'
-                : entry.categoryDirection === 'expense'
-                  ? 'bg-expense'
-                  : 'bg-muted-foreground'
-            }`}
+            className={`size-2 shrink-0 rounded-full ${directionDotClass(entry.categoryDirection)}`}
             aria-hidden
           />
         )}
         <div className="min-w-0">
-          <div
-            className={`truncate text-sm font-medium ${
-              state === 'paid'
-                ? 'text-muted-foreground line-through decoration-muted-foreground/50'
-                : ''
-            }`}
-          >
-            {entry.item}
-          </div>
+          <div className={`truncate text-sm font-medium ${paidTextClass(state)}`}>{entry.item}</div>
           {entry.categoryName && (
             <div className="truncate text-xs text-muted-foreground">{entry.categoryName}</div>
           )}
@@ -335,7 +345,7 @@ function UnscheduledChip({ entry }: { entry: MonthlyEntryRow }) {
       }`}
     >
       <span className="truncate font-medium">
-        {state === 'paid' && '✓ '}
+        {paidPrefix(state)}
         {entry.item}
       </span>
       <span className="shrink-0 font-semibold">
@@ -353,15 +363,7 @@ function DaySheetRow({ entry, canManage }: { entry: MonthlyEntryRow; canManage: 
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border p-2">
       <div className="min-w-0">
-        <div
-          className={`truncate text-sm font-medium ${
-            state === 'paid'
-              ? 'text-muted-foreground line-through decoration-muted-foreground/50'
-              : ''
-          }`}
-        >
-          {entry.item}
-        </div>
+        <div className={`truncate text-sm font-medium ${paidTextClass(state)}`}>{entry.item}</div>
         <div className="text-xs text-muted-foreground">
           {formatSGD(budgetedCents)}
           {state === 'overdue' && <span className="ml-1.5 font-medium text-warning">Overdue</span>}

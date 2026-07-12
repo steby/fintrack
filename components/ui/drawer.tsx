@@ -11,7 +11,9 @@ import { cn } from '@/lib/utils';
 // silently breaks swipe-to-dismiss or scroll/selection inside the sheet.
 const Drawer = DrawerPrimitive.Root;
 const DrawerTrigger = DrawerPrimitive.Trigger;
-const DrawerClose = DrawerPrimitive.Close;
+// Portal — used internally by DrawerContent below; not exported (0 external
+// importers, confirmed via a repo-wide grep during the maintainability pass that
+// removed this file's other dead exports).
 const DrawerPortal = DrawerPrimitive.Portal;
 
 function DrawerBackdrop({ className, ...props }: DrawerPrimitive.Backdrop.Props) {
@@ -78,13 +80,4 @@ function DrawerDescription({ className, ...props }: DrawerPrimitive.Description.
   );
 }
 
-export {
-  Drawer,
-  DrawerTrigger,
-  DrawerClose,
-  DrawerPortal,
-  DrawerBackdrop,
-  DrawerContent,
-  DrawerTitle,
-  DrawerDescription,
-};
+export { Drawer, DrawerTrigger, DrawerContent, DrawerTitle, DrawerDescription };

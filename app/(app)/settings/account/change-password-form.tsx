@@ -1,14 +1,16 @@
 'use client';
 
-import { useState, useTransition, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { changePasswordAction } from '../../../actions/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { useToastManager } from '@/components/ui/toast';
+import { useAction } from '../../../../lib/hooks/use-action';
 
-// Direct-call + startTransition (not useActionState + <form action>) — the established,
+// Direct-call + startTransition (via the shared useAction hook — see
+// lib/hooks/use-action.ts — not useActionState + <form action>) — the established,
 // debugged pattern for firing a toast tied to a Server Action result
 // (app/(app)/home/mark-paid-button.tsx, components/theme-toggle.tsx): calling the
 // action inside the SAME async closure that fires the toast means the toast never
@@ -22,7 +24,7 @@ import { useToastManager } from '@/components/ui/toast';
 // e2e/auth.spec.ts asserts it directly and is one of the three specs (auth/invite/cron)
 // this project's cross-phase rule says must never need churn.
 export function ChangePasswordForm() {
-  const [pending, startTransition] = useTransition();
+  const { pending, run } = useAction(changePasswordAction);
   const [error, setError] = useState<string | null>(null);
   const [succeeded, setSucceeded] = useState(false);
   // Controlled, not uncontrolled — a plain onSubmit handler (not <form action={...}>)
@@ -38,8 +40,7 @@ export function ChangePasswordForm() {
     setError(null);
     setSucceeded(false);
     const formData = new FormData(e.currentTarget);
-    startTransition(async () => {
-      const result = await changePasswordAction(undefined, formData);
+    run(formData, (result) => {
       if (result?.error) {
         setError(result.error);
         return;

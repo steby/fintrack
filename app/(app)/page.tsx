@@ -121,16 +121,21 @@ export default async function HomePage({
   const bankAccountsList = netWorthAccounts.filter((a) => a.accountType === 'bank');
   const cashLensActive = env.FEATURE_NET_WORTH && bankAccountsList.length > 0;
 
-  const netByAccount = sumNetCentsByAccount(netWorthAccounts, actualizedRows);
-  const currentCashCents = bankAccountsList.reduce(
-    (sum, a) => sum + a.openingBalanceCents + (netByAccount.get(a.id) ?? 0),
-    0,
-  );
-
-  const safeToSpend = cashLensActive ? computeSafeToSpend(currentCashCents, items) : null;
-  const runwayPoints = cashLensActive
-    ? buildRunway(currentCashCents, items, today, horizonDays)
-    : [];
+  // sumNetCentsByAccount/currentCashCents only ever feed safeToSpend/runwayPoints below,
+  // both already gated behind cashLensActive — skip the walk over netWorthAccounts/
+  // actualizedRows entirely when the cash lens is off (FEATURE_NET_WORTH disabled or
+  // zero bank accounts), instead of computing a value nothing reads.
+  let safeToSpend: ReturnType<typeof computeSafeToSpend> | null = null;
+  let runwayPoints: ReturnType<typeof buildRunway> = [];
+  if (cashLensActive) {
+    const netByAccount = sumNetCentsByAccount(netWorthAccounts, actualizedRows);
+    const currentCashCents = bankAccountsList.reduce(
+      (sum, a) => sum + a.openingBalanceCents + (netByAccount.get(a.id) ?? 0),
+      0,
+    );
+    safeToSpend = computeSafeToSpend(currentCashCents, items);
+    runwayPoints = buildRunway(currentCashCents, items, today, horizonDays);
+  }
   const budgetRemaining = computeBudgetRemaining(currentMonthRows);
 
   return (

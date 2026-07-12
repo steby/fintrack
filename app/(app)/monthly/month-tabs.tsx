@@ -63,52 +63,45 @@ export function MonthTabs({
   view: string;
   statuses: MonthStatus[];
 }) {
+  // Built once and rendered into both the desktop and mobile wrappers below (spec.md
+  // Phase 10 task 3 still wants two separate CONTAINERS — see the comment above this
+  // component for why — but there's no reason the pill list itself needs two separate
+  // `.map()` calls producing byte-identical <Pill> elements; a single element list is
+  // valid to render into more than one parent).
+  const pills = MONTH_SHORT.map((name, i) => {
+    // `i` is bounded by MONTH_SHORT's own fixed 12-length array, not external
+    // input (same false positive as lib/auth/rbac.ts's MATRIX[role]). Pulled into
+    // its own statement (not inlined in the JSX below) so this disable comment
+    // reliably stays on the line directly above the flagged access regardless of
+    // how Prettier wraps the Pill call's own props.
+    // eslint-disable-next-line security/detect-object-injection
+    const status = statuses[i];
+    return (
+      <Pill
+        key={name}
+        year={year}
+        view={view}
+        name={name}
+        m={i + 1}
+        isActive={i + 1 === month}
+        status={status}
+      />
+    );
+  });
+
   return (
     <>
       <div
         data-testid="month-tabs-desktop"
         className="hidden flex-wrap gap-1 border-b pb-2 md:flex"
       >
-        {MONTH_SHORT.map((name, i) => {
-          // `i` is bounded by MONTH_SHORT's own fixed 12-length array, not external
-          // input (same false positive as lib/auth/rbac.ts's MATRIX[role]). Pulled into
-          // its own statement (not inlined in the JSX below) so this disable comment
-          // reliably stays on the line directly above the flagged access regardless of
-          // how Prettier wraps the Pill call's own props.
-          // eslint-disable-next-line security/detect-object-injection
-          const status = statuses[i];
-          return (
-            <Pill
-              key={name}
-              year={year}
-              view={view}
-              name={name}
-              m={i + 1}
-              isActive={i + 1 === month}
-              status={status}
-            />
-          );
-        })}
+        {pills}
       </div>
       <div
         data-testid="month-tabs-mobile"
         className="flex snap-x snap-mandatory gap-1 overflow-x-auto border-b pb-2 md:hidden"
       >
-        {MONTH_SHORT.map((name, i) => {
-          // eslint-disable-next-line security/detect-object-injection
-          const status = statuses[i];
-          return (
-            <Pill
-              key={name}
-              year={year}
-              view={view}
-              name={name}
-              m={i + 1}
-              isActive={i + 1 === month}
-              status={status}
-            />
-          );
-        })}
+        {pills}
       </div>
     </>
   );

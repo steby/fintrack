@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useState } from 'react';
 import { changeMemberRoleAction, removeMemberAction } from '../../../actions/members';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useToastManager } from '@/components/ui/toast';
+import { useAction } from '../../../../lib/hooks/use-action';
 
 interface Member {
   id: string;
@@ -24,19 +25,18 @@ interface Member {
 // one that actually needs it, so the two don't drift into two different patterns on the
 // same row.
 export function MemberRow({ member, isSelf }: { member: Member; isSelf: boolean }) {
-  const [rolePending, startRoleTransition] = useTransition();
-  const [removePending, startRemoveTransition] = useTransition();
+  const { pending: rolePending, run: runRoleChange } = useAction(changeMemberRoleAction);
+  const { pending: removePending, run: runRemove } = useAction(removeMemberAction);
   const [roleError, setRoleError] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const toastManager = useToastManager();
 
   function handleRoleChange(role: string) {
     setRoleError(null);
-    startRoleTransition(async () => {
-      const formData = new FormData();
-      formData.set('userId', member.id);
-      formData.set('role', role);
-      const result = await changeMemberRoleAction(undefined, formData);
+    const formData = new FormData();
+    formData.set('userId', member.id);
+    formData.set('role', role);
+    runRoleChange(formData, (result) => {
       if (result?.error) {
         setRoleError(result.error);
         return;
@@ -47,10 +47,9 @@ export function MemberRow({ member, isSelf }: { member: Member; isSelf: boolean 
 
   function handleRemove() {
     setRemoveError(null);
-    startRemoveTransition(async () => {
-      const formData = new FormData();
-      formData.set('userId', member.id);
-      const result = await removeMemberAction(undefined, formData);
+    const formData = new FormData();
+    formData.set('userId', member.id);
+    runRemove(formData, (result) => {
       if (result?.error) {
         setRemoveError(result.error);
         return;

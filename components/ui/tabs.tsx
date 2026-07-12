@@ -46,14 +46,4 @@ function TabsIndicator({ className, ...props }: TabsPrimitive.Indicator.Props) {
   );
 }
 
-function TabsPanel({ className, ...props }: TabsPrimitive.Panel.Props) {
-  return (
-    <TabsPrimitive.Panel
-      data-slot="tabs-panel"
-      className={cn('outline-none', className)}
-      {...props}
-    />
-  );
-}
-
-export { Tabs, TabsList, TabsTab, TabsIndicator, TabsPanel };
+export { Tabs, TabsList, TabsTab, TabsIndicator };

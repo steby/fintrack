@@ -4122,3 +4122,184 @@ change rather than restructuring every call site.
 **Deferred / not done:** Nothing — all 12 findings fixed, none deferred.
 
 ---
+
+## Maintainability pass — shared `useAction` hook + cleanup batch (2026-07-12)
+
+A no-behavior-change maintainability/risk-reduction pass over the Phase 8-11 redesign
+(not a bug fix, except item 2i below, which was already provably inert — no current
+caller). Two parts: extract a shared `useAction` hook for the direct-call-inside-
+`startTransition` Server Action pattern this codebase already used in 9 places, and a
+batch of 9 small, independently-scoped cleanups.
+
+**Part 1 — `lib/hooks/use-action.ts`:** All 9 call sites named in the task were read in
+full first (`mark-paid-button.tsx`, `csv-import-toggle.tsx`,
+`send-test-email-button.tsx`, `member-notify-row.tsx`, `notification-toggle.tsx`,
+`member-row.tsx` — two independent instances, role-change and remove —
+`invite-form.tsx`, `change-password-form.tsx`, `recurring-row.tsx`'s toggle) to confirm
+the shape was mechanically identical before designing the hook. Landed on the sketch
+from the task almost as-given:
+
+```ts
+export function useAction<TState>(
+  action: (prevState: TState, formData: FormData) => Promise<TState>,
+) {
+  const [pending, startTransition] = useTransition();
+  function run(formData: FormData, onSettled: (result: TState) => void) {
+    startTransition(async () => {
+      const result = await action(undefined as TState, formData);
+      onSettled(result);
+    });
+  }
+  return { pending, run } as const;
+}
+```
+
+One deviation from the literal sketch, found by `npm run typecheck`, not by
+inspection: the sketch's `action: (prevState: TState | undefined, ...) => Promise<TState>`
+does not typecheck against any of the 9 real actions. Every action-state type in this
+codebase (`MarkPaidActionState`, `ToggleFlagActionState`, `MemberActionState`, etc.)
+already models `undefined` as one of ITS OWN union members (the same convention
+`useActionState`'s own initial-state parameter requires) — wrapping that in a second,
+hook-level `| undefined` makes TypeScript infer `TState` as the union with `undefined`
+subtracted back out, which then fails to unify against the action's real
+`Promise<TState>` return (which still includes it). Fixed by typing `action`'s
+parameter as plain `TState` and casting the one internal `undefined` call site
+(`action(undefined as TState, formData)`) — documented inline in the hook with why the
+cast is safe (every action passed in already allows `undefined` as a real member of its
+own state type). `mark-paid-button.tsx`'s canonical race-explanation comment was kept in
+place (several of the other 8 files' comments point back to it) with a short addendum
+noting the mechanics moved into the hook but the invariant (onSettled runs synchronously
+inside `run`'s own awaited closure, never a `useEffect` keyed on returned state) didn't.
+`member-row.tsx` calls `useAction` twice (`changeMemberRoleAction`,
+`removeMemberAction`), preserving its two independent `pending`/error states exactly as
+before — not merged.
+
+Spot-checked 3 call sites' feedback behavior against the pre-refactor diff, not just
+"tests pass": `mark-paid-button.tsx` — success still fires a toast with the Undo action
+wired to `updateActualAction`, the `alreadyPaid` branch is still a silent no-op, and the
+error branch still shows a toast (this is the one component that toasts on BOTH success
+and error, preserved). `csv-import-toggle.tsx` — success still toasts, but error still
+sets local `error` state for inline text rather than a toast (this component never
+toasted on error, and still doesn't). `change-password-form.tsx` — the inline "Password
+updated." text (protected by `e2e/auth.spec.ts`, one of the three specs this project's
+cross-phase rule says must never need churn) still renders from its own local
+`succeeded` state exactly as before, alongside the new-in-Phase-11 toast; the E2E run
+below re-confirms `auth.spec.ts` is still green. Added
+`lib/hooks/use-action.test.tsx` covering: `run` calls the action with the exact
+FormData given; `onSettled` receives the real settled result; `pending` is `true` while
+the action is in flight and `false` once it resolves; a second `run` after the first has
+settled works correctly (4 tests, all passing). This repo had zero component/hook test
+infrastructure before this pass (`vitest.config.ts`'s "unit" project runs everything
+under a plain `node` environment; no `@testing-library/*`/jsdom anywhere in
+`package.json`) — added `@testing-library/react` and `jsdom` as devDependencies (the
+minimal, standard pairing for testing a React hook, justified per
+development-workflow.md's dependency-hygiene rule) and scoped jsdom to just this one
+file via a `@vitest-environment jsdom` docblock rather than changing the "unit"
+project's default environment for every other (pure-logic, `node`-environment) test.
+`vitest.config.ts`'s unit project `include` and the coverage `exclude` list both gained
+a `.test.tsx` pattern alongside the existing `.test.ts` one.
+
+**Part 2 — cleanup batch:**
+
+- **2a (unused UI exports):** Repo-wide grep confirmed `DialogClose`, `DialogPortal`,
+  `DialogBackdrop` (dialog.tsx), `DrawerClose`, `DrawerPortal`, `DrawerBackdrop`
+  (drawer.tsx), and `TabsPanel` (tabs.tsx) had 0 importers outside their own file.
+  `DialogPortal`/`DialogBackdrop` and `DrawerPortal`/`DrawerBackdrop` are used
+  internally by `DialogContent`/`DrawerContent` respectively, so those four stayed as
+  unexported local helpers (only removed from each file's `export {}` list).
+  `DialogClose`, `DrawerClose`, and `TabsPanel` were not referenced anywhere else in
+  their own file either (the actual close buttons render `DialogPrimitive.Close`/
+  nothing directly, never the unused alias) — removed entirely rather than kept as an
+  unused unexported binding, which `no-unused-vars` would have flagged anyway.
+- **2b:** `quick-add.tsx`'s two `from 'react'` import lines merged into one.
+- **2c:** `month-tabs.tsx`'s desktop/mobile pill lists built once (`const pills = ...`)
+  and rendered into both wrapper `<div>`s — same React elements reused in two parents,
+  a standard and safe pattern (keys are scoped per-parent, not globally). Two
+  containers themselves stayed separate, per the file's own existing comment on why.
+- **2d:** Extracted `directionDotClass`, `paidTextClass`, and `paidPrefix` local
+  helpers in `calendar-view.tsx`, used by `GridChip`, `AgendaRow`, `UnscheduledChip`,
+  and `DaySheetRow` in place of each one's hand-rolled copy of the same conditional
+  class-string/prefix logic. `UnscheduledChip`'s `toneClass` (a background+text tint,
+  not a dot) was deliberately left as its own thing — different shape, not a duplicate
+  of `directionDotClass`. The `agenda`-boolean grid/list branching itself was not
+  touched, per the task's explicit out-of-scope note. Checked behavior-preservation by
+  diffing the interpolated class strings each helper produces against the original
+  inline ternaries for all 4 paid states (paid/overdue/upcoming income/upcoming
+  expense) — byte-identical output in every case — plus the full E2E run below
+  (`monthly.spec.ts`, `mobile.spec.ts`) exercises calendar/agenda/day-sheet rendering
+  live.
+- **2e:** `safe-to-spend-hero.tsx`'s two lens branches collapsed into one render path:
+  an `if (cashLensActive && safeToSpend) {...} else {...}` computes
+  `{ statTestId, label, value, subLine, tone }` up front (preserving TypeScript's
+  narrowing of `safeToSpend` inside the `if`, unlike a separately-computed boolean),
+  then a single JSX tree renders `<Stat>` once and branches only on the one truly
+  different piece below it (`BudgetRemainingLine` for the cash lens vs. the "Add a bank
+  account" link for the budget lens). Verified the two lenses' `data-testid`s didn't
+  get conflated in the merge — the cash lens's `safe-to-spend-value`/`budget-left-value`
+  pair (one on the `Stat`, one on `BudgetRemainingLine` below it) and the budget lens's
+  single `budget-left-value` (on its own `Stat`, no second element) are reproduced
+  exactly, checked by re-reading the merged JSX against the original two trees
+  side-by-side before running tests.
+- **2f:** `calendar-view.tsx`'s `byDay`/`unscheduled`/`cells` construction wrapped in
+  `useMemo(() => {...}, [entries, totalDaysInMonth])`, so opening/closing the day-sheet
+  (`openDay` state, unrelated to `entries`) no longer re-walks every entry. Verified by
+  reasoning through the dependency array (the loop only reads `entries` and
+  `totalDaysInMonth`, nothing else in the component's render scope) rather than a
+  render-count instrumentation script, since the output is provably identical to the
+  un-memoized version for any given `(entries, totalDaysInMonth)` pair.
+- **2g:** `app/(app)/page.tsx`'s `sumNetCentsByAccount` call and the
+  `currentCashCents` reduce moved inside the existing `if (cashLensActive)` block,
+  alongside `computeSafeToSpend`/`buildRunway` (the only two places that ever read
+  them) — skipped entirely, not just computed-and-ignored, when the cash lens is off.
+- **2h:** `accounts/page.tsx`'s stale comment ("the dashboard's own copy
+  (app/(app)/page.tsx) ... deliberately untouched this phase") corrected — Home
+  (`app/(app)/page.tsx`) no longer runs any net-worth carry-forward/series computation
+  at all since its Phase 9 rewrite (it only sums CURRENT cash for the safe-to-spend
+  hero, a narrower and differently-shaped calculation, not a duplicate of this page's
+  yearly balance walk). No extraction attempted — there is no longer a second copy of
+  this specific math anywhere else in the app to share a helper with.
+- **2i:** `components/ui/tooltip.tsx`'s `TooltipContent` now destructures `side`/
+  `align` alongside `sideOffset` and forwards all three to `TooltipPrimitive.Positioner`
+  — previously `side`/`align` fell through `...props` onto `Popup` instead and were
+  silently ignored. Confirmed genuinely inert today: a repo-wide grep found exactly one
+  `<TooltipContent>` caller (`accounts/page.tsx`'s net-worth info tooltip), passing
+  neither prop — zero behavior change for the one existing usage.
+
+**Test/CI status:** Unit 466/466 (up from 462 — 4 new `use-action.test.tsx` cases).
+Integration 266/266 (unchanged — no Server Action logic touched; every call site's
+action function is byte-identical, only how components call it changed). Coverage:
+99.44% statements / 97.58% branches / 99.33% functions / 99.84% lines on the gated
+`lib/**` scope (gate 80%; `lib/hooks/use-action.ts` itself is 100%-covered by its own
+test; the coverage % is effectively unchanged from the prior entry). E2E 68/68, run
+twice back-to-back clean with `CI=true` against a real `next build && next start` (the
+full suite, not a subset, per the task's own instruction — this pass touches 9+
+components with existing E2E coverage across mark-paid, member management,
+notifications, csv-import, and recurring-toggle flows). Lint/typecheck/format all
+clean (`npm run format` reformatted `calendar-view.tsx` and `tooltip.tsx` — wrapping
+long lines this pass introduced, no semantic changes). `npm audit --audit-level=high`
+clean (6 pre-existing moderate advisories in `next`'s/`drizzle-kit`'s own transitive
+deps, unrelated to and unchanged by this pass's two new devDependencies).
+
+**Deviations from the task's instructions, logged rather than silent:**
+
+1. The `useAction` hook's `action` parameter type is `TState`, not the sketch's
+   `TState | undefined` — a TypeScript inference fix, not a design choice; see Part 1
+   above for the full mechanism.
+2. 2a removed `DialogClose`/`DrawerClose`/`TabsPanel` entirely (declaration + export)
+   rather than demoting them to unexported local helpers, since none of the three was
+   referenced anywhere else in its own file either — keeping an unused unexported
+   binding around would just be a different flavor of dead code (and would fail
+   `no-unused-vars`).
+3. 2h's stale comment was corrected in place rather than attempting the dedup — the
+   task's own fallback ("otherwise just fix the comment") applied, since the sibling
+   computation the original comment pointed at no longer exists to extract a shared
+   helper against.
+
+**Deferred / not done:** Nothing from this pass's own scope. Everything explicitly
+called out as out-of-scope in the task (calendar-view.tsx's grid/agenda branching,
+Home's two current-month-query dedup, the four different "feature off" page
+treatments, `skeleton.tsx`, insights/page.tsx's six-pass pattern, quick-add's eager
+option fetch) was left untouched, confirmed via `git diff --stat` showing no changes
+to `app/(app)/insights/page.tsx` or `components/ui/skeleton.tsx`.
+
+---

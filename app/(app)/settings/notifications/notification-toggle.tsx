@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useState } from 'react';
 import type { ToggleFlagActionState } from '../../../actions/notifications';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { useToastManager } from '@/components/ui/toast';
+import { useAction } from '../../../../lib/hooks/use-action';
 
 interface Props {
   action: (prevState: ToggleFlagActionState, formData: FormData) => Promise<ToggleFlagActionState>;
@@ -22,16 +23,15 @@ interface Props {
 // beyond "On"/"Off" (updated in e2e/notifications.spec.ts to a switch-role check
 // instead), so there's no protected text to preserve.
 export function NotificationToggle({ action, enabled, label, description, readOnly }: Props) {
-  const [pending, startTransition] = useTransition();
+  const { pending, run } = useAction(action);
   const [error, setError] = useState<string | null>(null);
   const toastManager = useToastManager();
 
   function handleCheckedChange(next: boolean) {
     setError(null);
-    startTransition(async () => {
-      const formData = new FormData();
-      formData.set('enabled', next ? 'true' : 'false');
-      const result = await action(undefined, formData);
+    const formData = new FormData();
+    formData.set('enabled', next ? 'true' : 'false');
+    run(formData, (result) => {
       if (result?.error) {
         setError(result.error);
         return;

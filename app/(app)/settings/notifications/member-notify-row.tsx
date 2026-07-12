@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useState } from 'react';
 import { updateNotifyByEmailAction } from '../../../actions/notifications';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useToastManager } from '@/components/ui/toast';
+import { useAction } from '../../../../lib/hooks/use-action';
 
 interface Member {
   id: string;
@@ -23,17 +24,16 @@ interface Member {
 // so e2e/notifications.spec.ts's existing assertions ("Not emailing you"/"Emailing
 // you") need no churn.
 export function MemberNotifyRow({ member, isSelf }: { member: Member; isSelf: boolean }) {
-  const [pending, startTransition] = useTransition();
+  const { pending, run } = useAction(updateNotifyByEmailAction);
   const [error, setError] = useState<string | null>(null);
   const toastManager = useToastManager();
 
   function handleClick() {
     setError(null);
     const next = !member.notifyByEmail;
-    startTransition(async () => {
-      const formData = new FormData();
-      formData.set('enabled', next ? 'true' : 'false');
-      const result = await updateNotifyByEmailAction(undefined, formData);
+    const formData = new FormData();
+    formData.set('enabled', next ? 'true' : 'false');
+    run(formData, (result) => {
       if (result?.error) {
         setError(result.error);
         return;

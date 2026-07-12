@@ -76,9 +76,14 @@ export default async function AccountsPage({
   // Net worth is a lifetime running total, not something that resets every time a
   // different year is browsed — everything from years before `year` is folded into a
   // carry-forward baseline on top of each account's one-time opening_balance, then the
-  // selected year's entries walk forward from there month by month. Same math as the
-  // dashboard's own copy (app/(app)/page.tsx) — not extracted into a shared helper
-  // there, since that page is deliberately untouched this phase.
+  // selected year's entries walk forward from there month by month. Maintainability-pass
+  // note: this used to point at "the dashboard's own copy (app/(app)/page.tsx)" as a
+  // sibling doing the same math — that's stale. app/(app)/page.tsx was rewritten in
+  // Phase 9 into the forecast-first Home page and no longer runs any carry-forward/
+  // net-worth-series computation at all; it only sums CURRENT cash across bank accounts
+  // for the safe-to-spend hero (a narrower, differently-shaped calculation, not a
+  // duplicate of this page's yearly balance walk). There is no longer a second copy of
+  // this specific math anywhere else in the app to extract a shared helper against.
   const carryForward = sumNetCentsByAccount(netWorthAccounts, priorYearsEntries);
   const accountBalances = buildAccountBalances(
     netWorthAccounts,

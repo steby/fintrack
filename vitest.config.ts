@@ -16,6 +16,7 @@ export default defineConfig({
       include: ['lib/**'],
       exclude: [
         'lib/**/*.test.ts',
+        'lib/**/*.test.tsx',
         'lib/**/*.integration.test.ts',
         // DB plumbing — needs a live connection, exercised by integration tests and
         // /api/health, not meaningfully unit-testable in isolation.
@@ -65,7 +66,11 @@ export default defineConfig({
         test: {
           name: 'unit',
           environment: 'node',
-          include: ['**/*.test.ts'],
+          // '**/*.test.tsx' added alongside '**/*.test.ts' for lib/hooks/use-action.test.tsx
+          // — the one hook test in the repo, which opts into a jsdom environment itself via
+          // a per-file `@vitest-environment jsdom` docblock rather than changing this
+          // project's default (every other unit test is pure lib/** logic run under 'node').
+          include: ['**/*.test.ts', '**/*.test.tsx'],
           exclude: ['**/*.integration.test.ts', 'node_modules/**', '.next/**', 'e2e/**'],
           // Dummy-but-valid values so lib/env.ts's module-level validation passes without
           // real secrets. Unit tests must never depend on (or be able to reach) a real DB.

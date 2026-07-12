@@ -10,7 +10,9 @@ import { cn } from '@/lib/utils';
 // centering is our own fixed-position CSS, per the plan's WISDOM note.
 const Dialog = DialogPrimitive.Root;
 const DialogTrigger = DialogPrimitive.Trigger;
-const DialogClose = DialogPrimitive.Close;
+// Portal — used internally by DialogContent below; not exported (0 external
+// importers, confirmed via a repo-wide grep during the maintainability pass that
+// removed this file's other dead exports).
 const DialogPortal = DialogPrimitive.Portal;
 
 function DialogBackdrop({ className, ...props }: DialogPrimitive.Backdrop.Props) {
@@ -101,9 +103,6 @@ function DialogDescription({ className, ...props }: DialogPrimitive.Description.
 export {
   Dialog,
   DialogTrigger,
-  DialogClose,
-  DialogPortal,
-  DialogBackdrop,
   DialogContent,
   DialogHeader,
   DialogFooter,

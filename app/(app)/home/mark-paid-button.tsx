@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useTransition, type ComponentProps } from 'react';
+import { useState, type ComponentProps } from 'react';
 import { markPaidAction, updateActualAction } from '../../actions/monthly';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ResponsiveSheet } from '@/components/ui/responsive-sheet';
 import { useToastManager } from '@/components/ui/toast';
+import { useAction } from '../../../lib/hooks/use-action';
 import { formatSGD, formatDueDate } from '../../../lib/format';
 
 // Today in the browser's OWN calendar day, YYYY-MM-DD — matches
@@ -55,6 +56,15 @@ function todayLocalIso(): string {
 // exactly this reason — see the plan's own WISDOM note ("an Undo button that calls the
 // undo server action") — this just applies the identical, now cross-verified pattern
 // consistently to the primary action too instead of only the secondary one.
+//
+// Maintainability pass: the mechanical part of this — useTransition + calling the
+// action directly + awaiting it + handing the settled result to a callback
+// synchronously in the same closure — is now factored into lib/hooks/use-action.ts's
+// `useAction`, shared by 9 other call sites that all independently hand-rolled this
+// same shape. This comment stays put (several of those call sites' own comments point
+// back here for the full race explanation) — only the mechanics moved, not the
+// invariant: `onSettled` below still runs synchronously inside `run`'s awaited
+// closure, never from a useEffect keyed on returned state.
 export function MarkPaidButton({
   entryId,
   item,
@@ -78,7 +88,7 @@ export function MarkPaidButton({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [pending, startTransition] = useTransition();
+  const { pending, run } = useAction(markPaidAction);
   const toastManager = useToastManager();
 
   function handleConfirm(actualDate: string) {
@@ -89,12 +99,10 @@ export function MarkPaidButton({
     // trigger Button below still shows its own "Marking…" pending state in the
     // meantime for feedback if it's still on screen.
     setOpen(false);
-    startTransition(async () => {
-      const formData = new FormData();
-      formData.set('id', entryId);
-      formData.set('actualDate', actualDate);
-      const result = await markPaidAction(undefined, formData);
-
+    const formData = new FormData();
+    formData.set('id', entryId);
+    formData.set('actualDate', actualDate);
+    run(formData, (result) => {
       if (!result) return;
       if ('error' in result) {
         toastManager.add({

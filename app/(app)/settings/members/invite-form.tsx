@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useTransition, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { createInviteAction } from '../../../actions/invites';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToastManager } from '@/components/ui/toast';
+import { useAction } from '../../../../lib/hooks/use-action';
 
 // Direct-call + startTransition, firing a toast from the same closure — same pattern as
 // change-password-form.tsx and app/(app)/home/mark-paid-button.tsx (spec.md Phase 11:
@@ -15,7 +16,7 @@ import { useToastManager } from '@/components/ui/toast';
 // the ACCEPT flow instead), so there's no protected inline-text assertion to preserve
 // here the way change-password-form.tsx's is.
 export function InviteForm() {
-  const [pending, startTransition] = useTransition();
+  const { pending, run } = useAction(createInviteAction);
   const [error, setError] = useState<string | null>(null);
   const toastManager = useToastManager();
 
@@ -25,8 +26,7 @@ export function InviteForm() {
     const form = e.currentTarget;
     const formData = new FormData(form);
     const email = String(formData.get('email') ?? '');
-    startTransition(async () => {
-      const result = await createInviteAction(undefined, formData);
+    run(formData, (result) => {
       if (result?.error) {
         setError(result.error);
         return;
