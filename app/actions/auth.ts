@@ -2,6 +2,7 @@
 
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
+import { revalidatePath } from 'next/cache';
 import { headers, cookies } from 'next/headers';
 import { eq, and, ne, gte, sql } from 'drizzle-orm';
 import { db } from '../../lib/db';
@@ -199,6 +200,39 @@ export async function changePasswordAction(
     throw new Error('changePasswordAction: no session token on an authenticated request.');
   }
   await db.delete(sessions).where(and(eq(sessions.userId, user.id), ne(sessions.id, currentToken)));
+
+  return { success: true };
+}
+
+const updateNameSchema = z.object({
+  name: z.string().trim().min(1, 'Name is required').max(200),
+});
+
+export type UpdateNameState = { error?: string; success?: boolean } | undefined;
+
+// Every account is created with a real name EXCEPT the very first one, seeded by
+// lib/db/seed.ts with the literal placeholder 'Owner' (it has no way to know the real
+// person's name at seed time) — every other user gets their real name from the invite
+// flow. This was the only path in the whole app that could ever leave a display name
+// stuck at that placeholder, with nowhere to change it.
+export async function updateNameAction(
+  _prevState: UpdateNameState,
+  formData: FormData,
+): Promise<UpdateNameState> {
+  const user = await requireUser();
+
+  const parsed = updateNameSchema.safeParse({ name: formData.get('name') });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Invalid name.' };
+  }
+
+  await db.update(users).set({ name: parsed.data.name }).where(eq(users.id, user.id));
+
+  // The name renders in the sidebar/bottom-nav footer and the Settings hub header on
+  // EVERY page (app/(app)/layout.tsx, settings/page.tsx), not just this one — a
+  // path-scoped revalidate would leave it stale everywhere except account/page.tsx
+  // until some other navigation happened to refresh the shared layout.
+  revalidatePath('/', 'layout');
 
   return { success: true };
 }

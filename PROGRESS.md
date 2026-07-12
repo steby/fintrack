@@ -4519,3 +4519,37 @@ feature-off messaging is a different UX shape (plain copy-swap; inline CTA link)
 a different purpose than a small icon+note, not an oversight.
 
 ---
+
+## Small feature: editable display name (2026-07-13)
+
+While live-verifying the redesign against real production data, the user noticed the
+sidebar/settings footer showing "Owner · Owner" instead of their real name. Root cause:
+`lib/db/seed.ts` hardcodes the very first account's `name` to the literal placeholder
+`'Owner'` (it has no way to know the real person's name at seed time — every other user
+gets their real name from the invite-accept flow) — and there was **no UI anywhere** to
+ever change a display name afterward. `app/(app)/settings/account/page.tsx` only ever
+had `ChangePasswordForm`; the name was rendered as read-only text.
+
+Added `updateNameAction` in `app/actions/auth.ts` (zod: trimmed, min 1 / max 200 chars),
+scoped entirely to the calling session's own user row (`requireUser()` then
+`where(eq(users.id, user.id))` — no id ever comes from the client, so there's no
+cross-user angle to guard against) with `revalidatePath('/', 'layout')` since the name
+renders in the persistent sidebar/bottom-nav on every page, not just this one. New
+`UpdateNameForm` (`app/(app)/settings/account/update-name-form.tsx`) mirrors
+`ChangePasswordForm`'s exact shape one directory over — same `useAction` hook, same
+direct-call + toast pattern, same Card layout — mounted above it on the Account page.
+
+**Verification:** confirmed `e2e/auth.spec.ts`'s multi-device change-password test (one
+of the three specs — auth/invite/cron — that must never need churn) still passes
+unmodified: it only queries `getByLabel('Current password')`/`getByLabel('New password')`
+and a `getByRole('button', { name: 'Update password' })`, none of which collide with the
+new "Name"/"Save name" field+button above it. New integration test
+(`app/actions/update-name.integration.test.ts`, 4 cases: happy path, empty name rejected,
+whitespace-only name rejected, surrounding whitespace trimmed) run directly against the
+real dev DB. Full gate suite green: lint/typecheck clean; unit 472/472 (unchanged — no new
+pure logic); integration 274/274 (+4 new); coverage unaffected (this pass is a Server
+Action + a presentational form, `lib/**` untouched — 99.45%/97.61%/99.35%/99.84% same as
+before); build clean; format clean; E2E 68/68 passed, run twice back-to-back (`CI=true`,
+real `next build && next start`), zero spec changes needed.
+
+---
