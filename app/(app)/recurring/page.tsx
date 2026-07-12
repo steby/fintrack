@@ -1,8 +1,10 @@
 import { eq } from 'drizzle-orm';
+import { Repeat } from 'lucide-react';
 import { requireUser } from '../../../lib/auth/guards';
 import { can } from '../../../lib/auth/rbac';
 import { db } from '../../../lib/db';
 import { recurringSchedule, categories, bankAccounts } from '../../../lib/db/schema';
+import { EmptyState } from '@/components/ui/empty-state';
 import { RecurringRow, type RecurringItem } from './recurring-row';
 import { RecurringAddForm } from './recurring-add-form';
 import { GenerateForm } from './generate-form';
@@ -58,7 +60,7 @@ export default async function RecurringPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">Recurring schedule</h1>
+          <h1 className="text-2xl font-semibold">Plan</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Your master plan — every expected inflow and outflow. Generate a forecast to materialize
             these into actual months.
@@ -80,7 +82,7 @@ export default async function RecurringPage() {
                 {group.label}{' '}
                 <span className="font-normal normal-case">({group.items.length})</span>
               </h2>
-              <div className="overflow-x-auto rounded-md border">
+              <div className="overflow-x-auto rounded-2xl border bg-card shadow-card">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
@@ -113,10 +115,15 @@ export default async function RecurringPage() {
       )}
 
       {items.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No recurring items yet.{' '}
-          {canManage ? 'Add one above to get started.' : 'Ask the household owner to add one.'}
-        </p>
+        <EmptyState
+          icon={Repeat}
+          title="No recurring items yet"
+          description={
+            canManage
+              ? 'Add your first bill or income source above, then generate a forecast to materialize it into actual months.'
+              : 'Ask the household owner to add one.'
+          }
+        />
       )}
     </div>
   );

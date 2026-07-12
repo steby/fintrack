@@ -1,24 +1,38 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useState, useTransition } from 'react';
 import { sendTestEmailAction } from '../../../actions/notifications';
 import { Button } from '@/components/ui/button';
+import { useToastManager } from '@/components/ui/toast';
 
 export function SendTestEmailButton() {
-  const [state, formAction, pending] = useActionState(sendTestEmailAction, undefined);
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const toastManager = useToastManager();
+
+  function handleClick() {
+    setError(null);
+    startTransition(async () => {
+      const result = await sendTestEmailAction(undefined, new FormData());
+      if (result?.error) {
+        setError(result.error);
+        return;
+      }
+      toastManager.add({
+        type: 'success',
+        title: 'Test email sent',
+        description:
+          "If RESEND_API_KEY isn't configured, check the server logs instead of your inbox.",
+      });
+    });
+  }
 
   return (
-    <form action={formAction} className="flex flex-col items-start gap-1">
-      <Button type="submit" variant="outline" size="sm" disabled={pending}>
+    <div className="flex flex-col items-start gap-1">
+      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={handleClick}>
         {pending ? 'Sending…' : 'Send test email'}
       </Button>
-      {state?.error && <p className="text-xs text-destructive">{state.error}</p>}
-      {state?.success && (
-        <p className="text-xs text-muted-foreground">
-          Sent. If RESEND_API_KEY isn&apos;t configured, check the server logs instead of your
-          inbox.
-        </p>
-      )}
-    </form>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+    </div>
   );
 }

@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
 import { eq, and, sql } from 'drizzle-orm';
+import { CalendarClock } from 'lucide-react';
 import { requireUser } from '../../../lib/auth/guards';
 import { can } from '../../../lib/auth/rbac';
 import { db } from '../../../lib/db';
@@ -18,6 +19,7 @@ import { isEnabled } from '../../../lib/flags';
 import { generateEntriesForRange } from '../../../lib/generate-entries';
 import { autoGenerateGuard } from '../../../lib/domain/auto-generate-guard';
 import { currentYearMonth, utcStartOfDay } from '../../../lib/domain/today';
+import { EmptyState } from '@/components/ui/empty-state';
 import { MonthHeader } from './month-header';
 import { MonthTabs } from './month-tabs';
 import { ViewToggle } from './view-toggle';
@@ -172,13 +174,12 @@ export default async function MonthlyPage({
       )}
 
       {!hasEntries ? (
-        <p className="rounded-2xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-          No entries for this month. Go to the{' '}
-          <a href="/recurring" className="underline">
-            Plan
-          </a>{' '}
-          page and generate a forecast.
-        </p>
+        <EmptyState
+          icon={CalendarClock}
+          title="No entries for this month"
+          description="Go to Plan and generate a forecast to materialize this month's bills and income."
+          action={canManage ? { label: 'Go to Plan', href: '/recurring' } : undefined}
+        />
       ) : view === 'list' ? (
         <ListView entries={typedEntries} canManage={canManage} />
       ) : (

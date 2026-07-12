@@ -5,6 +5,9 @@ import { updateGoalAction, deleteGoalAction } from '../../actions/goals';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
+import { ResponsiveSheet } from '@/components/ui/responsive-sheet';
 import { computeGoalProgress } from '../../../lib/domain/budgeting';
 import { formatSGD } from '../../../lib/format';
 import { parseAmountToCents } from '../../../lib/money';
@@ -31,6 +34,9 @@ export function GoalCard({
   const [updateState, updateAction, updatePending] = useActionState(updateGoalAction, undefined);
   const [deleteState, deleteAction, deletePending] = useActionState(deleteGoalAction, undefined);
 
+  // Render-time state sync (not useEffect+setState — see category-row.tsx for why):
+  // closing the edit sheet only touches THIS component's own local state, so the same
+  // pattern quick-add.tsx and goal-add-form.tsx use is safe here too.
   const [reactedTo, setReactedTo] = useState(updateState);
   if (updateState !== reactedTo) {
     setReactedTo(updateState);
@@ -45,73 +51,24 @@ export function GoalCard({
   );
   const barWidth = Math.min(100, progress.percentage);
 
-  if (isEditing) {
-    return (
-      <Card data-testid="goal-card">
-        <CardContent>
-          <form action={updateAction} className="flex flex-col gap-2">
-            <input type="hidden" name="id" value={goal.id} />
-            <Input name="name" defaultValue={goal.name} required className="h-8" />
-            <div className="flex items-center gap-2">
-              <Input
-                name="targetAmount"
-                defaultValue={goal.targetAmount}
-                placeholder="Target amount"
-                inputMode="decimal"
-                required
-                className="h-8"
-              />
-              <Input
-                name="savedAmount"
-                defaultValue={goal.savedAmount}
-                placeholder="Saved so far"
-                inputMode="decimal"
-                className="h-8"
-              />
-            </div>
-            <Input
-              name="targetDate"
-              type="date"
-              defaultValue={goal.targetDate ?? ''}
-              className="h-8"
-            />
-            <div className="flex justify-end gap-1">
-              <Button type="button" variant="ghost" size="sm" onClick={() => setIsEditing(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" size="sm" disabled={updatePending}>
-                Save
-              </Button>
-            </div>
-            {updateState?.error && <p className="text-xs text-destructive">{updateState.error}</p>}
-          </form>
-        </CardContent>
-      </Card>
-    );
-  }
-
   return (
     <Card data-testid="goal-card">
       <CardHeader>
         <CardTitle className="flex items-center justify-between">
           <span>{goal.name}</span>
           {progress.isComplete && (
-            <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
-              COMPLETE
-            </span>
+            <Badge className="border-transparent bg-income/15 text-income">COMPLETE</Badge>
           )}
           {!progress.isComplete && progress.isOverdue && (
-            <span className="text-xs font-semibold text-red-600 dark:text-red-400">OVERDUE</span>
+            <Badge className="border-transparent bg-warning/15 text-warning">OVERDUE</Badge>
           )}
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-          <div
-            className={`h-full ${progress.isComplete ? 'bg-emerald-500' : 'bg-foreground'}`}
-            style={{ width: `${barWidth}%` }}
-          />
-        </div>
+      <CardContent className="flex flex-col gap-3">
+        <Progress
+          value={barWidth}
+          indicatorClassName={progress.isComplete ? 'bg-income' : undefined}
+        />
         <div className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">
             {formatSGD(progress.savedCents)} of {formatSGD(progress.targetCents)}
@@ -121,17 +78,71 @@ export function GoalCard({
         {goal.targetDate && (
           <div className="text-xs text-muted-foreground">Target date: {goal.targetDate}</div>
         )}
+        {/* Projected-completion badge (spec.md Phase 11 task 2) — only ever shown
+            alongside a non-complete goal that has some savings history to project
+            from (computeGoalProgress returns null otherwise), so it never overlaps
+            with the COMPLETE badge above. */}
         {!progress.isComplete && progress.projectedCompletionDate && (
-          <div className="text-xs text-muted-foreground">
-            Projected: {progress.projectedCompletionDate}
-          </div>
+          <Badge variant="secondary" className="w-fit">
+            Projected {progress.projectedCompletionDate}
+          </Badge>
         )}
         {canManage && (
-          <div className="mt-2 flex justify-end gap-1">
+          <div className="mt-1 flex justify-end gap-1">
             {canEdit && (
-              <Button type="button" variant="ghost" size="sm" onClick={() => setIsEditing(true)}>
-                Edit
-              </Button>
+              <ResponsiveSheet
+                open={isEditing}
+                onOpenChange={setIsEditing}
+                title="Edit goal"
+                trigger={
+                  <Button type="button" variant="ghost" size="sm">
+                    Edit
+                  </Button>
+                }
+              >
+                <form
+                  action={updateAction}
+                  data-testid="goal-edit-form"
+                  className="flex flex-col gap-3"
+                >
+                  <input type="hidden" name="id" value={goal.id} />
+                  <label className="flex flex-col gap-1 text-sm">
+                    Name
+                    <Input name="name" defaultValue={goal.name} required />
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="flex flex-col gap-1 text-sm">
+                      Target amount
+                      <Input
+                        name="targetAmount"
+                        defaultValue={goal.targetAmount}
+                        placeholder="Target amount"
+                        inputMode="decimal"
+                        required
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm">
+                      Saved so far
+                      <Input
+                        name="savedAmount"
+                        defaultValue={goal.savedAmount}
+                        placeholder="Saved so far"
+                        inputMode="decimal"
+                      />
+                    </label>
+                  </div>
+                  <label className="flex flex-col gap-1 text-sm">
+                    Target date
+                    <Input name="targetDate" type="date" defaultValue={goal.targetDate ?? ''} />
+                  </label>
+                  <Button type="submit" disabled={updatePending}>
+                    {updatePending ? 'Saving…' : 'Save'}
+                  </Button>
+                  {updateState?.error && (
+                    <p className="text-xs text-destructive">{updateState.error}</p>
+                  )}
+                </form>
+              </ResponsiveSheet>
             )}
             <form action={deleteAction}>
               <input type="hidden" name="id" value={goal.id} />

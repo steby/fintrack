@@ -1,30 +1,54 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useState, useTransition, type FormEvent } from 'react';
 import { changePasswordAction } from '../../../actions/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { useToastManager } from '@/components/ui/toast';
 
+// Direct-call + startTransition (not useActionState + <form action>) — the established,
+// debugged pattern for firing a toast tied to a Server Action result
+// (app/(app)/home/mark-paid-button.tsx, components/theme-toggle.tsx): calling the
+// action inside the SAME async closure that fires the toast means the toast never
+// depends on this component surviving to observe a later render. Not strictly needed
+// here (changePasswordAction never calls revalidatePath, so this component never
+// unmounts), but kept consistent with every other new toast this phase adds rather than
+// mixing in the render-time "reacted to" pattern (used elsewhere in this codebase only
+// for this component's OWN setState calls, never for firing an external system like a
+// toast — see mark-paid-button.tsx's comment for why that distinction matters). The
+// inline "Password updated." text is preserved verbatim (not replaced by the toast) —
+// e2e/auth.spec.ts asserts it directly and is one of the three specs (auth/invite/cron)
+// this project's cross-phase rule says must never need churn.
 export function ChangePasswordForm() {
-  const [state, action, pending] = useActionState(changePasswordAction, undefined);
-  // Controlled, not uncontrolled defaultValue fields — React 19 auto-resets an
-  // uncontrolled <form action={...}> once the action settles, including on an error
-  // return (not just success), silently clearing both password fields right as the
-  // user reads why their submission failed. A controlled value survives that reset
-  // (React keeps rendering the state-held value), so only the success branch below
-  // clears the fields deliberately.
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [succeeded, setSucceeded] = useState(false);
+  // Controlled, not uncontrolled — a plain onSubmit handler (not <form action={...}>)
+  // doesn't get React 19's auto-reset-on-action-settle behavior at all, but staying
+  // controlled still means a deliberate reset (below) is the only thing that ever
+  // clears these fields, not an implicit framework behavior.
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const toastManager = useToastManager();
 
-  const [reactedTo, setReactedTo] = useState(state);
-  if (state !== reactedTo) {
-    setReactedTo(state);
-    if (state?.success) {
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+    setSucceeded(false);
+    const formData = new FormData(e.currentTarget);
+    startTransition(async () => {
+      const result = await changePasswordAction(undefined, formData);
+      if (result?.error) {
+        setError(result.error);
+        return;
+      }
       setCurrentPassword('');
       setNewPassword('');
-    }
+      setSucceeded(true);
+      toastManager.add({ type: 'success', title: 'Password updated' });
+    });
   }
 
   return (
@@ -36,7 +60,7 @@ export function ChangePasswordForm() {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form action={action} className="flex flex-col gap-4">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="currentPassword">Current password</Label>
             <Input
@@ -61,8 +85,8 @@ export function ChangePasswordForm() {
               onChange={(e) => setNewPassword(e.target.value)}
             />
           </div>
-          {state?.error && <p className="text-sm text-destructive">{state.error}</p>}
-          {state?.success && <p className="text-sm text-green-600">Password updated.</p>}
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          {succeeded && <p className="text-sm text-income">Password updated.</p>}
           <Button type="submit" disabled={pending}>
             {pending ? 'Updating...' : 'Update password'}
           </Button>

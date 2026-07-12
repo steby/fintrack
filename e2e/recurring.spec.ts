@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import { eq, and, inArray } from 'drizzle-orm';
 import { createTestDb } from './test-db';
 import { requireEnv } from './env';
-import { recurringSchedule, monthlyEntries, users } from '../lib/db/schema';
+import { recurringSchedule, monthlyEntries, users, households } from '../lib/db/schema';
 import { hashPassword } from '../lib/auth/password';
 
 const OWNER_EMAIL = requireEnv('SEED_OWNER_EMAIL');
@@ -65,7 +65,7 @@ test.describe('recurring schedule', () => {
     await expect(page).toHaveURL('/');
 
     await page.goto('/recurring');
-    await expect(page.getByRole('heading', { name: 'Recurring schedule' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Plan' })).toBeVisible();
 
     // Create a Monthly item.
     await page.getByRole('button', { name: 'Add item' }).click();
@@ -77,10 +77,21 @@ test.describe('recurring schedule', () => {
     await expect(row.getByText('$42.50')).toBeVisible();
 
     // Generate a forecast for the current month — the new item should materialize
-    // into a monthly_entries row for it.
+    // into a monthly_entries row for it. Generate is a real modal Dialog now (spec.md
+    // Phase 11: "Generate -> Dialog"), deliberately staying open after success to show
+    // the "Generated N entries" message in place — unlike the pre-restyle inline form,
+    // its backdrop blocks clicks elsewhere on the page until dismissed, so the test
+    // must close it before continuing (caught live: the next step's Edit click
+    // otherwise timed out waiting for an element the backdrop was intercepting).
     await page.getByRole('button', { name: 'Generate forecast' }).click();
     await page.getByRole('button', { name: 'Generate', exact: true }).click();
     await expect(page.getByText(/Generated \d+ entr(y|ies)\./)).toBeVisible();
+    // Dismiss via the dialog's own built-in close icon (components/ui/dialog.tsx's
+    // DialogContent, aria-label="Close") — there's no separate footer "Close" button
+    // (removed: it was a redundant, exact-name-colliding second way to do the same
+    // thing — see generate-form.tsx's comment).
+    await page.getByLabel('Close').click();
+    await expect(page.getByLabel('Close')).toHaveCount(0);
 
     // The default generate range now spans a full 12 months forward (see
     // generate-form.tsx's addMonths-based default), so more than one month's entry
@@ -116,10 +127,17 @@ test.describe('recurring schedule', () => {
       .where(eq(recurringSchedule.item, renamedName));
     expect(propagatedEntry.item).toBe(renamedName);
 
-    // Toggle inactive, then delete (with its forecast entry).
+    // Toggle inactive, then delete (with its forecast entry). Active/Inactive is a
+    // Switch primitive now (spec.md Phase 11), not a plain button — Base UI's Switch.Root
+    // renders role="switch", not "button" (verified against the installed package's
+    // source), so this asserts via toBeChecked()/not.toBeChecked() rather than a role
+    // name that no longer applies.
     const renamedRow = page.getByTestId('recurring-row').filter({ hasText: renamedName });
-    await renamedRow.getByRole('button', { name: 'Active' }).click();
-    await expect(renamedRow.getByRole('button', { name: 'Inactive' })).toBeVisible();
+    const activeToggle = renamedRow.getByRole('switch');
+    await expect(activeToggle).toBeChecked();
+    await activeToggle.click();
+    await expect(activeToggle).not.toBeChecked();
+    await expect(renamedRow.getByText('Inactive')).toBeVisible();
 
     await renamedRow.getByRole('button', { name: 'Delete' }).click();
     await expect(page.getByTestId('recurring-row').filter({ hasText: renamedName })).toHaveCount(0);
@@ -139,10 +157,42 @@ test.describe('recurring schedule', () => {
     await expect(page).toHaveURL('/');
 
     await page.goto('/recurring');
-    await expect(page.getByRole('heading', { name: 'Recurring schedule' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Plan' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Add item' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Generate forecast' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Edit' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Delete' })).toHaveCount(0);
+    await expect(page.getByRole('switch')).toHaveCount(0);
+  });
+
+  test('a brand-new household with zero recurring items sees the empty state', async ({ page }) => {
+    const [freshHousehold] = await testDb
+      .insert(households)
+      .values({ name: `E2E Plan Empty ${Date.now()}` })
+      .returning();
+    const email = `e2e-plan-empty-${Date.now()}@example.com`;
+    const password = 'fresh-household-password-123';
+
+    try {
+      await testDb.insert(users).values({
+        householdId: freshHousehold.id,
+        email,
+        passwordHash: await hashPassword(password),
+        name: 'Fresh Owner',
+        role: 'owner',
+      });
+
+      await page.goto('/login');
+      await page.getByLabel('Email').fill(email);
+      await page.getByLabel('Password').fill(password);
+      await page.getByRole('button', { name: 'Sign in' }).click();
+      await expect(page).toHaveURL('/');
+
+      await page.goto('/recurring');
+      await expect(page.getByText('No recurring items yet')).toBeVisible();
+    } finally {
+      await testDb.delete(users).where(eq(users.email, email));
+      await testDb.delete(households).where(eq(households.id, freshHousehold.id));
+    }
   });
 });

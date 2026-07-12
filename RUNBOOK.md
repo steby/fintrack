@@ -176,6 +176,62 @@ values ('<household-id>', 'auto_generate', 'false')
 on conflict (household_id, key) do update set value = excluded.value;
 ```
 
+## UI primitives (Phase 8-11 redesign) — failure modes
+
+The "modern fintech" redesign (spec.md Phases 8-11) introduced a small set of base-ui
+wrappers in `components/ui/` (`dialog.tsx`, `drawer.tsx`, `responsive-sheet.tsx`,
+`toast.tsx`, `switch.tsx`, `progress.tsx`, `tabs.tsx`, `tooltip.tsx`, `stat.tsx`,
+`fab.tsx`, `empty-state.tsx`, `skeleton.tsx`). None of them sit on the trust boundary
+(they're presentation, not auth/data), but a few have real, non-obvious failure modes
+worth knowing before assuming "the UI looks broken" means "the feature is broken":
+
+- **A Server Action's mutation always completes even if its toast never renders.**
+  Every toast tied to a Server Action in this codebase (mark-paid, kill-switch toggles,
+  invite/password-change confirmations, member remove, etc.) fires from a **direct call
+  inside `startTransition`**, not `useActionState` — see
+  `app/(app)/home/mark-paid-button.tsx`'s comment for the real bug (a race between
+  `useActionState`'s own state update and a `revalidatePath`-driven re-render that
+  unmounts the exact component holding that state) this pattern was adopted to fix. If
+  `ToastProvider` (mounted once in `app/layout.tsx`) is ever missing from the tree —
+  e.g. a future refactor accidentally moves a page outside it — `useToastManager()`
+  throws at render time in that subtree; it does NOT silently swallow the mutation
+  itself. A report of "I clicked X and nothing seemed to happen" should be verified
+  against the actual data (did the row/flag/value change?) before assuming the action
+  failed — the write path and the feedback path are two separate concerns by design.
+- **Toast propagation delay is separate from kill-switch propagation delay.** A
+  kill-switch toggle's own up-to-30s in-memory cache (see "Kill-switch usage" above) is
+  unrelated to the toast confirming the toggle succeeded — the toast fires the instant
+  the write commits; a stale cached read elsewhere in the app during that ~30s window is
+  the flags cache doing its documented job, not the toast lying.
+- **`ResponsiveSheet` defaults to a Dialog (not a Drawer) until the client has mounted
+  and measured the viewport** (`components/ui/responsive-sheet.tsx`'s `useIsDesktop`
+  hook, via `useSyncExternalStore` — a hydration-safe read, never a `useEffect` +
+  `setState`). On a genuinely narrow viewport this means a sheet can render as a
+  centered Dialog for one frame before flipping to a bottom Drawer; this is a
+  known, harmless flash, not a bug to chase, and matches the plan's own explicit
+  WISDOM note ("render nothing until mounted OR default to Dialog — Dialog is the
+  safer of the two to flash-render since it has no gesture/swipe state to tear down").
+- **Drawer (bottom sheet) safe-area on iOS**: `drawer.tsx`'s `DrawerContent` pads its
+  bottom edge with `env(safe-area-inset-bottom)` specifically so the sheet's own
+  actions aren't obscured by the iOS home-indicator bar. If a future edit wraps the
+  Drawer's content in an additional fixed-position container without carrying that
+  padding through, the symptom is "the bottom button is unreachable/behind the home
+  bar on an iPhone" — check for exactly this padding having been dropped, not a broader
+  layout regression.
+- **A viewer never even receives the components that would fire a toast** — every
+  write-triggering trigger (Fab/`New entry`, kill-switch Switches, mark-paid buttons,
+  Edit/Delete buttons) is gated server-side by `canManage`/`can(role, ...)` the same as
+  every prior phase's write affordances, not merely hidden by CSS; there is no
+  "read-only user sees a broken button" failure mode by construction, only "read-only
+  user sees no button at all."
+- **The service worker's static-only caching policy is unaffected by any of this
+  redesign** — `app/sw.js/route.ts`'s fetch handler still only intercepts
+  `_next/static/*` and the fixed PWA asset list (`lib/pwa/static-paths.ts`); no page
+  route, RSC payload, or Server Action response is ever cached by it, so a stale toast/
+  dialog/switch UI from a cached page is not a failure mode this redesign introduces —
+  verify by checking the request in DevTools' Network tab was actually served
+  `(ServiceWorker)` before assuming the SW is implicated in anything UI-related.
+
 ## Session / auth incidents
 
 Sessions are opaque random tokens (`lib/auth/session.ts`) validated by a `sessions` table row

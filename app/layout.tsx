@@ -26,7 +26,21 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  themeColor: '#000000',
+  // Phase 11 PWA refresh: light/dark `media` variants (verified against
+  // node_modules/next/dist/docs/01-app/03-api-reference/04-functions/generate-viewport.md
+  // before using this shape — themeColor lives on `viewport`, not `metadata`, and this
+  // array form is how it expresses per-scheme colors) replacing the single flat
+  // '#000000' left over from spec.md Phase 3's OLED identity. Values are the sRGB
+  // rendering of app/globals.css's own `--background` token in each theme (light:
+  // oklch(0.975 0.005 90), dark: oklch(0.155 0.012 285)) — this only tracks the OS's
+  // `prefers-color-scheme`, not next-themes' own class-driven state (a `meta` tag can't
+  // react to that), so a user who overrides the theme via the in-app toggle sees the
+  // browser chrome color settle back to whichever the OS prefers on the next paint that
+  // re-reads it — a known, harmless mismatch, not a bug to chase further here.
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#f8f7f3' },
+    { media: '(prefers-color-scheme: dark)', color: '#0c0c11' },
+  ],
 };
 
 export default function RootLayout({

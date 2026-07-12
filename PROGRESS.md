@@ -3807,3 +3807,165 @@ Goals/Settings/Import restyle, PWA refresh) remains not started, per the plan's 
 phase boundaries — explicitly out of scope, not silently dropped.
 
 ---
+
+## Phase 11 — Plan/Goals/Settings/Import restyle + polish + PWA refresh — status: complete 2026-07-12
+
+**What shipped:**
+
+- **Plan (`/recurring`, route unchanged)**: H1 relabeled "Recurring schedule" ->
+  "Plan" (the Monthly page's own empty-state link already said "Plan" pre-restyle —
+  this makes the page's heading match). Frequency-grouped tables wrapped in
+  `bg-card shadow-card` surfaces. Active/Inactive -> `Switch` primitive, wired via a
+  direct `startTransition` call (`toggleRecurringAction` invoked directly, not through
+  `useActionState` + `<form>` — a Switch has no native form submission, and this keeps
+  the row consistent with the direct-call convention even though this particular
+  toggle never unmounts). Generate -> a plain, always-centered `Dialog` (not
+  `ResponsiveSheet` — the plan's own literal task wording draws this distinction from
+  Goals' sheets, preserved deliberately).
+- **Goals**: `GoalCard`'s hand-rolled progress bar replaced by the `Progress`
+  primitive; COMPLETE/OVERDUE badges and a new projected-completion badge moved onto
+  `Badge` + the `--income`/`--warning` semantic tokens (retiring this page's emerald/
+  red-literal convention). Add -> `GoalAddForm` restyled as a `ResponsiveSheet`
+  (trigger + sheet); Edit -> each `GoalCard` gets its own `ResponsiveSheet`. Flag-off
+  delete-only mode preserved byte-for-byte (`canEdit`/`canManage` are the exact same
+  booleans as before, just wired into new JSX) — live-verified with a real seeded goal,
+  not just read from the diff (see below).
+- **Settings**: hub + every subpage restyled onto `Card`/`bg-card shadow-card`
+  surfaces. Kill-switch toggles (`email_reminders`, `monthly_recap`, `csv_import`) ->
+  `Switch`. Save feedback -> toasts on `ChangePasswordForm`, `InviteForm`, `MemberRow`
+  (role change + remove), `NotificationToggle`, `MemberNotifyRow`,
+  `SendTestEmailButton`, `CsvImportToggle` — all converted from `useActionState` to
+  direct-call + `startTransition` + `useToastManager()`, the same pattern
+  `mark-paid-button.tsx` established in Phase 9; needed (not just consistent) for
+  `MemberRow`'s remove and `CsvImportToggle`, both of which trigger a `revalidatePath`
+  that unmounts/replaces the exact component that would otherwise need to observe its
+  own result. `ChangePasswordForm`'s inline "Password updated." text is kept verbatim
+  alongside the new toast, not replaced by it — `e2e/auth.spec.ts` (one of the three
+  specs this project's cross-phase rule says must never need churn) asserts that exact
+  text. Data subpage gained an "Import CSV" card/link. Members page gained a new,
+  read-only "Pending invites" list (a query only, no new mutation — the pre-restyle
+  page never showed pending invitations at all); `createInviteAction` gained a
+  `revalidatePath('/settings/members')` so the list actually refreshes after a real
+  send (a real bug found live, see below).
+- **Import**: wizard restyled with a plain, non-interactive step indicator
+  (Upload -> Preview -> Done) — deliberately not the `Tabs` primitive, since these
+  steps can't be jumped between arbitrarily the way `Tabs` implies. No flow change.
+- **Empty states**: `EmptyState` adopted on every list surface the plan named —
+  recurring, goals, categories (income + expense, compact variant), accounts, the new
+  members-invites list, and Monthly's pre-existing empty-state block (which was
+  already hand-styled with the exact classes `EmptyState` itself uses, now the real
+  component).
+- **PWA/brand refresh**: `lib/pwa/icon.tsx`'s shared glyph background moved from pure
+  black to `#7c3aed` — the exact sRGB rendering of `globals.css`'s light `--chart-1`/
+  `--primary` hue (reused, not invented, so it's already CVD-palette-consistent).
+  `app/manifest.ts`'s `background_color`/`theme_color` moved from `#000000` to
+  `#0c0c11` (the sRGB rendering of the dark theme's real `--background` token).
+  `app/layout.tsx`'s `viewport` export gained `media`-qualified `themeColor` variants
+  (light `#f8f7f3` / dark `#0c0c11`) per the array form documented in
+  `node_modules/next/dist/docs/01-app/03-api-reference/04-functions/generate-viewport
+.md` — read before writing it, not assumed from training data (this Next.js version's
+  own AGENTS.md warning).
+- **RUNBOOK.md**: new "UI primitives (Phase 8-11 redesign) — failure modes" section.
+- **E2E**: `e2e/recurring.spec.ts` (heading rename; Switch-role toggle assertions; new
+  fresh-household empty-state test), `e2e/phase4.spec.ts` (goal add/edit flows scoped
+  to their sheet testids; two new fresh-household empty-state tests for goals and
+  categories/accounts), `e2e/notifications.spec.ts` (kill-switch assertions ->
+  Switch-role), new `e2e/members.spec.ts` (pending-invites empty state -> real invite
+  sent through the UI -> toast -> invite listed). `e2e/categories.spec.ts`/
+  `e2e/phase5.spec.ts`/`e2e/pwa.spec.ts` reviewed and left untouched — confirmed by
+  actually running them, not just by inspection, that nothing in this phase's restyle
+  broke any of their existing assertions.
+
+**Two real bugs found via live E2E verification — both test-authoring bugs this
+phase's restyle exposed, not product defects, logged honestly rather than either
+dismissed or over-claimed:**
+
+1. `GoalAddForm`'s `ResponsiveSheet` correctly closes on success; the FIRST version of
+   its own E2E test didn't wait for the sheet's CSS exit animation
+   (`components/ui/dialog.tsx`'s `transition-all duration-150`, which keeps the Popup
+   mounted through the transition rather than unmounting instantly — real, deliberate
+   product behavior) before immediately trying to reopen it, hitting a genuine
+   Playwright strict-mode violation when the trigger and the still-animating-out
+   submit button briefly coexisted. Root-caused by reproducing it against the real
+   committed suite (`CI=true npx playwright test`) — a hand-written throwaway script
+   polling every 300ms never caught it, since 300ms comfortably exceeds the 150ms
+   window. Fixed in the test: `await expect(page.getByTestId('goal-add-form'))
+.toHaveCount(0)` before the reopen click.
+2. `GenerateForm`'s new modal `Dialog` has a backdrop that blocks clicks elsewhere on
+   the page while open — a real, minor UX consequence of the restyle (the pre-restyle
+   inline form had no such overlay), not a test bug. `e2e/recurring.spec.ts`'s
+   pre-existing "edit right after generating" step timed out for 30s waiting for a
+   click the backdrop was silently swallowing. Fixed two ways: the test now dismisses
+   the dialog before continuing (matching real user behavior), and the dialog's own
+   redundant custom "Close" footer button — which duplicated `DialogContent`'s
+   already-built-in X icon and, once the first fix surfaced it, triggered a SECOND,
+   separate strict-mode violation (two controls both literally named "Close") — was
+   removed rather than relabeled, since having two colliding affordances was itself a
+   latent bug, not a naming detail to patch around.
+
+**A real product bug found and fixed (a genuine gap this phase's own new feature
+needed):** the new Pending Invites list never refreshed after sending a real invite —
+`createInviteAction` had no `revalidatePath` call (never needed one before Phase 11,
+since nothing on `/settings/members` depended on its data). `e2e/members.spec.ts`
+caught this immediately. The fix INITIALLY appeared not to work on a re-run, which
+traced to testing against a stale `next build` output from before the fix — the exact
+"always rebuild after a source change before trusting a fresh E2E run" lesson Phase
+10's own entry above already recorded, hit again here; rebuilding first confirmed the
+real fix. Added `revalidatePath('/settings/members')` to `createInviteAction` — the
+same category of change as Phase 9's `updateActualAction` gaining a second
+`revalidatePath('/')`, a cache-invalidation addition, not a loosened check.
+
+**Deviations from the literal plan, logged rather than silent:**
+
+1. Generate uses a plain `Dialog`, Goals' add/edit use `ResponsiveSheet` — the plan's
+   own task wording draws exactly this distinction; preserved deliberately, not
+   flattened onto one primitive.
+2. Members gained a new, read-only "Pending invites" list — a direct, minimal-risk
+   reading of the plan's own instruction to adopt `EmptyState` on "members-invites" as
+   a named list surface, which the pre-restyle page had no list for at all. Explicitly
+   NO revoke/resend action added — that would be new mutation surface a restyle phase
+   has no mandate to add.
+3. `MemberNotifyRow` (per-member opt-in) stayed a plain `Button`, not `Switch` — the
+   plan's task 3 says "kill-switch toggles -> Switch" specifically; opt-in isn't one of
+   the four kill-switches.
+
+**Test/CI status:** Unit 461/461 (unchanged — no `lib/**` logic touched this phase).
+Integration 264/264 (unchanged — no `app/actions/*.ts` file touched except `invites.ts`'s
+single added `revalidatePath` line). Coverage: 99.44% statements / 97.58% branches /
+99.32% functions / 99.84% lines on the gated `lib/**` scope (gate 80%; identical to
+Phase 10's numbers, for the reason above). E2E 68/68 (up from 64), the final run
+executed with `CI=true` against a real `next build && next start`, run twice
+back-to-back clean after the fixes above and a rebuild in between (the second bug's
+"stale build" gotcha made a real rebuild non-optional this time, not just good
+hygiene). Lint/typecheck/format all clean (`npm run format` made no unexpected
+changes beyond what this phase's own edits already matched).
+
+**Live verification (real, not assumed) — beyond the green E2E suite, specifically for
+the three preserved-behavior edge cases this phase's own task list called out:**
+
+1. **Goals flag-off delete-only mode**: started a second real server instance with
+   `FEATURE_SAVINGS_GOALS=false`, inserted one real goal directly into the seeded
+   household's data, logged in as the owner, and confirmed via direct DOM reads: the
+   goal card rendered with its real saved/target amounts, zero "Add goal" triggers
+   anywhere on the page, zero "Edit" buttons on that card, and one working "Delete"
+   button — clicked for real, which actually removed the row (confirmed by its
+   absence afterward via a direct DB read, not assumed from the click alone).
+2. **Import kill-switch-off friendly message**: created a genuinely fresh household
+   (its own `households` row, `csv_import` at its untouched default) and confirmed the
+   friendly "CSV import is not enabled for this household" message, the owner-specific
+   enabling copy, zero CSV file inputs anywhere in the DOM, and an unchecked `Switch`;
+   flipped that real `Switch` and confirmed, after a reload, the full upload form
+   (file input included) genuinely appeared.
+3. **Service worker static-only caching policy**: confirmed via `git diff --stat`
+   that `app/sw.js/route.ts` and `lib/pwa/static-paths.ts` have zero changes this
+   phase, combined with `e2e/pwa.spec.ts`'s own "the service worker registers and
+   controls the page" test passing clean in the full E2E run.
+
+**Deferred / not done:** Nothing from this phase's own task list — every task shipped.
+This closes the Phase 8-11 UI/UX redesign in full. `spec.md`'s Feature Matrix is
+unchanged across all four phases (no new flags); every prior phase's preserved
+behavior (auto-generate, propagation, byte-identical reminders/recap output, CSV
+import/export, cross-household scoping, the `min-w-0` layout fix) was re-verified this
+phase too, not just assumed to still hold.
+
+---

@@ -42,7 +42,10 @@ export function RecurringAddForm({
   }
 
   return (
-    <form action={action} className="flex flex-wrap items-end gap-2 rounded-md border p-3">
+    <form
+      action={action}
+      className="flex flex-wrap items-end gap-2 rounded-2xl border bg-card p-3 shadow-card"
+    >
       <label className="flex flex-col gap-1 text-xs">
         Item
         <Input name="item" placeholder="e.g. Spotify Duo" required className="h-8 w-40" />

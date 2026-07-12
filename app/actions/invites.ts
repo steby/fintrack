@@ -2,6 +2,7 @@
 
 import { z } from 'zod';
 import { redirect } from 'next/navigation';
+import { revalidatePath } from 'next/cache';
 import { cookies } from 'next/headers';
 import { eq, and, isNull, lt } from 'drizzle-orm';
 import { db } from '../../lib/db';
@@ -82,6 +83,17 @@ export async function createInviteAction(
 
   const acceptUrl = `${env.APP_URL}/invite/${token}`;
   await sendInviteEmail(email, acceptUrl);
+
+  // Added Phase 11: the restyled Members page now shows a "Pending invites" list
+  // (spec.md Phase 11 task 5, adopting empty-state.tsx on that surface) fetched by
+  // app/(app)/settings/members/page.tsx's own Server Component render — without this,
+  // a household sending an invite through the restyled InviteForm (a direct
+  // startTransition call, not a `<form action={...}>` navigation) would need a full
+  // manual reload before the new invite ever appeared in that list. Not a loosened
+  // check — purely a cache-invalidation addition, same category as Phase 9's
+  // `updateActualAction` gaining a second `revalidatePath('/')` when Home started
+  // depending on its data too.
+  revalidatePath('/settings/members');
 
   return { success: true };
 }

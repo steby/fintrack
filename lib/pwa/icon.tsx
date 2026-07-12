@@ -7,10 +7,16 @@ const GLYPH_SIZE_RATIO = 0.625;
 
 /** Shared glyph for every generated app icon (favicon, apple-icon, manifest icons) —
  *  one definition so the four routes that render it can never visually drift apart.
- *  Matches the app's OLED-dark identity (globals.css dark theme: pure black
- *  background) rather than the light theme, since that's next-themes' defaultTheme.
- *  `size` is the icon's pixel width/height (assumed square); fontSize is derived from
- *  it, not passed separately, so every icon stays in proportion by construction. */
+ *  Phase 11 PWA refresh: a solid violet background (the SAME hex as globals.css's
+ *  `--chart-1` light slot / the app's `--primary` hue — already CVD-validated as part
+ *  of that palette, not a freshly-invented color) with a near-white glyph, replacing
+ *  the pure-black OLED-era icon (spec.md Phase 3's identity, superseded by Phase 8's
+ *  layered warm dark theme). One fixed color regardless of the OS's light/dark
+ *  preference — an installed app icon renders on the home screen/app switcher, outside
+ *  any page's own light/dark theme context, so there's no "current theme" to match the
+ *  way the in-app UI does. `size` is the icon's pixel width/height (assumed square);
+ *  fontSize is derived from it, not passed separately, so every icon stays in
+ *  proportion by construction. */
 export function appIconGlyph(size: number): ReactElement {
   return (
     <div
@@ -20,7 +26,7 @@ export function appIconGlyph(size: number): ReactElement {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: '#000',
+        background: '#7c3aed',
         color: '#fafafa',
         fontSize: Math.round(size * GLYPH_SIZE_RATIO),
         fontWeight: 700,

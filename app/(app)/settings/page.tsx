@@ -38,7 +38,7 @@ export default async function SettingsHubPage() {
       {/* md:hidden: the desktop sidebar already has dedicated Plan/Insights entries
           (app/(app)/layout.tsx); the bottom nav's 5 tabs don't have room for either, so
           this hub is their only mobile landing spot. */}
-      <nav className="flex flex-col divide-y rounded-2xl border md:hidden">
+      <nav className="flex flex-col divide-y rounded-2xl border bg-card shadow-card md:hidden">
         <Link href="/recurring" className="flex min-h-14 items-center px-4 text-sm hover:bg-muted">
           Plan
         </Link>
@@ -47,7 +47,7 @@ export default async function SettingsHubPage() {
         </Link>
       </nav>
 
-      <nav className="flex flex-col divide-y rounded-2xl border">
+      <nav className="flex flex-col divide-y rounded-2xl border bg-card shadow-card">
         {links.map((link) => (
           <Link
             key={link.href}

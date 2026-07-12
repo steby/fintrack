@@ -4,7 +4,7 @@ import { eq, inArray } from 'drizzle-orm';
 import { createTestDb } from './test-db';
 import { requireEnv } from './env';
 import { login } from './login';
-import { categories, bankAccounts, goals, users } from '../lib/db/schema';
+import { categories, bankAccounts, goals, users, households } from '../lib/db/schema';
 import { currentYearMonth } from '../lib/domain/today';
 
 const OWNER_EMAIL = requireEnv('SEED_OWNER_EMAIL');
@@ -95,20 +95,38 @@ test.describe('Phase 4: category budgets, goals, net worth', () => {
     await login(page, OWNER_EMAIL, OWNER_PASSWORD);
     await page.goto('/goals');
 
-    await page.getByPlaceholder('e.g. Emergency fund').fill(goalName);
-    await page.getByPlaceholder('Target amount').fill('2000.00');
-    await page.getByPlaceholder('Saved so far (optional)').fill('500.00');
+    // Add via the ResponsiveSheet (spec.md Phase 11) — the trigger and the sheet's own
+    // submit button share the label "Add goal" and coexist once the sheet is open, so
+    // the submit is scoped to data-testid="goal-add-form" rather than disambiguated by
+    // renaming either one (per the plan's own Playwright guidance).
     await page.getByRole('button', { name: 'Add goal' }).click();
+    const addForm = page.getByTestId('goal-add-form');
+    await addForm.getByPlaceholder('e.g. Emergency fund').fill(goalName);
+    await addForm.getByPlaceholder('Target amount').fill('2000.00');
+    await addForm.getByPlaceholder('Saved so far (optional)').fill('500.00');
+    await addForm.getByRole('button', { name: 'Add goal' }).click();
 
     const card = page.getByTestId('goal-card').filter({ hasText: goalName });
     await expect(card).toBeVisible();
     await expect(card.getByText('25%')).toBeVisible();
     await expect(card.getByText('$500.00 of $2,000.00')).toBeVisible();
 
-    // Failure path: a zero/negative target is rejected with a visible error.
-    await page.getByPlaceholder('e.g. Emergency fund').fill(`${goalName} invalid`);
-    await page.getByPlaceholder('Target amount').fill('0.00');
+    // Wait for the sheet's own close animation to finish (Dialog/Drawer keep the Popup
+    // mounted through their exit transition — components/ui/dialog.tsx's
+    // `transition-all duration-150`) before re-opening it — without this, a real strict-
+    // mode violation is possible (getByRole('button', { name: 'Add goal' }) briefly
+    // resolving to both the trigger AND the still-animating-out submit button), caught
+    // live running this exact test against a real production server, not a flaky guess.
+    await expect(page.getByTestId('goal-add-form')).toHaveCount(0);
+
+    // Failure path: a zero/negative target is rejected with a visible error, and the
+    // sheet stays open (inline validation errors stay inline, not moved to a toast —
+    // spec.md Phase 11) rather than closing as if it had succeeded.
     await page.getByRole('button', { name: 'Add goal' }).click();
+    const addForm2 = page.getByTestId('goal-add-form');
+    await addForm2.getByPlaceholder('e.g. Emergency fund').fill(`${goalName} invalid`);
+    await addForm2.getByPlaceholder('Target amount').fill('0.00');
+    await addForm2.getByRole('button', { name: 'Add goal' }).click();
     await expect(page.getByText('Enter a target amount greater than zero.')).toBeVisible();
     await expect(
       page.getByTestId('goal-card').filter({ hasText: `${goalName} invalid` }),
@@ -121,13 +139,71 @@ test.describe('Phase 4: category budgets, goals, net worth', () => {
 
     const card = page.getByTestId('goal-card').filter({ hasText: goalName });
     await card.getByRole('button', { name: 'Edit' }).click();
-    const editingCard = page.getByTestId('goal-card').filter({ hasText: 'Save' });
-    await editingCard.locator('input[name="savedAmount"]').fill('2000.00');
-    await editingCard.getByRole('button', { name: 'Save' }).click();
+    const editForm = page.getByTestId('goal-edit-form');
+    await editForm.locator('input[name="savedAmount"]').fill('2000.00');
+    await editForm.getByRole('button', { name: 'Save' }).click();
 
     await expect(
       page.getByTestId('goal-card').filter({ hasText: goalName }).getByText('COMPLETE'),
     ).toBeVisible();
+  });
+
+  test('a brand-new household with zero goals sees the empty state', async ({ page }) => {
+    const { hashPassword } = await import('../lib/auth/password');
+    const [freshHousehold] = await testDb
+      .insert(households)
+      .values({ name: `E2E Goals Empty ${Date.now()}` })
+      .returning();
+    const email = `e2e-goals-empty-${Date.now()}@example.com`;
+    const password = 'fresh-household-password-123';
+
+    try {
+      await testDb.insert(users).values({
+        householdId: freshHousehold.id,
+        email,
+        passwordHash: await hashPassword(password),
+        name: 'Fresh Owner',
+        role: 'owner',
+      });
+
+      await login(page, email, password);
+      await page.goto('/goals');
+      await expect(page.getByText('No goals yet')).toBeVisible();
+    } finally {
+      await testDb.delete(users).where(eq(users.email, email));
+      await testDb.delete(households).where(eq(households.id, freshHousehold.id));
+    }
+  });
+
+  test('a brand-new household with zero categories/accounts sees the empty states', async ({
+    page,
+  }) => {
+    const { hashPassword } = await import('../lib/auth/password');
+    const [freshHousehold] = await testDb
+      .insert(households)
+      .values({ name: `E2E Categories Empty ${Date.now()}` })
+      .returning();
+    const email = `e2e-categories-empty-${Date.now()}@example.com`;
+    const password = 'fresh-household-password-123';
+
+    try {
+      await testDb.insert(users).values({
+        householdId: freshHousehold.id,
+        email,
+        passwordHash: await hashPassword(password),
+        name: 'Fresh Owner',
+        role: 'owner',
+      });
+
+      await login(page, email, password);
+      await page.goto('/settings/categories');
+      await expect(page.getByText('No income categories yet')).toBeVisible();
+      await expect(page.getByText('No expense categories yet')).toBeVisible();
+      await expect(page.getByText('No accounts yet')).toBeVisible();
+    } finally {
+      await testDb.delete(users).where(eq(users.email, email));
+      await testDb.delete(households).where(eq(households.id, freshHousehold.id));
+    }
   });
 
   test('setting an opening balance updates the net-worth account balances', async ({ page }) => {

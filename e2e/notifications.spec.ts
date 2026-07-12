@@ -74,16 +74,27 @@ test.describe('Phase 6: notification settings', () => {
     await login(page, OWNER_EMAIL, OWNER_PASSWORD);
     await page.goto('/settings/notifications');
 
-    await expect(page.getByRole('button', { name: 'Off' })).toHaveCount(2);
+    // Kill-switch toggles are the Switch primitive now (spec.md Phase 11), not a plain
+    // Button — Base UI's Switch.Root renders role="switch", not "button" (verified
+    // against the installed package's source). Both start unchecked (the documented
+    // default); this test turns both ON and confirms the change survives a reload —
+    // afterAll's householdSettings cleanup resets state for the next run, matching the
+    // original (pre-restyle) version of this test, which also left both switched on at
+    // the end rather than restoring them itself.
+    const toggles = page.getByRole('switch');
+    await expect(toggles).toHaveCount(2);
+    await expect(toggles.nth(0)).not.toBeChecked();
+    await expect(toggles.nth(1)).not.toBeChecked();
 
-    await page.getByRole('button', { name: 'Off' }).first().click();
-    await expect(page.getByRole('button', { name: 'On' })).toHaveCount(1);
+    await toggles.nth(0).click();
+    await expect(toggles.nth(0)).toBeChecked();
 
-    await page.getByRole('button', { name: 'Off' }).first().click();
-    await expect(page.getByRole('button', { name: 'On' })).toHaveCount(2);
+    await toggles.nth(1).click();
+    await expect(toggles.nth(1)).toBeChecked();
 
     await page.reload();
-    await expect(page.getByRole('button', { name: 'On' })).toHaveCount(2);
+    await expect(page.getByRole('switch').nth(0)).toBeChecked();
+    await expect(page.getByRole('switch').nth(1)).toBeChecked();
   });
 
   test('a member can self-opt-in but cannot manage the kill-switches (permission boundary)', async ({
@@ -94,8 +105,7 @@ test.describe('Phase 6: notification settings', () => {
 
     // Owner-only kill-switches render as a read-only badge, not a clickable toggle, for
     // a member — spec.md: "kill-switch toggles (owner-only)".
-    await expect(page.getByRole('button', { name: 'Off' })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'On' })).toHaveCount(0);
+    await expect(page.getByRole('switch')).toHaveCount(0);
     await expect(
       page.getByText('Only the household owner can turn these on or off.'),
     ).toBeVisible();

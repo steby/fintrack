@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useState, useTransition } from 'react';
 import {
   updateRecurringAction,
   deleteRecurringAction,
@@ -8,6 +8,7 @@ import {
 } from '../../actions/recurring';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import { formatSGD } from '../../../lib/format';
 import { parseAmountToCents } from '../../../lib/money';
 
@@ -53,10 +54,25 @@ export function RecurringRow({
     deleteRecurringAction,
     undefined,
   );
-  const [toggleState, toggleAction, togglePending] = useActionState(
-    toggleRecurringAction,
-    undefined,
-  );
+  // Direct-call + startTransition (not useActionState + <form>) — the Switch primitive
+  // has no native form submission of its own the way a checkbox input does, so there's
+  // no boilerplate saved by routing this through useActionState the way the other two
+  // actions on this row do; a plain async call is simpler and matches the
+  // toggle-in-a-list-row shape app/(app)/home/mark-paid-button.tsx documents (this one
+  // has no toast, but the same "call directly, don't depend on this component's own
+  // state to observe the result" reasoning applies).
+  const [togglePending, startToggleTransition] = useTransition();
+  const [toggleError, setToggleError] = useState<string | null>(null);
+
+  function handleToggle() {
+    setToggleError(null);
+    startToggleTransition(async () => {
+      const formData = new FormData();
+      formData.set('id', item.id);
+      const result = await toggleRecurringAction(undefined, formData);
+      if (result?.error) setToggleError(result.error);
+    });
+  }
 
   // See app/(app)/settings/categories/category-row.tsx for why this runs during
   // render rather than in a useEffect.
@@ -72,7 +88,7 @@ export function RecurringRow({
         <td colSpan={showMonthsColumn ? 8 : 7} className="p-2">
           <form
             action={updateAction}
-            className="flex flex-wrap items-end gap-2 rounded-md border p-3"
+            className="flex flex-wrap items-end gap-2 rounded-2xl border bg-card p-3 shadow-card"
           >
             <input type="hidden" name="id" value={item.id} />
             <input type="hidden" name="frequency" value={item.frequency} />
@@ -191,26 +207,23 @@ export function RecurringRow({
       <td className="p-2 text-xs text-muted-foreground">{item.actualDateDay ?? '—'}</td>
       <td className="p-2">
         {canManage ? (
-          <form action={toggleAction}>
-            <input type="hidden" name="id" value={item.id} />
-            <button
-              type="submit"
+          <div className="flex items-center gap-2">
+            <Switch
+              checked={item.isActive}
+              onCheckedChange={handleToggle}
               disabled={togglePending}
-              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                item.isActive
-                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                  : 'bg-muted text-muted-foreground'
-              }`}
-            >
+              aria-label={`${item.item} active`}
+            />
+            <span className="text-xs text-muted-foreground">
               {item.isActive ? 'Active' : 'Inactive'}
-            </button>
-          </form>
+            </span>
+          </div>
         ) : (
           <span className="text-xs text-muted-foreground">
             {item.isActive ? 'Active' : 'Inactive'}
           </span>
         )}
-        {toggleState?.error && <p className="text-xs text-destructive">{toggleState.error}</p>}
+        {toggleError && <p className="text-xs text-destructive">{toggleError}</p>}
       </td>
       {canManage && (
         <td className="p-2 text-right">

@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { Landmark } from 'lucide-react';
 import { requireUser } from '../../../../lib/auth/guards';
 import { can } from '../../../../lib/auth/rbac';
 import { db } from '../../../../lib/db';
@@ -6,6 +7,7 @@ import { categories, bankAccounts } from '../../../../lib/db/schema';
 import { env } from '../../../../lib/env';
 import { getCurrentMonthCategoryBudgets } from '../../../../lib/db/queries';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
 import { CategoryRow } from './category-row';
 import { CategoryAddForm } from './category-add-form';
 import { AccountRow } from './account-row';
@@ -59,7 +61,7 @@ export default async function CategoriesPage() {
               </h3>
               <div className="mt-2 flex flex-col gap-1.5">
                 {incomeCategories.length === 0 && (
-                  <p className="text-xs text-muted-foreground">No income categories yet.</p>
+                  <EmptyState title="No income categories yet" className="py-4" />
                 )}
                 {incomeCategories.map((c) => (
                   <CategoryRow key={c.id} category={c} canManage={canManage} showBudget={false} />
@@ -72,7 +74,7 @@ export default async function CategoriesPage() {
               </h3>
               <div className="mt-2 flex flex-col gap-1.5">
                 {expenseCategories.length === 0 && (
-                  <p className="text-xs text-muted-foreground">No expense categories yet.</p>
+                  <EmptyState title="No expense categories yet" className="py-4" />
                 )}
                 {expenseCategories.map((c) => (
                   <CategoryRow
@@ -96,7 +98,7 @@ export default async function CategoriesPage() {
           <CardContent className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
               {allAccounts.length === 0 && (
-                <p className="text-xs text-muted-foreground">No accounts yet.</p>
+                <EmptyState icon={Landmark} title="No accounts yet" className="py-4" />
               )}
               {allAccounts.map((a) => (
                 <AccountRow

@@ -4,6 +4,7 @@ import { useActionState, useRef, useState } from 'react';
 import { previewImportAction, commitImportAction, type PreviewRow } from '../../actions/import';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
 import {
   parseCsvText,
   REQUIRED_FIELDS,
@@ -12,6 +13,50 @@ import {
   type MappableField,
 } from '../../../lib/domain/csv';
 import { formatSGD } from '../../../lib/format';
+
+const WIZARD_STEPS = [
+  { key: 'upload', label: 'Upload' },
+  { key: 'preview', label: 'Preview' },
+  { key: 'done', label: 'Done' },
+] as const;
+
+// A plain, non-interactive step indicator (spec.md Phase 11 task 4: "Tabs OR step
+// indicator" — a step indicator, deliberately, not the Tabs primitive: these three
+// steps can't be jumped between arbitrarily the way Tabs implies, only advanced by
+// actually completing the current one, so rendering them as clickable tabs would be a
+// misleading affordance). No flow change — purely a visual marker of ImportForm's own
+// existing `step` state.
+function ImportSteps({ step }: { step: (typeof WIZARD_STEPS)[number]['key'] }) {
+  const currentIndex = WIZARD_STEPS.findIndex((s) => s.key === step);
+  return (
+    <ol className="flex items-center gap-2" data-testid="import-steps">
+      {WIZARD_STEPS.map((s, i) => (
+        <li key={s.key} className="flex items-center gap-2">
+          <span
+            className={cn(
+              'flex size-5 shrink-0 items-center justify-center rounded-full border text-[0.65rem] font-semibold',
+              i <= currentIndex
+                ? 'border-primary bg-primary text-primary-foreground'
+                : 'border-border text-muted-foreground',
+            )}
+            aria-hidden
+          >
+            {i + 1}
+          </span>
+          <span
+            className={cn(
+              'text-xs',
+              i === currentIndex ? 'font-medium text-foreground' : 'text-muted-foreground',
+            )}
+          >
+            {s.label}
+          </span>
+          {i < WIZARD_STEPS.length - 1 && <span aria-hidden className="h-px w-6 bg-border" />}
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 const FIELD_LABELS: Record<MappableField, string> = {
   date: 'Date',
@@ -147,19 +192,22 @@ export function ImportForm() {
 
   if (step === 'done' && commitState && 'success' in commitState) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Import complete</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <p className="text-sm text-muted-foreground" data-testid="import-summary">
-            Applied {commitState.applied} row{commitState.applied === 1 ? '' : 's'}.
-          </p>
-          <Button size="sm" className="self-start" onClick={startOver}>
-            Import another file
-          </Button>
-        </CardContent>
-      </Card>
+      <div className="flex flex-col gap-4">
+        <ImportSteps step={step} />
+        <Card>
+          <CardHeader>
+            <CardTitle>Import complete</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <p className="text-sm text-muted-foreground" data-testid="import-summary">
+              Applied {commitState.applied} row{commitState.applied === 1 ? '' : 's'}.
+            </p>
+            <Button size="sm" className="self-start" onClick={startOver}>
+              Import another file
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
@@ -169,6 +217,7 @@ export function ImportForm() {
 
     return (
       <div className="flex flex-col gap-4">
+        <ImportSteps step={step} />
         <Card>
           <CardHeader>
             <CardTitle>Preview: {fileName}</CardTitle>
@@ -224,9 +273,9 @@ export function ImportForm() {
                           <span
                             className={
                               row.status === 'error'
-                                ? 'text-red-600 dark:text-red-400'
+                                ? 'text-destructive'
                                 : row.status === 'match'
-                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  ? 'text-income'
                                   : 'text-muted-foreground'
                             }
                           >
@@ -293,87 +342,90 @@ export function ImportForm() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Import CSV</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form action={previewAction} className="flex flex-col gap-4">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".csv,text/csv"
-            onChange={handleFile}
-            data-testid="csv-file-input"
-            className="text-sm"
-          />
-          <input type="hidden" name="csvText" value={csvText} />
-          <input type="hidden" name="hasHeaderRow" value={hasHeaderRow ? 'true' : 'false'} />
+    <div className="flex flex-col gap-4">
+      <ImportSteps step={step} />
+      <Card>
+        <CardHeader>
+          <CardTitle>Import CSV</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form action={previewAction} className="flex flex-col gap-4">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              onChange={handleFile}
+              data-testid="csv-file-input"
+              className="text-sm"
+            />
+            <input type="hidden" name="csvText" value={csvText} />
+            <input type="hidden" name="hasHeaderRow" value={hasHeaderRow ? 'true' : 'false'} />
 
-          {parsedRows.length > 0 && (
-            <label className="flex items-center gap-2 text-xs">
-              <input
-                type="checkbox"
-                checked={!hasHeaderRow}
-                onChange={(e) => {
-                  const nextHasHeaderRow = !e.target.checked;
-                  setHasHeaderRow(nextHasHeaderRow);
-                  setMapping(
-                    nextHasHeaderRow
-                      ? guessMapping(displayHeader(parsedRows, true))
-                      : EMPTY_MAPPING,
-                  );
-                }}
-                data-testid="no-header-row-checkbox"
-              />
-              This file has no header row (first row is data)
-            </label>
-          )}
+            {parsedRows.length > 0 && (
+              <label className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={!hasHeaderRow}
+                  onChange={(e) => {
+                    const nextHasHeaderRow = !e.target.checked;
+                    setHasHeaderRow(nextHasHeaderRow);
+                    setMapping(
+                      nextHasHeaderRow
+                        ? guessMapping(displayHeader(parsedRows, true))
+                        : EMPTY_MAPPING,
+                    );
+                  }}
+                  data-testid="no-header-row-checkbox"
+                />
+                This file has no header row (first row is data)
+              </label>
+            )}
 
-          {header.length > 0 && (
-            <div className="grid grid-cols-2 gap-3">
-              {/* `field` only ranges over the fixed, compile-time MappableField
+            {header.length > 0 && (
+              <div className="grid grid-cols-2 gap-3">
+                {/* `field` only ranges over the fixed, compile-time MappableField
                   literals — same false-positive class as lib/domain/csv.ts's
                   buildMappedRows. */}
-              {[...REQUIRED_FIELDS, ...OPTIONAL_FIELDS].map((field) => (
-                <label key={field} className="flex flex-col gap-1 text-xs">
-                  {/* eslint-disable-next-line security/detect-object-injection */}
-                  {FIELD_LABELS[field]}
-                  <select
-                    // eslint-disable-next-line security/detect-object-injection
-                    name={MAPPING_FIELD_NAMES[field]}
-                    // eslint-disable-next-line security/detect-object-injection
-                    value={mapping[field]}
-                    onChange={(e) => setMapping((prev) => ({ ...prev, [field]: e.target.value }))}
-                    className="h-8 rounded-md border bg-background px-2 text-sm"
-                    data-testid={`mapping-${field}`}
-                  >
-                    <option value="">-- not mapped --</option>
-                    {header.map((label, i) => (
-                      <option key={i} value={String(i)}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ))}
-            </div>
-          )}
+                {[...REQUIRED_FIELDS, ...OPTIONAL_FIELDS].map((field) => (
+                  <label key={field} className="flex flex-col gap-1 text-xs">
+                    {/* eslint-disable-next-line security/detect-object-injection */}
+                    {FIELD_LABELS[field]}
+                    <select
+                      // eslint-disable-next-line security/detect-object-injection
+                      name={MAPPING_FIELD_NAMES[field]}
+                      // eslint-disable-next-line security/detect-object-injection
+                      value={mapping[field]}
+                      onChange={(e) => setMapping((prev) => ({ ...prev, [field]: e.target.value }))}
+                      className="h-8 rounded-md border bg-background px-2 text-sm"
+                      data-testid={`mapping-${field}`}
+                    >
+                      <option value="">-- not mapped --</option>
+                      {header.map((label, i) => (
+                        <option key={i} value={String(i)}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+              </div>
+            )}
 
-          {previewState && 'error' in previewState && (
-            <p className="text-xs text-destructive">{previewState.error}</p>
-          )}
+            {previewState && 'error' in previewState && (
+              <p className="text-xs text-destructive">{previewState.error}</p>
+            )}
 
-          <Button
-            type="submit"
-            size="sm"
-            className="self-start"
-            disabled={previewPending || !csvText || header.length === 0}
-          >
-            Preview import
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
+            <Button
+              type="submit"
+              size="sm"
+              className="self-start"
+              disabled={previewPending || !csvText || header.length === 0}
+            >
+              Preview import
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
