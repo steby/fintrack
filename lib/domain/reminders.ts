@@ -30,7 +30,7 @@ export interface UpcomingBill {
   budgetedAmount: string;
 }
 
-// Exported: also used by app/(app)/monthly/calendar-view.tsx's identical "clamp a
+// Exported: also used by app/(app)/monthly/use-day-buckets.ts's identical "clamp a
 // scheduled day to the last real day of the month" need (spec.md's "month-end
 // clamping for day 29-31" edge case applies the same way in both places), rather than
 // each maintaining its own copy of the same one-line calendar computation.

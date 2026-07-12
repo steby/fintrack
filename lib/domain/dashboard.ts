@@ -8,8 +8,8 @@ export interface DashboardEntryRow {
   budgetedCents: number;
   actualCents: number | null;
   // null = uncategorized — excluded from every sum here, same convention established in
-  // Phase 2's summary-bar.tsx/calendar-view.tsx (a direction-less amount can't be
-  // classified as either income or expense).
+  // Phase 2's summary-bar.tsx and the monthly calendar/agenda views (a direction-less
+  // amount can't be classified as either income or expense).
   direction: 'income' | 'expense' | null;
   categoryId: string | null;
   categoryName: string | null;

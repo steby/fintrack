@@ -1,39 +1,17 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
-import { Check, AlertTriangle } from 'lucide-react';
 import { formatSGDCompact, formatSGD, MONTH_FULL } from '../../../lib/format';
 import { parseAmountToCents } from '../../../lib/money';
 import { daysInMonth } from '../../../lib/domain/reminders';
 import { ResponsiveSheet } from '@/components/ui/responsive-sheet';
 import { MarkPaidButton } from '../home/mark-paid-button';
+import { useDayBuckets } from './use-day-buckets';
+import { directionDotClass, paidTextClass, paidPrefix } from './entry-style';
 import type { MonthlyEntryRow } from './types';
-import type { PaidState } from '../../../lib/domain/entries';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-// Shared row-renderer styling helpers (maintainability pass) — GridChip, AgendaRow,
-// UnscheduledChip, and DaySheetRow below each used to hand-roll their own copy of
-// these two small conditionals. Pulled out once, used everywhere, purely a
-// style-string extraction: no row renderer's actual output changed.
-function directionDotClass(direction: MonthlyEntryRow['categoryDirection']): string {
-  return direction === 'income'
-    ? 'bg-income'
-    : direction === 'expense'
-      ? 'bg-expense'
-      : 'bg-muted-foreground';
-}
-
-function paidTextClass(state: PaidState): string {
-  return state === 'paid'
-    ? 'text-muted-foreground line-through decoration-muted-foreground/50'
-    : '';
-}
-
-function paidPrefix(state: PaidState): string {
-  return state === 'paid' ? '✓ ' : '';
-}
 
 // Phase 10: client component (it wasn't before) so a day cell can open a per-day
 // ResponsiveSheet — the local `openDay` state is what requires it. `today` arrives as
@@ -42,18 +20,20 @@ function paidPrefix(state: PaidState): string {
 // entry's paid/overdue/upcoming state is ALREADY computed server-side by page.tsx via
 // lib/domain/entries.ts's entryPaidState, so this component never needs a Date itself,
 // only "which day number is today, if any."
-export function CalendarView({
+//
+// Split out of a single CalendarView that used to render both the grid and the agenda
+// list, switched by a boolean prop — this file is grid-only now, with no mode
+// branching left inside it (see agenda-list-view.tsx for the agenda counterpart).
+export function CalendarGridView({
   year,
   month,
   entries,
-  agenda,
   canManage,
   today,
 }: {
   year: number;
   month: number;
   entries: MonthlyEntryRow[];
-  agenda: boolean;
   canManage: boolean;
   today: { year: number; month: number; day: number };
 }) {
@@ -62,59 +42,27 @@ export function CalendarView({
   const firstDayOfWeek = new Date(year, month - 1, 1).getDay();
   const isCurrentMonth = year === today.year && month === today.month;
 
-  // Memoized on its actual inputs (entries, totalDaysInMonth) rather than recomputed on
-  // every render — this component's own `openDay` state (opening/closing the day-sheet)
-  // changes far more often than `entries` ever does, and none of that local UI state
-  // should force a re-walk of every entry into fresh Map/array allocations.
-  const { byDay, unscheduled, cells } = useMemo(() => {
-    const byDay = new Map<number, MonthlyEntryRow[]>();
-    const unscheduled: MonthlyEntryRow[] = [];
-    for (const entry of entries) {
-      if (entry.scheduledDay) {
-        // Clamp to the last real day of the month (spec.md's Phase 6 email-reminder
-        // logic already establishes "month-end clamping for day 29-31" as the intended
-        // handling for a scheduled day that doesn't exist in a shorter month) — without
-        // this, an entry with scheduledDay=31 silently vanished from Feb/30-day months
-        // entirely, since cells only spans 1..totalDaysInMonth and a truthy
-        // scheduledDay never falls through to the "unscheduled" bucket either.
-        const day = Math.min(entry.scheduledDay, totalDaysInMonth);
-        const list = byDay.get(day) ?? [];
-        list.push(entry);
-        byDay.set(day, list);
-      } else {
-        unscheduled.push(entry);
-      }
-    }
-    const cells = Array.from({ length: totalDaysInMonth }, (_, i) => i + 1);
-    return { byDay, unscheduled, cells };
-  }, [entries, totalDaysInMonth]);
+  const { byDay, unscheduled, cells } = useDayBuckets(entries, totalDaysInMonth);
 
   const openDayEntries = openDay !== null ? (byDay.get(openDay) ?? []) : [];
 
   return (
     <div className="flex flex-col gap-4">
       <div className="overflow-x-auto rounded-2xl border bg-card shadow-card">
-        <div
-          className={
-            agenda ? 'flex flex-col divide-y' : 'grid min-w-[800px] grid-cols-7 gap-px bg-border'
-          }
-        >
-          {!agenda &&
-            DAY_NAMES.map((d) => (
-              <div
-                key={d}
-                className="bg-muted/40 p-2 text-center text-xs font-semibold text-muted-foreground uppercase"
-              >
-                {d}
-              </div>
-            ))}
-          {!agenda &&
-            Array.from({ length: firstDayOfWeek }, (_, i) => (
-              <div key={`empty-${i}`} className="min-h-[100px] bg-muted/10" />
-            ))}
+        <div className="grid min-w-[800px] grid-cols-7 gap-px bg-border">
+          {DAY_NAMES.map((d) => (
+            <div
+              key={d}
+              className="bg-muted/40 p-2 text-center text-xs font-semibold text-muted-foreground uppercase"
+            >
+              {d}
+            </div>
+          ))}
+          {Array.from({ length: firstDayOfWeek }, (_, i) => (
+            <div key={`empty-${i}`} className="min-h-[100px] bg-muted/10" />
+          ))}
           {cells.map((day) => {
             const dayEntries = byDay.get(day) ?? [];
-            if (agenda && dayEntries.length === 0) return null;
             // Uncategorized entries (categoryDirection null) are excluded from the net,
             // not treated as expenses — consistent with summary-bar.tsx/page.tsx's
             // sumCents, which excludes them from both income and expense totals for the
@@ -127,8 +75,9 @@ export function CalendarView({
             const isToday = isCurrentMonth && day === today.day;
             // Day-cell-click-opens-a-sheet is grid-only (spec.md Phase 10 task 4) —
             // agenda rows already show full entries with an inline MarkPaidButton each,
-            // so a second click surface on the same row would be redundant.
-            const clickable = canManage && !agenda && dayEntries.length > 0;
+            // so a second click surface on the same row would be redundant there (see
+            // agenda-list-view.tsx, which has no click handling at all).
+            const clickable = canManage && dayEntries.length > 0;
 
             return (
               <div
@@ -164,13 +113,9 @@ export function CalendarView({
                   )}
                 </div>
                 <div className="flex flex-col gap-0.5">
-                  {dayEntries.map((entry) =>
-                    agenda ? (
-                      <AgendaRow key={entry.id} entry={entry} canManage={canManage} />
-                    ) : (
-                      <GridChip key={entry.id} entry={entry} />
-                    ),
-                  )}
+                  {dayEntries.map((entry) => (
+                    <GridChip key={entry.id} entry={entry} />
+                  ))}
                 </div>
               </div>
             );
@@ -183,32 +128,22 @@ export function CalendarView({
           <h3 className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
             No scheduled day
           </h3>
-          <div
-            className={
-              agenda
-                ? 'flex flex-col gap-2'
-                : 'grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4'
-            }
-          >
-            {unscheduled.map((entry) =>
-              agenda ? (
-                <AgendaRow key={entry.id} entry={entry} canManage={canManage} />
-              ) : (
-                <UnscheduledChip key={entry.id} entry={entry} />
-              ),
-            )}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+            {unscheduled.map((entry) => (
+              <UnscheduledChip key={entry.id} entry={entry} />
+            ))}
           </div>
         </div>
       )}
 
-      {/* Mounted whenever a day sheet COULD open (grid mode, canManage) rather than
-          only while one is — Base UI's Dialog/Drawer render nothing visible while
-          `open` is false, and keeping it mounted means revalidatePath('/monthly') after
-          a mark-paid inside it re-renders THIS component with fresh `entries`, and
-          because `openDay` is untouched by that re-render, the sheet stays open with
-          updated rows instead of flashing closed (spec.md Phase 10 edge case: "mark-paid
-          from calendar day sheet revalidates without closing weirdness"). */}
-      {canManage && !agenda && (
+      {/* Mounted whenever a day sheet COULD open (canManage) rather than only while one
+          is — Base UI's Dialog/Drawer render nothing visible while `open` is false, and
+          keeping it mounted means revalidatePath('/monthly') after a mark-paid inside it
+          re-renders THIS component with fresh `entries`, and because `openDay` is
+          untouched by that re-render, the sheet stays open with updated rows instead of
+          flashing closed (spec.md Phase 10 edge case: "mark-paid from calendar day sheet
+          revalidates without closing weirdness"). */}
+      {canManage && (
         <ResponsiveSheet
           open={openDay !== null}
           onOpenChange={(open) => {
@@ -265,62 +200,6 @@ function GridChip({ entry }: { entry: MonthlyEntryRow }) {
       <span className="shrink-0 font-semibold text-muted-foreground">
         {formatSGDCompact(parseAmountToCents(entry.budgetedAmount))}
       </span>
-    </div>
-  );
-}
-
-// Agenda mode's fuller row — state icon + amount + an inline MarkPaidButton for unpaid
-// entries only (spec.md Phase 10: "Agenda — rows get state icon + MarkPaidButton
-// inline (unpaid only)"). Reused for both scheduled (inside a day) and unscheduled
-// entries — agenda has room for the full row either way, unlike the grid's tiny chip.
-function AgendaRow({ entry, canManage }: { entry: MonthlyEntryRow; canManage: boolean }) {
-  const state = entry.paidState;
-  const amountCents = parseAmountToCents(entry.budgetedAmount);
-  return (
-    <div
-      data-testid="agenda-entry-row"
-      data-paid-state={state}
-      className="flex items-center justify-between gap-3 rounded-lg border border-border/60 px-3 py-2"
-    >
-      <div className="flex min-w-0 items-center gap-2">
-        {state === 'paid' ? (
-          <Check className="size-4 shrink-0 text-income" aria-label="Paid" />
-        ) : state === 'overdue' ? (
-          <AlertTriangle className="size-4 shrink-0 text-warning" aria-label="Overdue" />
-        ) : (
-          <span
-            className={`size-2 shrink-0 rounded-full ${directionDotClass(entry.categoryDirection)}`}
-            aria-hidden
-          />
-        )}
-        <div className="min-w-0">
-          <div className={`truncate text-sm font-medium ${paidTextClass(state)}`}>{entry.item}</div>
-          {entry.categoryName && (
-            <div className="truncate text-xs text-muted-foreground">{entry.categoryName}</div>
-          )}
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <span
-          className={
-            entry.categoryDirection === 'income'
-              ? 'text-sm font-medium text-income tabular-nums'
-              : 'text-sm tabular-nums'
-          }
-        >
-          {entry.categoryDirection === 'income' ? '+' : ''}
-          {formatSGD(amountCents)}
-        </span>
-        {canManage && state !== 'paid' && (
-          <MarkPaidButton
-            entryId={entry.id}
-            item={entry.item}
-            amountCents={amountCents}
-            size="xs"
-            variant="ghost"
-          />
-        )}
-      </div>
     </div>
   );
 }

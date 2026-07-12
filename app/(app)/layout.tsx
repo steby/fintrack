@@ -117,7 +117,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </div>
       </aside>
       {/* min-w-0 overrides a flex item's default min-width:auto — without it, a wide
-          descendant (e.g. calendar-view.tsx's min-w-[800px] grid) forces this whole
+          descendant (e.g. calendar-grid-view.tsx's min-w-[800px] grid) forces this whole
           flex item to grow past the viewport instead of scrolling internally via its
           own overflow-x-auto wrapper, which on mobile expands the layout viewport
           itself and breaks BottomNav's position:fixed (it ends up pinned to the

@@ -24,7 +24,8 @@ import { MonthHeader } from './month-header';
 import { MonthTabs } from './month-tabs';
 import { ViewToggle } from './view-toggle';
 import { SummaryBar } from './summary-bar';
-import { CalendarView } from './calendar-view';
+import { CalendarGridView } from './calendar-grid-view';
+import { AgendaListView } from './agenda-list-view';
 import { ListView } from './list-view';
 import type { MonthlyEntryRow } from './types';
 
@@ -182,12 +183,23 @@ export default async function MonthlyPage({
         />
       ) : view === 'list' ? (
         <ListView entries={typedEntries} canManage={canManage} />
-      ) : (
-        <CalendarView
+      ) : view === 'agenda' ? (
+        <AgendaListView
           year={year}
           month={month}
           entries={typedEntries}
-          agenda={view === 'agenda'}
+          canManage={canManage}
+          today={{
+            year: today.getUTCFullYear(),
+            month: today.getUTCMonth() + 1,
+            day: today.getUTCDate(),
+          }}
+        />
+      ) : (
+        <CalendarGridView
+          year={year}
+          month={month}
+          entries={typedEntries}
           canManage={canManage}
           today={{
             year: today.getUTCFullYear(),

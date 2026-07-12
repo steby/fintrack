@@ -4303,3 +4303,69 @@ option fetch) was left untouched, confirmed via `git diff --stat` showing no cha
 to `app/(app)/insights/page.tsx` or `components/ui/skeleton.tsx`.
 
 ---
+
+## Refactor: split `CalendarView` into `CalendarGridView` and `AgendaListView` (2026-07-12)
+
+One of three deliberately separate cleanup items tackled sequentially by request — this
+one only, a pure structural reorganization with zero behavior change. `calendar-view.tsx`
+had one `CalendarView` component rendering BOTH the calendar-grid and agenda-list layouts
+of the Monthly page, switched by an `agenda` boolean threaded through ~8 separate
+conditionals inside one function body. Split into two self-contained components with no
+internal mode-branching left in either:
+
+- `app/(app)/monthly/calendar-grid-view.tsx` — `CalendarGridView` (day-of-week headers,
+  empty offset cells, the `grid-cols-7` layout, `GridChip`/`UnscheduledChip` rows, and
+  the click-to-open day-sheet with `DaySheetRow` — everything previously gated
+  `!agenda`).
+- `app/(app)/monthly/agenda-list-view.tsx` — `AgendaListView` (the `divide-y` flow
+  layout, `AgendaRow` rows for both scheduled-day and unscheduled entries — everything
+  previously gated `agenda`, with no day-sheet or click handling at all).
+- `app/(app)/monthly/use-day-buckets.ts` — the `byDay`/`unscheduled`/`cells` bucketing
+  `useMemo` extracted into a `useDayBuckets(entries, totalDaysInMonth)` hook both views
+  call, so the month-end clamping logic (and its comment) lives in exactly one place
+  instead of being copy-pasted into two files.
+- `app/(app)/monthly/entry-style.ts` — `directionDotClass`/`paidTextClass`/`paidPrefix`
+  (extracted in the prior maintainability pass, above) kept shared rather than
+  duplicated back apart, per the task's explicit instruction.
+
+The day-number + net-badge cell header turned out NOT to be gated by `agenda` in the
+original code at all — both modes rendered it identically. That small block of JSX (plus
+its `dailyNetCents` computation and the "uncategorized entries excluded from the net"
+comment) is duplicated verbatim into both new files rather than pulled into a shared
+helper, since it's genuinely identical small render logic sitting inside each view's own
+per-day loop, not a case of drifting duplicate business logic.
+
+`app/(app)/monthly/page.tsx` now imports both components and renders either
+`<AgendaListView .../>` or `<CalendarGridView .../>` directly based on `view`, instead of
+passing an `agenda` boolean into one unified component. Both new components ended up
+needing the identical prop list (`year`, `month`, `entries`, `canManage`, `today`) —
+`year`/`month` looked droppable from `AgendaListView` at first glance (the day-sheet's
+"View in list" link that uses them is grid-only), but agenda's own render path needs them
+too, for `totalDaysInMonth` (via `daysInMonth(year, month)`) and the `isToday` ring on
+today's cell (`isCurrentMonth = year === today.year && month === today.month`), so both
+were kept on both components.
+
+Three stale in-repo comments referencing `calendar-view.tsx` by filename
+(`lib/domain/reminders.ts`, `lib/domain/dashboard.ts`, `app/(app)/layout.tsx`) were
+corrected to point at the file(s) the described code actually lives in now.
+
+**Zero behavior change, verified, not assumed:** every `data-testid` (`calendar-cell`,
+`calendar-entry-chip` — two call sites, `GridChip` and `UnscheduledChip` — and
+`agenda-entry-row`) renders on the exact same elements with the exact same values as
+before the split. `e2e/monthly.spec.ts` and `e2e/mobile.spec.ts` needed zero code changes
+(confirmed `git diff --stat` shows no changes under `e2e/` at all) and all 13 of their
+calendar/agenda-relevant tests passed unmodified.
+
+**Test/CI status:** Unit 466/466 (unchanged). Integration 266/266 (unchanged — no Server
+Action or DB logic touched, only component structure). Coverage 99.44% statements /
+97.58% branches / 99.33% functions / 99.84% lines on the gated `lib/**` scope (unchanged
+— this pass only touched `app/(app)/monthly` components, outside the gate). E2E: first
+full run 68/68 (1 flaky — `home.spec.ts`'s pre-existing Undo-restore race, unrelated to
+Monthly, passed on Playwright's own retry); second full run 68/68 clean with zero
+retries. Both runs `CI=true` against a real `next build && next start`. Lint, typecheck,
+build, and format all clean — `npm run format` needed no changes to any new file.
+
+**Deferred / not done:** Nothing — pure reorganization, no new logic, no scope beyond the
+split itself.
+
+---
