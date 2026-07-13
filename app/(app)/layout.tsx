@@ -121,8 +121,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           flex item to grow past the viewport instead of scrolling internally via its
           own overflow-x-auto wrapper, which on mobile expands the layout viewport
           itself and breaks BottomNav's position:fixed (it ends up pinned to the
-          bottom of the oversized page, not the visible screen). */}
-      <main className="min-w-0 flex-1 p-6 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-6">
+          bottom of the oversized page, not the visible screen).
+          Bottom padding reserves space for BOTH fixed mobile overlays stacked above the
+          content: BottomNav's own 4.5rem bar, plus quick-add.tsx's Fab (0.75rem gap +
+          its own 2.25rem/size-9 height) sitting above that, plus a little breathing
+          room — otherwise the last card on a page (e.g. Home's GoalsMini "See all
+          goals" link) renders directly underneath the Fab and is unreachable. */}
+      <main className="min-w-0 flex-1 p-6 pb-[calc(8rem+env(safe-area-inset-bottom))] md:pb-6">
         {children}
       </main>
       <BottomNav />

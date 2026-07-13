@@ -4553,3 +4553,65 @@ before); build clean; format clean; E2E 68/68 passed, run twice back-to-back (`C
 real `next build && next start`), zero spec changes needed.
 
 ---
+
+## Live production UI/UX audit + 3 layout bug fixes (2026-07-14)
+
+Logged into production as the real user (Playwright, credentials piped via stdin, never
+written to disk) and clicked through every surface on desktop (1440px) + mobile
+(Pixel-7-ish), both themes. Zero console/page errors. Screenshotting surfaced three real,
+pixel-verified layout bugs, all stemming from the same root cause: `quick-add.tsx`'s
+global fixed "New entry" button (`fixed top-4 right-4`, added Phase 10) was never checked
+against pages that already place their own controls in that same corner.
+
+1. **`/accounts`** — the page's own `YearPicker` (year label + both chevrons) rendered
+   directly underneath the fixed button; the year label was fully hidden, both chevrons
+   partly covered. Bounding-box confirmed (button x:1318–1424 vs year label x:1332–1380,
+   both y:16–44). Fixed by wrapping both `<YearPicker>` call sites (feature-off branch and
+   the real content branch) in a `md:mt-8` div so the control clears the button's
+   footprint while the page title stays flush with every other page's.
+2. **`/settings`** — the hub page's own `<ThemeToggle>` (needed because the sidebar,
+   which already has one in its footer, is `hidden` below `md`) collided with the same
+   button at `md`+, where the sidebar's toggle is already reachable — meaning desktop
+   showed two redundant toggles, one of them half-covered. Fixed by wrapping it in
+   `md:hidden`, matching this same file's existing convention for the Plan/Insights
+   mobile-only escape-hatch links (both hidden at `md`+ for the identical "sidebar
+   already covers this" reason).
+3. **Mobile FAB overlapping page-end content** — `app/(app)/layout.tsx`'s `<main>`
+   reserved bottom padding only for BottomNav's 4.5rem bar
+   (`pb-[calc(4.5rem+env(safe-area-inset-bottom))]`), not for `quick-add.tsx`'s Fab
+   floating another `0.75rem` gap + its own `2.25rem` (`size-9`) height above that —
+   so the last card on any page (confirmed on Home: `GoalsMini`'s "See all goals" link)
+   rendered directly under the Fab, both visually and as a tap target (bounding-box
+   confirmed: FAB x:341–377/y:731–767 vs link x:283–353/y:747–763, a real overlap, not
+   just visually adjacent). Fixed by widening `<main>`'s bottom padding to
+   `calc(8rem+env(safe-area-inset-bottom))`, clearing the Fab's full footprint plus a
+   small buffer — a one-line, one-place fix that protects every page's last element, not
+   just Home's.
+
+**Deliberately left alone (asked first, user chose "leave as-is" for all three):**
+zero-budgeted recurring items (Income Tax, Property Tax, etc.) still surface as $0.00
+rows in Home/Money's forecast lists; unscheduled recurring items still show a clamped
+month-end due date on Home's Upcoming list but sit in Money Agenda's separate "no
+scheduled day" bucket with no date; Money's summary tiles still lead with the Actual
+figure and demote Budgeted to a sub-line even for an untouched future month (the
+Phase 10 design decision documented in `summary-bar.tsx`'s own comment). None of these
+are bugs — each is an intentional, previously-made design choice; surfaced for a decision
+rather than silently changed.
+
+**Also corrected during the audit (no code change, prior report was wrong on both):**
+`BudgetMini`'s empty state already links to `/insights` ("See insights") — misread the
+screenshot. Bank summary listing a "Credit Card" row not present in the Account balances
+panel is intentional, per the page's own tooltip: credit-card spend rolls up into its
+linked bank account rather than appearing as a separate net-worth line.
+
+**Verification:** all three fixes pixel-verified against a local production build
+(`next build && next start`, real login) before and after — each bounding-box overlap
+check flips from `true` to `false`. Full gate suite green: lint/typecheck clean; unit
+472/472 (unchanged); integration 274/274 (unchanged); coverage unaffected (no `lib/**`
+changes — 99.45%/97.61%/99.35%/99.84% same as before); build clean; format clean; E2E
+68/68 (`CI=true`, real `next build && next start`) — one transient failure on an
+unrelated dev-mode-only run (Next's dev overlay intercepting a tap; doesn't exist in the
+production build CI actually runs) confirmed as a local-only artifact, not a regression,
+once re-run correctly with `CI=true`.
+
+---
