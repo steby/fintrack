@@ -331,6 +331,11 @@ test.describe('monthly entries', () => {
     // Playwright strict-mode guidance, not disambiguated by renaming either one.
     const markPaidForm = page.getByTestId('mark-paid-form');
     await expect(markPaidForm).toBeVisible();
+    // The amount field defaults to the budgeted figure (42.00) but is editable
+    // (full-app-review item 8) — record a different real-world amount alongside the
+    // custom date and assert BOTH persisted.
+    await expect(markPaidForm.locator('input[name="actualAmount"]')).toHaveValue('42.00');
+    await markPaidForm.locator('input[name="actualAmount"]').fill('39.75');
     await markPaidForm.locator('input[type="date"]').fill('2026-01-15');
     await markPaidForm.getByRole('button', { name: 'Mark paid' }).click();
     await expect(markPaidButton).toHaveCount(0);
@@ -346,7 +351,7 @@ test.describe('monthly entries', () => {
       if (!persisted) throw new Error(`No monthly_entries row found for "${markPaidName}"`);
       return persisted;
     };
-    await expect.poll(async () => (await persistedRow()).actualAmount).toBe('42.00');
+    await expect.poll(async () => (await persistedRow()).actualAmount).toBe('39.75');
     expect((await persistedRow()).actualDate).toBe('2026-01-15');
   });
 

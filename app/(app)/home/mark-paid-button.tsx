@@ -9,6 +9,7 @@ import { useToastManager } from '@/components/ui/toast';
 import { useAction } from '../../../lib/hooks/use-action';
 import { entrySettleLabels } from '../../../lib/domain/entries';
 import { formatSGD, formatDueDate } from '../../../lib/format';
+import { centsToAmount, parseAmountToCents } from '../../../lib/money';
 
 // Today in the browser's OWN calendar day, YYYY-MM-DD — a native <input type="date">
 // should default to what the user's calendar considers "today," not the server's UTC
@@ -57,11 +58,12 @@ export function MarkPaidButton({
   const toastManager = useToastManager();
   const labels = entrySettleLabels(direction);
 
-  function handleConfirm(actualDate: string) {
+  function handleConfirm(actualDate: string, actualAmount: string, recordedCents: number) {
     setOpen(false); // eagerly — see the race-safety comment above
     const formData = new FormData();
     formData.set('id', entryId);
     formData.set('actualDate', actualDate);
+    formData.set('actualAmount', actualAmount);
     run(formData, (result) => {
       if (!result) return;
       if ('error' in result) {
@@ -78,7 +80,7 @@ export function MarkPaidButton({
       toastManager.add({
         type: 'success',
         title: `Marked "${item}" ${labels.past}`,
-        description: `${formatSGD(amountCents)} recorded for ${formatDueDate(actualDate)}.`,
+        description: `${formatSGD(recordedCents)} recorded for ${formatDueDate(actualDate)}.`,
         actionProps: {
           children: 'Undo',
           onClick: () => {
@@ -144,10 +146,14 @@ function MarkPaidForm({
   actionLabel: string;
   pendingLabel: string;
   dateLabel: string;
-  onConfirm: (actualDate: string) => void;
+  onConfirm: (actualDate: string, actualAmount: string, recordedCents: number) => void;
   onCancel: () => void;
 }) {
   const [actualDate, setActualDate] = useState(todayLocalIso);
+  // Defaults to the budgeted figure but editable (full-app-review item 8): real bills
+  // vary from budget, and this sheet is the moment the user has the real number in
+  // hand. Kept as a string state so partial typing ("32.") never fights the input.
+  const [actualAmount, setActualAmount] = useState(() => centsToAmount(amountCents));
 
   return (
     <form
@@ -155,23 +161,43 @@ function MarkPaidForm({
       className="flex flex-col gap-3"
       onSubmit={(e) => {
         e.preventDefault();
-        onConfirm(actualDate);
+        let recordedCents = amountCents;
+        try {
+          recordedCents = parseAmountToCents(actualAmount);
+        } catch {
+          // Toast falls back to the budgeted figure; the server re-validates anyway.
+        }
+        onConfirm(actualDate, actualAmount, recordedCents);
       }}
     >
       <div className="flex flex-col gap-0.5 rounded-lg border border-border/60 px-3 py-2">
         <span className="text-sm font-medium">{item}</span>
-        <span className="text-sm text-muted-foreground">{formatSGD(amountCents)}</span>
+        <span className="text-sm text-muted-foreground">Budgeted {formatSGD(amountCents)}</span>
       </div>
-      <label className="flex flex-col gap-1 text-sm">
-        {dateLabel}
-        <Input
-          type="date"
-          name="actualDate"
-          value={actualDate}
-          onChange={(e) => setActualDate(e.target.value)}
-          required
-        />
-      </label>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="flex flex-col gap-1 text-sm">
+          Amount
+          <Input
+            type="number"
+            name="actualAmount"
+            step="0.01"
+            min="0"
+            value={actualAmount}
+            onChange={(e) => setActualAmount(e.target.value)}
+            required
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-sm">
+          {dateLabel}
+          <Input
+            type="date"
+            name="actualDate"
+            value={actualDate}
+            onChange={(e) => setActualDate(e.target.value)}
+            required
+          />
+        </label>
+      </div>
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" onClick={onCancel} disabled={pending}>
           Cancel

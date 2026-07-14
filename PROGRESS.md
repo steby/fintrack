@@ -4811,3 +4811,23 @@ coverage 99.46/97.69/99.37/99.85; lint/typecheck/build/format clean; E2E 68/68
 delete. afterAll cleanup covers the mid-test renamed row too (the phase4 debris lesson).
 
 ---
+
+## Improvement batch 3a — editable amount in the mark-paid sheet (2026-07-15)
+
+Review item 8: mark-paid stamped `actual = budgeted` unconditionally, but real bills
+vary from their budgeted figure (utilities especially), and the confirm sheet is
+exactly the moment the user has the real number in hand. The sheet now shows an
+editable Amount field prefilled with the budgeted figure next to the date field;
+`markPaidAction` gained an optional `actualAmount` (validated via the existing
+optionalMoneyInputSchema; empty/absent falls back to the budgeted amount — the
+original one-tap behavior unchanged, so every existing call path and E2E flow that
+submits the prefilled value behaves identically). The success toast reports the amount
+actually recorded, not the budgeted one. Undo still restores the exact previous state
+through updateActualAction, unchanged.
+
+**Test/CI status (complete runs):** unit 488/488; integration 283/283 (+2: custom
+amount persisted, negative amount rejected adversarially); lint/typecheck/build/format
+clean; E2E 68/68 (`CI=true`) — the mark-paid spec now asserts the prefilled 42.00,
+edits it to 39.75, and DB-polls that 39.75 + the custom date both persisted.
+
+---

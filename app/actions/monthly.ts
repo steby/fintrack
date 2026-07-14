@@ -239,6 +239,11 @@ const markPaidSchema = z.object({
   // Empty/absent defaults to today (UTC) server-side below — defense in depth against
   // a stripped/missing field, not just relying on the client's own default.
   actualDate: dateInputSchema.optional(),
+  // Optional (full-app-review item 8): real bills vary from their budgeted figure —
+  // utilities especially — and the confirm sheet is the moment the user has the real
+  // number in hand. Empty/absent falls back to the budgeted amount (the original
+  // one-tap behavior, unchanged).
+  actualAmount: z.string().optional(),
 });
 
 export type MarkPaidActionState =
@@ -277,9 +282,15 @@ export async function markPaidAction(
   const parsed = markPaidSchema.safeParse({
     id: formData.get('id'),
     actualDate: formData.get('actualDate') || undefined,
+    actualAmount: formData.get('actualAmount') || undefined,
   });
   if (!parsed.success) {
     return { error: 'Invalid request.' };
+  }
+
+  const overrideAmount = optionalMoneyInputSchema.safeParse(parsed.data.actualAmount ?? '');
+  if (!overrideAmount.success) {
+    return { error: 'Enter a valid, non-negative amount.' };
   }
 
   const [entry] = await db
@@ -312,7 +323,11 @@ export async function markPaidAction(
       : utcStartOfDay().toISOString().slice(0, 10);
   await db
     .update(monthlyEntries)
-    .set({ actualAmount: entry.budgetedAmount, actualDate })
+    .set({
+      actualAmount:
+        overrideAmount.data === null ? entry.budgetedAmount : centsToAmount(overrideAmount.data),
+      actualDate,
+    })
     .where(
       and(eq(monthlyEntries.id, entry.id), eq(monthlyEntries.householdId, actingUser.householdId)),
     );

@@ -764,6 +764,65 @@ describe('markPaidAction', () => {
   // touched the popup's date input away from its own default) — must fall back to
   // today (UTC) server-side, exactly as before the post-redesign bug-fix pass that
   // added the field.
+  it('records a user-edited amount instead of the budgeted figure when one is supplied', async () => {
+    const { markPaidAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Mark paid amount override');
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: 2026,
+        month: 1,
+        item: 'Electricity',
+        budgetedAmount: '320.00',
+      })
+      .returning();
+
+    mockToken = member.token;
+    const result = await markPaidAction(
+      undefined,
+      formData({ id: entry.id, actualDate: '2026-01-20', actualAmount: '287.45' }),
+    );
+    expect(result).toMatchObject({ success: true, alreadyPaid: false });
+
+    const [reloaded] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entry.id));
+    expect(reloaded).toMatchObject({ actualAmount: '287.45', actualDate: '2026-01-20' });
+
+    await cleanup(member.household.id);
+  });
+
+  it('rejects a negative amount override (adversarial)', async () => {
+    const { markPaidAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Mark paid amount negative');
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: 2026,
+        month: 1,
+        item: 'Electricity',
+        budgetedAmount: '320.00',
+      })
+      .returning();
+
+    mockToken = member.token;
+    const result = await markPaidAction(
+      undefined,
+      formData({ id: entry.id, actualAmount: '-5.00' }),
+    );
+    expect(result).toEqual({ error: 'Enter a valid, non-negative amount.' });
+    const [unchanged] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entry.id));
+    expect(unchanged.actualAmount).toBeNull();
+
+    await cleanup(member.household.id);
+  });
+
   it('sets actualAmount to the budgeted amount and actualDate to today (UTC) for an unpaid entry, when actualDate is left at its default (omitted)', async () => {
     const { markPaidAction } = await import('./monthly');
     const member = await makeHouseholdWithUser('member', 'Mark paid A');
