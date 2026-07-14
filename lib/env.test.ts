@@ -57,7 +57,7 @@ describe('loadEnv', () => {
     // sslmode=require is upgraded to verify-full at load time (lib/db/connection-string.ts) —
     // the URL is otherwise untouched.
     expect(loadEnv(validBase).DATABASE_URL).toBe(
-      validBase.DATABASE_URL.replace('sslmode=require', 'sslmode=verify-full'),
+      'postgresql://user:pass@host/db?sslmode=verify-full',
     );
     const result = loadEnv({
       ...validBase,
