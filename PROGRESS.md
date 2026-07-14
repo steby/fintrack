@@ -4735,30 +4735,31 @@ unmodified.
 ## Improvement batch 2b — reserved Uncategorized category (2026-07-15, local until prod migration)
 
 The full app review's live-demonstrated finding: quick-add's fastest path (item + amount
-+ Add) produced a category-less entry that changed NO number anywhere — a direction-less
-entry is unknowable-signed, so every aggregation correctly skips it, and a $123.45 test
-add moved nothing in the summary bar. Per the user's chosen design ("count uncategorized
-into an 'Uncategorized' category"), every household now has ONE reserved expense-direction
-"Uncategorized" category (`categories.is_system`, migration 0004: column + partial unique
-index `categories_household_system_unique` + per-household backfill INSERT), and
-addAdhocAction files no-category entries under it — they now count everywhere like any
-other expense.
 
-- `getOrCreateUncategorizedCategoryId` (queries.ts) is self-healing (created on demand if
+- Add) produced a category-less entry that changed NO number anywhere — a direction-less
+  entry is unknowable-signed, so every aggregation correctly skips it, and a $123.45 test
+  add moved nothing in the summary bar. Per the user's chosen design ("count uncategorized
+  into an 'Uncategorized' category"), every household now has ONE reserved expense-direction
+  "Uncategorized" category (`categories.is_system`, migration 0004: column + partial unique
+  index `categories_household_system_unique` + per-household backfill INSERT), and
+  addAdhocAction files no-category entries under it — they now count everywhere like any
+  other expense.
+
+* `getOrCreateUncategorizedCategoryId` (queries.ts) is self-healing (created on demand if
   a household somehow lacks one; the partial unique index turns a concurrent double-create
   race into a harmless conflict) — the integration test exercises exactly this path, since
   test-helper households are born bare.
-- Quick-add's category select now says "Uncategorized" instead of "None" (honest about
+* Quick-add's category select now says "Uncategorized" instead of "None" (honest about
   where the entry goes) and hides the system category from the explicit list.
-- Protections, all server-side and adversarially tested: deleteCategoryAction can't
+* Protections, all server-side and adversarially tested: deleteCategoryAction can't
   delete it (is_system=false in the WHERE, distinct error message); updateCategoryAction
   can't flip its direction to income (a forged post would make uncategorized spends
   count AS INCOME); rename/color/cap stay editable.
-- Home shows a categorize nudge ("N entries this month need a category" →
+* Home shows a categorize nudge ("N entries this month need a category" →
   /monthly?view=list) counting system-category entries plus legacy null-category rows —
   `getDashboardRowsForMonth` gained `categoryIsSystem` (zero new joins). Settings →
   Categories shows a BUILT-IN badge and hides Delete on the system row.
-- Seed creates the system category for fresh databases (flag-keyed, not name-keyed —
+* Seed creates the system category for fresh databases (flag-keyed, not name-keyed —
   it's renamable); migration backfills households that existed before it.
 
 **Test/CI status:** unit 488/488; integration 277/277 (+3: self-heal + reuse, delete
