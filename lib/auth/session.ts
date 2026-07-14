@@ -4,7 +4,7 @@ import { cookies } from 'next/headers';
 import { eq } from 'drizzle-orm';
 import { db } from '../db';
 import { sessions, users, type roleEnum } from '../db/schema';
-import { generateToken } from './token';
+import { generateToken, hashToken } from './token';
 import { newExpiry, isExpired } from './session-rules';
 import { env } from '../env';
 import { logger } from '../log';
@@ -34,10 +34,11 @@ export function sessionCookieOptions(expiresAt: Date) {
 
 // Server Action only — cookies().set() throws if called during a Server Component
 // render (Next.js restriction; see node_modules/next/dist/docs .../functions/cookies.md).
+// The DB row stores hashToken(token), never the raw token — see lib/auth/token.ts.
 export async function createSession(userId: string): Promise<void> {
   const token = generateToken();
   const expiresAt = newExpiry();
-  await db.insert(sessions).values({ id: token, userId, expiresAt });
+  await db.insert(sessions).values({ id: hashToken(token), userId, expiresAt });
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE_NAME, token, sessionCookieOptions(expiresAt));
 }
@@ -69,7 +70,7 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
       })
       .from(sessions)
       .innerJoin(users, eq(sessions.userId, users.id))
-      .where(eq(sessions.id, token))
+      .where(eq(sessions.id, hashToken(token)))
       .limit(1);
 
     const row = rows[0];
@@ -93,7 +94,7 @@ export async function deleteSession(): Promise<void> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   if (token) {
-    await db.delete(sessions).where(eq(sessions.id, token));
+    await db.delete(sessions).where(eq(sessions.id, hashToken(token)));
   }
   cookieStore.delete(SESSION_COOKIE_NAME);
 }

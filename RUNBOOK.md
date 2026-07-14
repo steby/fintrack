@@ -236,7 +236,10 @@ worth knowing before assuming "the UI looks broken" means "the feature is broken
 
 Sessions are opaque random tokens (`lib/auth/session.ts`) validated by a `sessions` table row
 lookup in `proxy.ts` on every request — not signed/stateless tokens, so **there is no
-"rotate a secret to invalidate everything" lever**. To force a full sign-out of every user
+"rotate a secret to invalidate everything" lever**. The `sessions.id` column stores
+`SHA-256(cookie token)` (`lib/auth/token.ts`'s `hashToken`), never the raw token — a leaked
+table dump or backup cannot be replayed as session cookies, and matching a specific cookie
+to its row requires hashing the cookie value first. To force a full sign-out of every user
 (e.g. suspected session-store compromise), delete the sessions directly:
 
 ```sql

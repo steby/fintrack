@@ -14,6 +14,7 @@ import {
   DUMMY_PASSWORD_HASH,
 } from '../../lib/auth/password';
 import { createSession, deleteSession, SESSION_COOKIE_NAME } from '../../lib/auth/session';
+import { hashToken } from '../../lib/auth/token';
 import { isRateLimited, LOGIN_RATE_LIMIT_WINDOW_MS } from '../../lib/auth/rate-limit';
 import { requireUser } from '../../lib/auth/guards';
 import { normalizeEmail, emailEquals } from '../../lib/auth/email';
@@ -199,7 +200,9 @@ export async function changePasswordAction(
     // requesting user out as a side effect of changing their own password.
     throw new Error('changePasswordAction: no session token on an authenticated request.');
   }
-  await db.delete(sessions).where(and(eq(sessions.userId, user.id), ne(sessions.id, currentToken)));
+  await db
+    .delete(sessions)
+    .where(and(eq(sessions.userId, user.id), ne(sessions.id, hashToken(currentToken))));
 
   return { success: true };
 }

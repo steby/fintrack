@@ -8,7 +8,7 @@ import { eq, and, isNull, lt } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { householdInvitations, users, sessions } from '../../lib/db/schema';
 import { requireRole } from '../../lib/auth/guards';
-import { generateToken } from '../../lib/auth/token';
+import { generateToken, hashToken } from '../../lib/auth/token';
 import { inviteExpiry, validateInvite } from '../../lib/auth/invite-rules';
 import { hashPassword, validatePassword } from '../../lib/auth/password';
 import { createSession, SESSION_COOKIE_NAME } from '../../lib/auth/session';
@@ -126,7 +126,10 @@ export async function acceptInviteAction(
   }
 
   // Looked up by the token value itself (not a separate id) — the URL param IS the
-  // whole credential here, same pattern as sessions (see lib/auth/token.ts).
+  // whole credential. Unlike sessions (stored as hashToken(token) since the at-rest
+  // hardening pass), invite tokens are deliberately stored raw: they expire in 7 days,
+  // exist only while an invite is pending, and the raw value already lives in a sent
+  // email — hashing them buys little and would complicate the resend flow.
   const rows = await db
     .select()
     .from(householdInvitations)
@@ -247,7 +250,7 @@ export async function acceptInviteAction(
   await createSession(newUser.id);
 
   if (existingToken) {
-    await db.delete(sessions).where(eq(sessions.id, existingToken));
+    await db.delete(sessions).where(eq(sessions.id, hashToken(existingToken)));
   }
 
   redirect('/');

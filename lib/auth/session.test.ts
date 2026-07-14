@@ -42,13 +42,14 @@ describe('session.ts', () => {
   });
 
   describe('createSession', () => {
-    it('inserts a session row and sets the cookie with the same token', async () => {
+    it('inserts the HASH of the cookie token, never the raw token itself', async () => {
       const valuesSpy = vi.fn<
         (row: { id: string; userId: string; expiresAt: Date }) => Promise<void>
       >(() => Promise.resolve());
       dbMock.insert.mockReturnValue({ values: valuesSpy });
 
       const { createSession, SESSION_COOKIE_NAME } = await import('./session');
+      const { hashToken } = await import('./token');
       await createSession('user-1');
 
       expect(valuesSpy).toHaveBeenCalledWith(
@@ -59,11 +60,12 @@ describe('session.ts', () => {
         expect.any(String),
         expect.objectContaining({ httpOnly: true, sameSite: 'lax', path: '/' }),
       );
-      // The token inserted into the DB and the token set on the cookie must be the
-      // same value — the whole point of an opaque bearer token.
-      const insertedToken = valuesSpy.mock.calls[0][0].id;
+      // The DB row must store hashToken(cookie token) — a leaked DB row must not be
+      // replayable as a session cookie (lib/auth/token.ts) — never the raw value.
+      const insertedId = valuesSpy.mock.calls[0][0].id;
       const cookieToken = cookieStore.set.mock.calls[0][1];
-      expect(insertedToken).toBe(cookieToken);
+      expect(insertedId).toBe(hashToken(cookieToken));
+      expect(insertedId).not.toBe(cookieToken);
     });
   });
 

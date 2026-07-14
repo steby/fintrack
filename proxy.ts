@@ -4,6 +4,7 @@ import { db } from './lib/db';
 import { sessions } from './lib/db/schema';
 import { isExpired, shouldRenew, newExpiry } from './lib/auth/session-rules';
 import { sessionCookieOptions, SESSION_COOKIE_NAME } from './lib/auth/session';
+import { hashToken } from './lib/auth/token';
 import { logger } from './lib/log';
 
 // Replaces middleware.ts as of Next.js 16 (file convention renamed; see
@@ -42,7 +43,7 @@ export async function proxy(request: NextRequest) {
       const rows = await db
         .select({ expiresAt: sessions.expiresAt })
         .from(sessions)
-        .where(eq(sessions.id, token))
+        .where(eq(sessions.id, hashToken(token)))
         .limit(1);
       const row = rows[0];
       if (row && !isExpired(row.expiresAt)) {
@@ -78,7 +79,10 @@ export async function proxy(request: NextRequest) {
   if (authenticated && token && validSession && shouldRenew(validSession.expiresAt)) {
     const newExpiresAt = newExpiry();
     try {
-      await db.update(sessions).set({ expiresAt: newExpiresAt }).where(eq(sessions.id, token));
+      await db
+        .update(sessions)
+        .set({ expiresAt: newExpiresAt })
+        .where(eq(sessions.id, hashToken(token)));
       response.cookies.set(SESSION_COOKIE_NAME, token, sessionCookieOptions(newExpiresAt));
     } catch (err) {
       // Renewal failing isn't fatal — the session just expires on its original

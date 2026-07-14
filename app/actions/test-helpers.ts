@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { households, users, sessions } from '../../lib/db/schema';
-import { generateToken } from '../../lib/auth/token';
+import { generateToken, hashToken } from '../../lib/auth/token';
 import { newExpiry } from '../../lib/auth/session-rules';
 
 // Shared by every app/actions/*.integration.test.ts file that exercises an
@@ -24,7 +24,12 @@ export async function makeHouseholdWithUser(role: 'owner' | 'member' | 'viewer',
     })
     .returning();
   const token = generateToken();
-  await db.insert(sessions).values({ id: token, userId: user.id, expiresAt: newExpiry() });
+  // Mirrors createSession: the row stores the HASH; the raw token is what each test
+  // file's cookies mock presents — fixtures exercise the same hash-on-lookup path
+  // production uses.
+  await db
+    .insert(sessions)
+    .values({ id: hashToken(token), userId: user.id, expiresAt: newExpiry() });
   return { household, user, token };
 }
 

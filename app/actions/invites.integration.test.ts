@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { users, sessions, householdInvitations, households } from '../../lib/db/schema';
-import { generateToken } from '../../lib/auth/token';
+import { generateToken, hashToken } from '../../lib/auth/token';
 import { inviteExpiry } from '../../lib/auth/invite-rules';
 import { makeHouseholdWithUser, formData, cleanup } from './test-helpers';
 
@@ -440,10 +440,13 @@ describe('acceptInviteAction', () => {
       ),
     ).rejects.toThrow('NEXT_REDIRECT:/');
 
+    // Rows store hashToken(raw) — selecting by the raw token would return 0 rows even
+    // if the delete never happened, silently passing this assertion. Hash it so "the
+    // old session is gone" is actually what's being proven.
     const oldSessionRows = await db
       .select()
       .from(sessions)
-      .where(eq(sessions.id, alreadyLoggedIn.token));
+      .where(eq(sessions.id, hashToken(alreadyLoggedIn.token)));
     expect(oldSessionRows).toHaveLength(0);
 
     await cleanup(owner.household.id, alreadyLoggedIn.household.id);

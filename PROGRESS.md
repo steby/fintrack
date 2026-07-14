@@ -4693,3 +4693,41 @@ received), Money list (single-line rows), Settings → Categories (cap hints), I
 in localStorage) — zero page errors.
 
 ---
+
+## Improvement batch 2a — session tokens hashed at rest (2026-07-14)
+
+`sessions.id` now stores `SHA-256(cookie token)` (`hashToken`, lib/auth/token.ts) instead
+of the raw token — read access to the DB (a leaked connection string, a backup, a table
+dump) can no longer be replayed as session cookies. Plain SHA-256, no salt/stretching:
+unlike a password the input already carries 256 bits of entropy, so there is nothing for
+precomputation to enumerate, and determinism is required anyway (the hash IS the lookup
+key). Raised in the full app review; extra weight while the repo is temporarily public.
+
+Six touch points, not five — the review's plan listed createSession/getSessionUser/
+deleteSession/proxy (lookup + renewal)/changePassword's revoke-others, but
+**acceptInviteAction has its own inline old-session delete** (invites.ts) that only
+surfaced when the corrected test assertion caught it still matching raw: the updated
+invites integration test (which now selects by `hashToken(...)` — selecting by the raw
+token would return 0 rows even if the delete never ran, a silent false-positive) failed
+against the missed call site, and passed after fixing it. Exactly the failure mode the
+user's "make sure tests are covering actual functions" instruction was about.
+
+No schema change and no migration: the id column was already `text`. Existing raw-token
+rows become permanently unmatchable on deploy (everyone re-logs-in once — accepted, the
+household is still seed-stage) and age out via their own 30-day expiry.
+`app/actions/test-helpers.ts`'s fixture now inserts the hash and returns the raw token,
+mirroring production, so every action integration test exercises the real
+hash-on-lookup path. The two direct-insert DB-mechanics tests (lib/auth,
+lib/db/schema.integration) are self-consistent and deliberately untouched. Invite
+tokens stay raw by design — 7-day expiry, pending-only, the raw value already lives in
+a sent email; the invites.ts comment that used to say "same pattern as sessions" now
+documents that difference instead. RUNBOOK's session-incidents section updated (the
+`delete from sessions` lever still works unchanged).
+
+**Test/CI status:** unit 488/488 (+3 hashToken); integration 274/274 (invites revocation
+test corrected as above); coverage 99.46/97.67/99.37/99.85; lint/typecheck/build/format
+clean; E2E 68/68 (`CI=true`, real build) — auth.spec's real login/logout/change-password
+multi-device flows and both planted-cookie attack tests all pass through the hashed path
+unmodified.
+
+---
