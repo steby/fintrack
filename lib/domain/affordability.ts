@@ -37,6 +37,10 @@ export interface UpcomingEntryCandidate {
   direction: 'income' | 'expense' | null;
   categoryName: string | null;
   categoryColor: string | null;
+  // Passthrough for Home's edit-entry sheet (optional so pure-logic tests and callers
+  // that don't render an edit affordance can omit them; no math reads either field).
+  categoryId?: string | null;
+  recurringLinked?: boolean;
 }
 
 export interface UpcomingItem {
@@ -53,6 +57,8 @@ export interface UpcomingItem {
   overdue: boolean;
   categoryName: string | null;
   categoryColor: string | null;
+  categoryId: string | null;
+  recurringLinked: boolean;
 }
 
 export type Horizon = 'month' | 7 | 14 | 30;
@@ -133,6 +139,8 @@ export function selectUpcomingItems(
       overdue,
       categoryName: candidate.categoryName,
       categoryColor: candidate.categoryColor,
+      categoryId: candidate.categoryId ?? null,
+      recurringLinked: candidate.recurringLinked ?? false,
     });
   }
 

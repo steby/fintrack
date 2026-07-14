@@ -4,19 +4,34 @@ import { createContext, useContext, useState, type ReactNode } from 'react';
 import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
-// Shared open-state for the global quick-add sheet: the desktop trigger lives INSIDE
-// the sidebar (a server component subtree in app/(app)/layout.tsx) while the sheet +
-// mobile Fab (quick-add.tsx) are mounted outside it, so the two sides meet through
-// context instead of prop-threading through a server boundary.
+export interface CategoryOption {
+  id: string;
+  name: string;
+  direction: 'income' | 'expense';
+  isSystem: boolean;
+}
+
+// Shared state for the global entry UI: the quick-add sheet's open flag (its desktop
+// trigger lives INSIDE the sidebar — a server subtree in app/(app)/layout.tsx — while
+// the sheet + mobile Fab are mounted outside it), plus the household's category list,
+// which the per-row edit-entry sheets (entry-edit-button.tsx) need on EVERY page
+// without each page's server component re-fetching and re-threading it.
 const QuickAddOpenContext = createContext<{
   open: boolean;
   setOpen: (open: boolean) => void;
+  categories: CategoryOption[];
 } | null>(null);
 
-export function QuickAddProvider({ children }: { children: ReactNode }) {
+export function QuickAddProvider({
+  categories,
+  children,
+}: {
+  categories: CategoryOption[];
+  children: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   return (
-    <QuickAddOpenContext.Provider value={{ open, setOpen }}>
+    <QuickAddOpenContext.Provider value={{ open, setOpen, categories }}>
       {children}
     </QuickAddOpenContext.Provider>
   );

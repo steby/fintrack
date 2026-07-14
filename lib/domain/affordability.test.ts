@@ -40,6 +40,8 @@ function upcomingItem(overrides: Partial<UpcomingItem> = {}): UpcomingItem {
     overdue: false,
     categoryName: 'Housing',
     categoryColor: '#111111',
+    categoryId: null,
+    recurringLinked: false,
     ...overrides,
   };
 }
@@ -309,6 +311,8 @@ const upcomingItemArb = fc.record({
   overdue: fc.boolean(),
   categoryName: fc.constant(null),
   categoryColor: fc.constant(null),
+  categoryId: fc.constant(null),
+  recurringLinked: fc.boolean(),
 });
 
 describe('property: computeSafeToSpend conservation', () => {

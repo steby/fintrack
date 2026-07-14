@@ -33,7 +33,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     : { categories: [], accounts: [], members: [] };
 
   return (
-    <QuickAddProvider>
+    <QuickAddProvider categories={entryFormOptions.categories}>
       <div className="flex min-h-screen">
         {/* md:hidden below — BottomNav (mobile-only) is this sidebar's replacement below
           the md breakpoint, not an addition alongside it; see bottom-nav.tsx. */}

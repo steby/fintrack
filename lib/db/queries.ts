@@ -624,6 +624,10 @@ export async function getUpcomingEntryCandidates(
       direction: categories.direction,
       categoryName: categories.name,
       categoryColor: categories.color,
+      // For Home's edit-entry sheet (category preselect + rename gating) — both joins
+      // already exist, zero-new-join additions.
+      categoryId: monthlyEntries.categoryId,
+      recurringScheduleId: monthlyEntries.recurringScheduleId,
     })
     .from(monthlyEntries)
     .leftJoin(recurringSchedule, eq(monthlyEntries.recurringScheduleId, recurringSchedule.id))
@@ -639,7 +643,10 @@ export async function getUpcomingEntryCandidates(
       ),
     );
 
-  return rows;
+  return rows.map(({ recurringScheduleId, ...row }) => ({
+    ...row,
+    recurringLinked: recurringScheduleId !== null,
+  }));
 }
 
 // Lifetime per-account cash position, ACTUALIZED entries only, no year bound — the

@@ -233,6 +233,149 @@ describe('overrideBudgetAction', () => {
   });
 });
 
+describe('updateEntryDetailsAction', () => {
+  it('renames an ad-hoc entry, assigns a category, and records amount + date in one submit', async () => {
+    const { updateEntryDetailsAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Entry details A');
+    const [cat] = await db
+      .insert(categories)
+      .values({ householdId: member.household.id, name: 'Food', direction: 'expense' })
+      .returning();
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({ householdId: member.household.id, year: 2026, month: 5, item: 'Lnuch typo' })
+      .returning();
+
+    mockToken = member.token;
+    const result = await updateEntryDetailsAction(
+      undefined,
+      formData({
+        id: entry.id,
+        item: 'Lunch',
+        categoryId: cat.id,
+        actualAmount: '18.50',
+        actualDate: '2026-05-03',
+      }),
+    );
+
+    expect(result).toEqual({ success: true });
+    const [reloaded] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entry.id));
+    expect(reloaded).toMatchObject({
+      item: 'Lunch',
+      categoryId: cat.id,
+      actualAmount: '18.50',
+      actualDate: '2026-05-03',
+    });
+
+    await cleanup(member.household.id);
+  });
+
+  it('files an emptied category back under the reserved Uncategorized category', async () => {
+    const { updateEntryDetailsAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Entry details B');
+    const [cat] = await db
+      .insert(categories)
+      .values({ householdId: member.household.id, name: 'Food', direction: 'expense' })
+      .returning();
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: 2026,
+        month: 5,
+        item: 'Lunch',
+        categoryId: cat.id,
+      })
+      .returning();
+
+    mockToken = member.token;
+    const result = await updateEntryDetailsAction(
+      undefined,
+      formData({ id: entry.id, item: 'Lunch', actualAmount: '', actualDate: '' }),
+    );
+
+    expect(result).toEqual({ success: true });
+    const [reloaded] = await db
+      .select({ name: categories.name, isSystem: categories.isSystem })
+      .from(monthlyEntries)
+      .innerJoin(categories, eq(monthlyEntries.categoryId, categories.id))
+      .where(eq(monthlyEntries.id, entry.id));
+    expect(reloaded.isSystem).toBe(true);
+
+    await cleanup(member.household.id);
+  });
+
+  it('refuses to rename a recurring-generated entry (adversarial forged post)', async () => {
+    const { updateEntryDetailsAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Entry details C');
+    const [schedule] = await db
+      .insert(recurringSchedule)
+      .values({
+        householdId: member.household.id,
+        item: 'Rent',
+        frequency: 'Monthly',
+        budgetedAmount: '2000.00',
+      })
+      .returning();
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: 2026,
+        month: 5,
+        item: 'Rent',
+        recurringScheduleId: schedule.id,
+      })
+      .returning();
+
+    mockToken = member.token;
+    const result = await updateEntryDetailsAction(
+      undefined,
+      formData({ id: entry.id, item: 'Hijacked Rent', actualAmount: '', actualDate: '' }),
+    );
+    expect(result).toEqual({
+      error: 'This entry comes from a recurring item — rename it on the Plan page.',
+    });
+
+    // Same name + a category change is fine on a recurring entry.
+    mockToken = member.token;
+    const ok = await updateEntryDetailsAction(
+      undefined,
+      formData({ id: entry.id, item: 'Rent', actualAmount: '55.00', actualDate: '' }),
+    );
+    expect(ok).toEqual({ success: true });
+
+    await cleanup(member.household.id);
+  });
+
+  it('cannot edit an entry in a DIFFERENT household (cross-tenant probe)', async () => {
+    const { updateEntryDetailsAction } = await import('./monthly');
+    const memberA = await makeHouseholdWithUser('member', 'Entry details D-A');
+    const memberB = await makeHouseholdWithUser('member', 'Entry details D-B');
+    const [entryInB] = await db
+      .insert(monthlyEntries)
+      .values({ householdId: memberB.household.id, year: 2026, month: 5, item: 'B Entry' })
+      .returning();
+
+    mockToken = memberA.token;
+    const result = await updateEntryDetailsAction(
+      undefined,
+      formData({ id: entryInB.id, item: 'Stolen', actualAmount: '', actualDate: '' }),
+    );
+    expect(result).toEqual({ error: 'Entry not found.' });
+    const [unchanged] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entryInB.id));
+    expect(unchanged.item).toBe('B Entry');
+
+    await cleanup(memberA.household.id, memberB.household.id);
+  });
+});
+
 describe('addAdhocAction', () => {
   it('creates an ad-hoc entry with no recurring_schedule_id', async () => {
     const { addAdhocAction } = await import('./monthly');

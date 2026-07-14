@@ -79,7 +79,12 @@ test.describe('monthly entries', () => {
     await testDb
       .delete(recurringSchedule)
       .where(inArray(recurringSchedule.item, [itemName, renamedItemName]));
-    await testDb.delete(monthlyEntries).where(eq(monthlyEntries.item, adhocName));
+    // Both the original and the mid-test renamed form — a failure between the edit
+    // sheet's rename and the delete step must not leak the renamed row (the phase4
+    // debris lesson: clean up every name a test can leave behind).
+    await testDb
+      .delete(monthlyEntries)
+      .where(inArray(monthlyEntries.item, [adhocName, `${adhocName} renamed`]));
     await testDb.delete(monthlyEntries).where(eq(monthlyEntries.item, markPaidName));
     await testDb.delete(categories).where(eq(categories.name, categoryName));
     await testDb.delete(users).where(eq(users.email, VIEWER_EMAIL));
@@ -253,15 +258,29 @@ test.describe('monthly entries', () => {
     await expect(nudge).toBeVisible();
     await expect(nudge).toContainText(/needs? a category/);
 
+    // The edit-entry sheet is how the nudge gets RESOLVED (not just deleted): assign a
+    // real category and rename in one submit, then the nudge must clear.
     await page.goto(currentMonthUrl());
     const rowAgain = page.getByTestId('entry-row').filter({ hasText: adhocName });
-    await rowAgain.getByRole('button', { name: 'Delete' }).click();
-    await expect(page.getByTestId('entry-row').filter({ hasText: adhocName })).toHaveCount(0);
+    await rowAgain.getByRole('button', { name: `Edit ${adhocName}` }).click();
+    const editForm = page.getByTestId('entry-edit-form');
+    await expect(editForm).toBeVisible();
+    const renamedAdhoc = `${adhocName} renamed`;
+    await editForm.locator('input[name="item"]').fill(renamedAdhoc);
+    await editForm
+      .locator('select[name="categoryId"]')
+      .selectOption({ label: `↓ ${categoryName}` });
+    await editForm.getByRole('button', { name: 'Save' }).click();
 
-    // Nudge disappears once nothing needs categorizing (the seed household has no
-    // other uncategorized entries this month).
+    const renamedRow = page.getByTestId('entry-row').filter({ hasText: renamedAdhoc });
+    await expect(renamedRow).toBeVisible();
+    await expect(renamedRow.getByText(categoryName)).toBeVisible();
     await page.goto('/');
     await expect(page.getByTestId('categorize-nudge')).toHaveCount(0);
+
+    await page.goto(currentMonthUrl());
+    await renamedRow.getByRole('button', { name: 'Delete' }).click();
+    await expect(page.getByTestId('entry-row').filter({ hasText: renamedAdhoc })).toHaveCount(0);
   });
 
   // Phase 10 (mark-paid reachable from list view's compact inline button,

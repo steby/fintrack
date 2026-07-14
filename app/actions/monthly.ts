@@ -87,6 +87,93 @@ export async function updateActualAction(
   return { success: true };
 }
 
+const updateEntryDetailsSchema = z.object({
+  id: z.string().uuid(),
+  item: z.string().trim().min(1, 'Item name is required').max(200),
+  categoryId: uuidOrEmpty,
+  actualAmount: z.string(),
+  actualDate: dateInputSchema,
+});
+
+// The edit-entry sheet's one-submit action (full-app-review finding N1: ad-hoc entries
+// had NO edit path at all after creation — not even to assign a category, which made
+// the categorize nudge a dead end). Edits item name, category, and the actual
+// amount/date together. Amount/date semantics mirror updateActualAction exactly
+// (empty string clears to null); category '' means the reserved Uncategorized
+// category, same mapping quick-add uses.
+export async function updateEntryDetailsAction(
+  _prevState: MonthlyActionState,
+  formData: FormData,
+): Promise<MonthlyActionState> {
+  const actingUser = await requireRole('write');
+
+  const parsed = updateEntryDetailsSchema.safeParse({
+    id: formData.get('id'),
+    item: formData.get('item'),
+    categoryId: formData.get('categoryId') || undefined,
+    actualAmount: formData.get('actualAmount') ?? '',
+    actualDate: formData.get('actualDate') ?? '',
+  });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Invalid request.' };
+  }
+
+  const amount = optionalMoneyInputSchema.safeParse(parsed.data.actualAmount);
+  if (!amount.success) {
+    return { error: 'Enter a valid, non-negative actual amount.' };
+  }
+
+  const [entry] = await db
+    .select({ item: monthlyEntries.item, recurringScheduleId: monthlyEntries.recurringScheduleId })
+    .from(monthlyEntries)
+    .where(
+      and(
+        eq(monthlyEntries.id, parsed.data.id),
+        eq(monthlyEntries.householdId, actingUser.householdId),
+      ),
+    )
+    .limit(1);
+  if (!entry) {
+    return { error: 'Entry not found.' };
+  }
+
+  // A recurring-generated entry's name belongs to its Plan template — renaming one
+  // month's instance here would be silently clobbered by the next propagate (and
+  // desyncs the other months). The sheet disables the field for these rows; this is
+  // the server-side backstop for a forged post.
+  if (entry.recurringScheduleId !== null && parsed.data.item !== entry.item) {
+    return { error: 'This entry comes from a recurring item — rename it on the Plan page.' };
+  }
+
+  const category = await resolveOptionalRef(
+    categories,
+    actingUser.householdId,
+    parsed.data.categoryId,
+  );
+  if (!category.ok) return { error: 'Category not found.' };
+  const categoryId =
+    category.value ?? (await getOrCreateUncategorizedCategoryId(actingUser.householdId));
+
+  await db
+    .update(monthlyEntries)
+    .set({
+      item: parsed.data.item,
+      categoryId,
+      actualAmount: amount.data === null ? null : centsToAmount(amount.data),
+      actualDate: parsed.data.actualDate === '' ? null : parsed.data.actualDate,
+    })
+    .where(
+      and(
+        eq(monthlyEntries.id, parsed.data.id),
+        eq(monthlyEntries.householdId, actingUser.householdId),
+      ),
+    );
+
+  revalidatePath('/');
+  revalidatePath('/monthly');
+  return { success: true };
+}
+
 const overrideBudgetSchema = z.object({
   id: z.string().uuid(),
   budgetedAmount: z.string(),

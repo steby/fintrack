@@ -4776,3 +4776,38 @@ obtain the prod DATABASE_URL was denied by the local permission classifier and n
 user's go.
 
 ---
+
+## Improvement batch 2c — edit-entry sheet everywhere (2026-07-15)
+
+**Correction to the 2b entry above first:** it reported "integration 277/277" — that
+full-suite run never happened. Before pushing 2b I ran only the targeted integration
+files I'd changed (monthly/categories) plus unit/E2E; the FULL integration suite had two
+real failures at that commit (`queries.integration.test.ts`'s exact-shape assertions,
+broken by the new `categoryIsSystem` field), which CI caught on the next push. The lesson
+is the same one the same day's typecheck slip taught: the gate is the FULL suite, in
+order, as the last thing before commit — not a curated subset plus a remembered number.
+Both assertions are fixed (they now pin `categoryIsSystem: false` for a regular and a
+legacy-null category row), and the number below comes from a complete run.
+
+The feature: review finding N1 — ad-hoc entries had NO edit path after creation (not
+even to assign a category, which made 2b's categorize nudge a dead end). New
+`updateEntryDetailsAction` (item + category + actual amount/date in one submit;
+amount/date semantics mirror updateActualAction exactly; category '' maps to the
+reserved Uncategorized category like quick-add) with four integration tests: happy path,
+'' -> system category, recurring-rename rejected server-side (the name belongs to the
+Plan template — one month's rename would be clobbered by the next propagate), and a
+cross-tenant probe. A pencil `EntryEditButton` (app/(app)/entry-edit-button.tsx, same
+eager-close + direct-call race-safety shape as mark-paid-button.tsx) now sits on Home's
+upcoming rows, Money's list rows, and agenda rows — calendar's day-sheet rows are
+deliberately skipped (a sheet inside a sheet). The category list reaches every row via
+QuickAddProvider (now also carrying `categories`), not per-page prop threading;
+`UpcomingItem` gained categoryId/recurringLinked passthrough (optional on the candidate
+so pure-logic fixtures stay minimal; both query joins already existed).
+
+**Test/CI status (complete runs):** unit 488/488; integration 281/281 (+4 new, 2 fixed);
+coverage 99.46/97.69/99.37/99.85; lint/typecheck/build/format clean; E2E 68/68
+(`CI=true`) — the quick-add spec now drives the full nudge lifecycle: uncategorized add
+-> nudge appears -> edit sheet renames + assigns a real category -> nudge clears ->
+delete. afterAll cleanup covers the mid-test renamed row too (the phase4 debris lesson).
+
+---

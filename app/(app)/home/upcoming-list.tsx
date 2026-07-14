@@ -3,6 +3,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { formatSGD, formatDueDate } from '../../../lib/format';
 import type { UpcomingItem } from '../../../lib/domain/affordability';
 import { MarkPaidButton } from './mark-paid-button';
+import { EntryEditButton } from '../entry-edit-button';
 
 // Cross-month upcoming list (spec.md Phase 9) — grouped Overdue / This week / Later, the
 // same bucketing scheme regardless of which horizon is selected. Every item here is
@@ -96,12 +97,27 @@ function Group({
                 {formatSGD(item.amountCents)}
               </span>
               {canManage && (
-                <MarkPaidButton
-                  entryId={item.entryId}
-                  item={item.item}
-                  amountCents={item.amountCents}
-                  direction={item.direction}
-                />
+                <>
+                  <MarkPaidButton
+                    entryId={item.entryId}
+                    item={item.item}
+                    amountCents={item.amountCents}
+                    direction={item.direction}
+                  />
+                  <EntryEditButton
+                    entry={{
+                      id: item.entryId,
+                      item: item.item,
+                      categoryId: item.categoryId,
+                      // Every row here is unpaid by construction (selectUpcomingItems
+                      // excludes paid entries), so actuals start blank in the sheet.
+                      actualAmount: null,
+                      actualDate: null,
+                      recurringLinked: item.recurringLinked,
+                    }}
+                    className="text-muted-foreground"
+                  />
+                </>
               )}
             </div>
           </li>

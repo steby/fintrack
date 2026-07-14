@@ -5,6 +5,7 @@ import { formatSGDCompact, formatSGD } from '../../../lib/format';
 import { parseAmountToCents } from '../../../lib/money';
 import { daysInMonth } from '../../../lib/domain/reminders';
 import { MarkPaidButton } from '../home/mark-paid-button';
+import { EntryEditButton } from '../entry-edit-button';
 import { useDayBuckets } from './use-day-buckets';
 import { directionDotClass, paidTextClass } from './entry-style';
 import type { MonthlyEntryRow } from './types';
@@ -158,6 +159,19 @@ function AgendaRow({ entry, canManage }: { entry: MonthlyEntryRow; canManage: bo
             direction={entry.categoryDirection}
             size="xs"
             variant="ghost"
+          />
+        )}
+        {canManage && (
+          <EntryEditButton
+            entry={{
+              id: entry.id,
+              item: entry.item,
+              categoryId: entry.categoryId,
+              actualAmount: entry.actualAmount,
+              actualDate: entry.actualDate,
+              recurringLinked: entry.recurringScheduleId !== null,
+            }}
+            className="text-muted-foreground"
           />
         )}
       </div>

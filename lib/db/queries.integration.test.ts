@@ -271,6 +271,7 @@ describe('getDashboardRowsForMonth', () => {
           budgetedCents: 200000,
           actualCents: 200000,
           categoryId: category.id,
+          categoryIsSystem: false,
         },
       ]);
     } finally {
@@ -302,6 +303,9 @@ describe('getDashboardRowsForMonth', () => {
           budgetedCents: 7500,
           actualCents: null,
           categoryId: null,
+          // A truly category-less legacy row is NOT the system category — Home's nudge
+          // counts it via direction === null instead.
+          categoryIsSystem: false,
         },
       ]);
     } finally {
