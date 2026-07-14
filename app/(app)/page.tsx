@@ -114,7 +114,12 @@ export default async function HomePage({
   const throughDate = new Date(today.getTime() + horizonDays * 86_400_000)
     .toISOString()
     .slice(0, 10);
-  const expenseItemCount = items.filter((i) => i.direction === 'expense').length;
+  // Zero-amount items render as "Needs an amount" setup prompts (upcoming-list.tsx),
+  // not bills — counting them in the hero's "after N upcoming bills" would overstate
+  // what's actually being subtracted (a $0 item contributes nothing to the total).
+  const expenseItemCount = items.filter(
+    (i) => i.direction === 'expense' && i.amountCents !== 0,
+  ).length;
 
   // Cash lens is only trustworthy when net worth tracking is on AND there's at least one
   // bank account to sum — spec.md: "FEATURE_NET_WORTH off or zero bank accounts ->

@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { computeBudgetProgress } from '../../../lib/domain/budgeting';
 import { formatSGD } from '../../../lib/format';
@@ -11,8 +12,17 @@ export function BudgetHealthCard({ categories }: { categories: CategoryBudgetRow
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {categories.length === 0 ? (
-          <div className="py-6 text-center text-sm text-muted-foreground">
-            No categories have a budget cap set yet.
+          <div className="flex flex-col items-center gap-1 py-6 text-center text-sm text-muted-foreground">
+            <span>No categories have a budget cap set yet.</span>
+            {/* Caps are edited on the Categories settings page — this link is the only
+                thing telling a user WHERE (live-audit finding: the old copy pointed
+                nowhere and the cap input is buried inside per-row Edit mode). */}
+            <Link
+              href="/settings/categories"
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              Set caps in Categories &rarr;
+            </Link>
           </div>
         ) : (
           categories.map((c) => {

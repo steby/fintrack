@@ -32,11 +32,8 @@ export default async function SettingsHubPage() {
             {user.name} &middot; <span className="capitalize">{user.role}</span>
           </p>
         </div>
-        {/* md:hidden: the desktop sidebar footer (app/(app)/layout.tsx) already has a
-            reachable ThemeToggle at md+ — this one exists only because the sidebar is
-            hidden below md and this hub is the mobile "More" destination. Showing both
-            at md+ was redundant AND put this one directly under the global fixed "New
-            entry" button (quick-add.tsx), which visually collided with it. */}
+        {/* md:hidden — the desktop sidebar footer already has a ThemeToggle at md+;
+            this one exists for mobile, where the sidebar is hidden. */}
         <div className="md:hidden">
           <ThemeToggle />
         </div>

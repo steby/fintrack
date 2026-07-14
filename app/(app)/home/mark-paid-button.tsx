@@ -7,75 +7,39 @@ import { Input } from '@/components/ui/input';
 import { ResponsiveSheet } from '@/components/ui/responsive-sheet';
 import { useToastManager } from '@/components/ui/toast';
 import { useAction } from '../../../lib/hooks/use-action';
+import { entrySettleLabels } from '../../../lib/domain/entries';
 import { formatSGD, formatDueDate } from '../../../lib/format';
 
-// Today in the browser's OWN calendar day, YYYY-MM-DD — matches
-// app/(app)/recurring/generate-form.tsx's own established precedent of a client-side
-// form default being deliberately browser-local (a native <input type="date"> should
-// default to what the user's own calendar considers "today," not the server's UTC
-// canonical one). This is only ever a DEFAULT the user can edit before confirming;
-// markPaidAction independently re-defaults to its own UTC "today" server-side if this
-// field is ever empty/stripped (defense in depth, not a source of truth mismatch).
+// Today in the browser's OWN calendar day, YYYY-MM-DD — a native <input type="date">
+// should default to what the user's calendar considers "today," not the server's UTC
+// one. Only ever a DEFAULT the user can edit; markPaidAction independently re-defaults
+// to UTC today server-side if the field arrives empty.
 function todayLocalIso(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// Mark paid for Home's upcoming list, Monthly's calendar/agenda/list views (spec.md
-// Phase 9-10). Clicking "Mark paid" opens a small ResponsiveSheet confirming the date
-// (post-redesign bug-fix pass — USER'S EXPLICIT SPEC: markPaidAction used to hardcode
-// actualDate to today regardless of which month the entry actually belongs to, which
-// broke the moment Phase 10 made this button reachable from arbitrary past/future
-// months via Monthly's chevrons; a January bill marked paid in July should be
-// recordable AS January, not today) — defaulting to today but fully editable, with
-// Cancel/"Mark paid" actions. The date field is the ONLY new input; everything below
-// about HOW the actual submission is fired is unchanged from before this fix.
+// One-tap settle for Home's upcoming list and all three Monthly views. The trigger
+// opens a small ResponsiveSheet confirming the date (defaults to today, editable —
+// user's explicit spec: a January bill marked paid in July must be recordable AS
+// January).
 //
-// The submission itself still calls markPaidAction DIRECTLY (a Server Action invoked
-// as a plain async function inside startTransition, not via <form action={...}>/
-// useActionState) and fires the toast from the SAME async callback that awaits its
-// result — not from a subsequent render/effect reacting to useActionState's returned
-// state. This is a deliberate, debugged deviation from useActionState (which the
-// original Phase 9 plan's own WISDOM section sketched for this button): a
-// useActionState-bound version was built first and, under real E2E verification, the
-// toast never appeared — root-caused to a race between two updates markPaidAction
-// triggers on the SAME response: (1) useActionState's own local `state` update, and
-// (2) revalidatePath('/')'s router refresh, which removes this exact component from
-// the tree (the entry is no longer unpaid, so it drops out of the upcoming list). When
-// both land in one React commit, React can go straight from "old tree" to "new tree
-// without this component" without ever committing an intermediate frame where THIS
-// instance has the new `state` while still mounted — so neither a render-time reaction
-// nor a useEffect keyed on that state reliably fires. Calling the action directly and
-// awaiting it removes the dependency on this component surviving to observe its own
-// result via a re-render entirely: the toast fires the instant the awaited call
-// resolves, in the same closure, regardless of what the following revalidation-driven
-// re-render then does to this component's DOM position. The popup's own open/close
-// state is a SEPARATE, purely local concern (closed eagerly the moment the user
-// confirms, before the action is even awaited — see handleConfirm below) and doesn't
-// change this invariant at all: Undo already used this same direct-call shape for
-// exactly this reason — see the plan's own WISDOM note ("an Undo button that calls the
-// undo server action") — this just applies the identical, now cross-verified pattern
-// consistently to the primary action too instead of only the secondary one.
-//
-// Maintainability pass: the mechanical part of this — useTransition + calling the
-// action directly + awaiting it + handing the settled result to a callback
-// synchronously in the same closure — is now factored into lib/hooks/use-action.ts's
-// `useAction`, shared by 9 other call sites that all independently hand-rolled this
-// same shape. This comment stays put (several of those call sites' own comments point
-// back here for the full race explanation) — only the mechanics moved, not the
-// invariant: `onSettled` below still runs synchronously inside `run`'s awaited
-// closure, never from a useEffect keyed on returned state.
+// RACE-SAFETY INVARIANT (canonical explanation — other call sites point here): the
+// submission calls the Server Action DIRECTLY via lib/hooks/use-action.ts and fires the
+// toast in the SAME awaited closure — never via useActionState + a render/effect
+// reacting to returned state. markPaidAction's revalidatePath can unmount this exact
+// component (the row leaves the unpaid list) in the same React commit that would have
+// delivered the new state, so a state-reactive toast silently never fires — a real bug
+// observed under E2E, not a theoretical one. The sheet also closes EAGERLY before the
+// await for the same reason: a setOpen(false) after the await relies on this instance
+// still being mounted.
 export function MarkPaidButton({
   entryId,
   item,
   amountCents,
-  // Phase 10: Monthly's calendar/agenda/list views reuse this exact component (per the
-  // plan's own instruction — "do NOT rebuild it with useActionState") but need a more
-  // compact visual treatment than Home's upcoming-list row (a table cell, an agenda
-  // line, a day-sheet list item — all tighter spaces than Home's card). Purely
-  // cosmetic — every prop below only reaches the underlying trigger Button's
-  // className/variant/size; the startTransition/toast logic is untouched and always
-  // runs the same way regardless of which view rendered this instance.
+  direction = null,
+  // Cosmetic only — Monthly's table cells / agenda lines need tighter treatments than
+  // Home's card rows; the action logic is identical regardless of which view renders it.
   size = 'sm',
   variant = 'outline',
   className,
@@ -83,6 +47,7 @@ export function MarkPaidButton({
   entryId: string;
   item: string;
   amountCents: number;
+  direction?: 'income' | 'expense' | null;
   size?: ComponentProps<typeof Button>['size'];
   variant?: ComponentProps<typeof Button>['variant'];
   className?: string;
@@ -90,15 +55,10 @@ export function MarkPaidButton({
   const [open, setOpen] = useState(false);
   const { pending, run } = useAction(markPaidAction);
   const toastManager = useToastManager();
+  const labels = entrySettleLabels(direction);
 
   function handleConfirm(actualDate: string) {
-    // Close eagerly, before the action is even awaited — this component (or its
-    // ancestor day-sheet row) may unmount once markPaidAction's revalidatePath lands,
-    // so a setOpen(false) placed AFTER the await would be relying on this instance
-    // still being mounted to apply it. Closing first sidesteps that entirely; the
-    // trigger Button below still shows its own "Marking…" pending state in the
-    // meantime for feedback if it's still on screen.
-    setOpen(false);
+    setOpen(false); // eagerly — see the race-safety comment above
     const formData = new FormData();
     formData.set('id', entryId);
     formData.set('actualDate', actualDate);
@@ -107,7 +67,7 @@ export function MarkPaidButton({
       if ('error' in result) {
         toastManager.add({
           type: 'error',
-          title: 'Could not mark paid',
+          title: labels.failure,
           description: result.error,
         });
         return;
@@ -117,7 +77,7 @@ export function MarkPaidButton({
       const previous = result.previous;
       toastManager.add({
         type: 'success',
-        title: `Marked "${item}" paid`,
+        title: `Marked "${item}" ${labels.past}`,
         description: `${formatSGD(amountCents)} recorded for ${formatDueDate(actualDate)}.`,
         actionProps: {
           children: 'Undo',
@@ -143,18 +103,21 @@ export function MarkPaidButton({
         disabled={pending}
         onClick={() => setOpen(true)}
       >
-        {pending ? 'Marking…' : 'Mark paid'}
+        {pending ? labels.pending : labels.action}
       </Button>
       <ResponsiveSheet
         open={open}
         onOpenChange={setOpen}
-        title="Mark paid"
-        description={`Confirm the date "${item}" was actually paid.`}
+        title={labels.action}
+        description={`Confirm the date "${item}" was ${labels.past}.`}
       >
         <MarkPaidForm
           item={item}
           amountCents={amountCents}
           pending={pending}
+          actionLabel={labels.action}
+          pendingLabel={labels.pending}
+          dateLabel={direction === 'income' ? 'Date received' : 'Date paid'}
           onConfirm={handleConfirm}
           onCancel={() => setOpen(false)}
         />
@@ -163,21 +126,24 @@ export function MarkPaidButton({
   );
 }
 
-// The popup's own body — item name as read-only context, an editable date field
-// defaulting to today, Cancel + Mark paid. `useState(todayLocalIso)` (a lazy
-// initializer, not `useState(todayLocalIso())`) computes "today" once per mount, i.e.
-// once per time the sheet opens (ResponsiveSheet's children only actually mount while
-// `open` — Base UI's own documented behavior), not once per app load.
+// `useState(todayLocalIso)` (lazy initializer) computes "today" once per time the sheet
+// opens — ResponsiveSheet's children only mount while `open`.
 function MarkPaidForm({
   item,
   amountCents,
   pending,
+  actionLabel,
+  pendingLabel,
+  dateLabel,
   onConfirm,
   onCancel,
 }: {
   item: string;
   amountCents: number;
   pending: boolean;
+  actionLabel: string;
+  pendingLabel: string;
+  dateLabel: string;
   onConfirm: (actualDate: string) => void;
   onCancel: () => void;
 }) {
@@ -197,7 +163,7 @@ function MarkPaidForm({
         <span className="text-sm text-muted-foreground">{formatSGD(amountCents)}</span>
       </div>
       <label className="flex flex-col gap-1 text-sm">
-        Date paid
+        {dateLabel}
         <Input
           type="date"
           name="actualDate"
@@ -211,7 +177,7 @@ function MarkPaidForm({
           Cancel
         </Button>
         <Button type="submit" disabled={pending}>
-          {pending ? 'Marking…' : 'Mark paid'}
+          {pending ? pendingLabel : actionLabel}
         </Button>
       </div>
     </form>

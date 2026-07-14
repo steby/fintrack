@@ -72,6 +72,29 @@ export interface PaidStateCandidate {
 // showing right now, including past months (an unpaid entry from three months ago is
 // still "overdue," not silently reclassified as something else just because it's out of
 // affordability.ts's horizon window).
+// Direction-aware wording for the one-tap settle flow: "paid" is wrong for income —
+// nobody "pays" their own salary. Centralized so the trigger button, confirm sheet,
+// and toast can never drift apart. A null direction (uncategorized entry) reads as
+// expense wording — the pragmatic default for ad-hoc spends.
+export interface EntrySettleLabels {
+  action: 'Mark paid' | 'Mark received';
+  pending: 'Marking…';
+  past: 'paid' | 'received';
+  failure: 'Could not mark paid' | 'Could not mark received';
+}
+
+export function entrySettleLabels(direction: 'income' | 'expense' | null): EntrySettleLabels {
+  if (direction === 'income') {
+    return {
+      action: 'Mark received',
+      pending: 'Marking…',
+      past: 'received',
+      failure: 'Could not mark received',
+    };
+  }
+  return { action: 'Mark paid', pending: 'Marking…', past: 'paid', failure: 'Could not mark paid' };
+}
+
 export function entryPaidState(entry: PaidStateCandidate, today: Date): PaidState {
   // Paid beats everything else, regardless of due day/date — an entry with an actual
   // amount recorded already happened; it can never also be "overdue" or "upcoming."

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { required, formatZodIssues } from './zod-format';
+import { pinStrictSslMode } from './db/connection-string';
 
 const boolString = (defaultValue: 'true' | 'false') =>
   z
@@ -16,7 +17,11 @@ const envSchema = z.object({
     .refine(
       (val) => val.startsWith('postgresql://') || val.startsWith('postgres://'),
       'DATABASE_URL must use the postgresql:// or postgres:// scheme',
-    ),
+    )
+    // Pins sslmode=require/prefer/verify-ca to verify-full at the single choke point
+    // every consumer reads (pools, drizzle-kit) — see lib/db/connection-string.ts for
+    // why this beats editing the secret in three environments.
+    .transform(pinStrictSslMode),
   SESSION_SECRET: z
     .string(required('SESSION_SECRET is required'))
     .min(32, 'SESSION_SECRET must be at least 32 characters'),

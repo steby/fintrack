@@ -4615,3 +4615,81 @@ production build CI actually runs) confirmed as a local-only artifact, not a reg
 once re-run correctly with `CI=true`.
 
 ---
+
+## Improvement batch 1 — quick wins from the full app review (2026-07-14)
+
+First batch of the user-approved improvement plan (full plan reviewed and approved in
+conversation; batches 2-4 cover Uncategorized-category foundations, features like
+password reset/transactions/FX-assist, and the heavy items — offline, code splits).
+All items below were verified live against a local production build (screenshots,
+real login, zero console errors) on top of the full gate suite.
+
+- **Theme toggle is now a 3-state cycle** (light → dark → system) instead of a binary
+  flip. New pure module `lib/theme.ts` (`nextTheme`, `isThemePreference`) with unit
+  tests; icon shows the current PREFERENCE (Monitor for system, not the resolved
+  sun/moon). `e2e/shell.spec.ts`'s theme test rewritten cycle-aware — asserts the
+  stored preference advances correctly from ANY starting state, that the html class
+  agrees with the preference (or the browser's own prefers-color-scheme when
+  'system'), persists across reload, and walks the full cycle to restore its starting
+  state.
+- **Desktop "New entry" moved from a fixed top-right overlay into the sidebar.** The
+  fixed button was the root cause of all three layout collisions fixed on 2026-07-13
+  (it floated over every page's own top-right controls). New
+  `app/(app)/quick-add-context.tsx` — `QuickAddProvider` + `useQuickAddOpen` +
+  `NewEntryButton` — shares the sheet's open state across the server-component
+  boundary between the sidebar and quick-add.tsx (which keeps the mobile Fab and the
+  ResponsiveSheet). The `md:mt-8` collision workarounds on `/accounts` are reverted —
+  no fixed element left to collide with. Viewer never sees the button (canManage
+  gate, same as the Fab).
+- **$0.00 recurring items are no longer rendered as bills.** Home's upcoming list
+  gives zero-amount items their own muted, dash-bordered "Needs an amount" group with
+  a "Set amount" link to /recurring, instead of listing them as red overdue debt next
+  to real bills (user: "a visual reminder for me to set them up"). The hero's "after
+  N upcoming bills" count now also excludes them. Domain math untouched — a $0 item
+  contributed nothing to any total before or after.
+- **Income rows say "Mark received", not "Mark paid".** New
+  `entrySettleLabels(direction)` in `lib/domain/entries.ts` (unit-tested; null
+  direction reads as expense wording) drives the trigger, sheet title/description,
+  date-field label ("Date received"), submit button, failure toast, and success toast
+  everywhere MarkPaidButton renders (Home + all three Monthly views). Zero E2E churn:
+  every existing spec's mark-paid target is a test-created expense/uncategorized
+  entry.
+- **List view rows compacted to a single line** — the amount and date inputs and the
+  Mark paid button now sit side-by-side (was a 3-high vertical stack that made every
+  row ~3x its content height; live-audit finding N3). The load-bearing inline
+  keyboard flow (Enter saves / Esc reverts / blur commits) and the paid-state remount
+  key are preserved verbatim — only the flex direction changed.
+- **Budget caps are now discoverable** (live-audit finding: the real household had
+  zero caps set and no UI anywhere revealed the feature). Expense category rows on
+  Settings → Categories show "No monthly cap — set one via Edit" when unset;
+  BudgetHealthCard's empty state gained a "Set caps in Categories →" link (the old
+  copy named no location at all).
+- **Savings-rate tile explains its em-dash**: sub-line reads "No actual income
+  recorded yet" instead of the formula when there are no actuals.
+- **ViewToggle passes `nativeButton={false}`** — its tabs render as Links; silences
+  Base UI's dev-only console warning (confirmed absent from production builds during
+  the live audit, so this was cosmetic-in-dev only).
+- **`sslmode` pinned to `verify-full` in code, not in three secrets.** New pure
+  `pinStrictSslMode` (`lib/db/connection-string.ts`, unit-tested) upgrades
+  require/prefer/verify-ca — the modes pg currently ALIASES to verify-full and will
+  downgrade in pg v9 — at `lib/env.ts`'s zod transform, the single choke point every
+  consumer (pools, drizzle-kit) reads; `e2e/test-db.ts` (which reads process.env
+  directly) applies the same pin. Behavior today is identical (the aliases already
+  meant verify-full); the point is pinning it across the pg v9 major without
+  coordinating edits to the local/CI/Vercel copies of the secret. Absent sslmode is
+  left alone (plain local postgres keeps working); the startup SECURITY WARNING is
+  gone from app/integration output. `lib/env.test.ts` updated to assert the
+  transform.
+- **README documents the single-currency constraint** (SGD by design; FX-assisted
+  entry planned, stored truth stays SGD).
+
+**Test/CI status:** lint/typecheck clean; unit 485/485 (+13: theme cycle,
+entrySettleLabels, pinStrictSslMode, env transform); integration 274/274 (unchanged);
+coverage 99.46/97.67/99.36/99.85 on `lib/**`; build clean; format clean; E2E 68/68
+(`CI=true`, real `next build && next start`) with the rewritten theme spec. Visual
+verification: live screenshots of Home (Needs-an-amount group, sidebar button, Mark
+received), Money list (single-line rows), Settings → Categories (cap hints), Insights
+(savings sub-line), plus a scripted theme-cycle walk (system → light → dark observed
+in localStorage) — zero page errors.
+
+---

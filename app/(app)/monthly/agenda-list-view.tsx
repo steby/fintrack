@@ -155,6 +155,7 @@ function AgendaRow({ entry, canManage }: { entry: MonthlyEntryRow; canManage: bo
             entryId={entry.id}
             item={entry.item}
             amountCents={amountCents}
+            direction={entry.categoryDirection}
             size="xs"
             variant="ghost"
           />

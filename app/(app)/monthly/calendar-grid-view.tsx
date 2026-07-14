@@ -253,6 +253,7 @@ function DaySheetRow({ entry, canManage }: { entry: MonthlyEntryRow; canManage: 
           entryId={entry.id}
           item={entry.item}
           amountCents={budgetedCents}
+          direction={entry.categoryDirection}
           size="sm"
           variant="outline"
         />

@@ -35,6 +35,9 @@ export function ViewToggle({ year, month, view }: { year: number; month: number;
             key={v.mode}
             value={v.mode}
             data-testid={`view-toggle-${v.mode}`}
+            // Each tab renders as a Link, not a <button> — without this, Base UI warns
+            // (dev builds) that a component acting as a button isn't a native one.
+            nativeButton={false}
             onClick={() => {
               document.cookie = `fintrack_view=${v.mode};path=/;max-age=31536000`;
             }}

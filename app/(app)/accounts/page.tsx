@@ -61,12 +61,7 @@ export default async function AccountsPage({
       <div className="flex flex-col gap-6">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Net worth</h1>
-          {/* md:mt-8 clears the global fixed "New entry" button (quick-add.tsx, fixed
-              top-4 right-4) — without it this row's YearPicker renders directly
-              underneath the button and is unreachable/invisible at md+. */}
-          <div className="md:mt-8">
-            <YearPicker year={year} basePath="/accounts" />
-          </div>
+          <YearPicker year={year} basePath="/accounts" />
         </div>
         <InlineNote icon={Landmark}>
           Net-worth tracking (balances, the net-worth chart) is turned off for this deployment — ask
@@ -131,11 +126,7 @@ export default async function AccountsPage({
             </TooltipContent>
           </Tooltip>
         </div>
-        {/* md:mt-8 clears the global fixed "New entry" button — see the feature-off
-            branch above for the full rationale. */}
-        <div className="md:mt-8">
-          <YearPicker year={year} basePath="/accounts" />
-        </div>
+        <YearPicker year={year} basePath="/accounts" />
       </div>
 
       <div className="flex items-end justify-between gap-4">

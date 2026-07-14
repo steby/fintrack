@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Fab } from '@/components/ui/fab';
 import { ResponsiveSheet } from '@/components/ui/responsive-sheet';
+import { useQuickAddOpen } from './quick-add-context';
 import { parseYearParam, parseMonthParam } from '../../lib/domain/month-params';
 import { currentYearMonth } from '../../lib/domain/today';
 
@@ -16,14 +17,10 @@ interface Option {
   name: string;
 }
 
-// Phase 10's global quick-add — a FAB on mobile (Phase 8's fab.tsx primitive, mounted
-// for the first time) and a "+ Add" header-area button on desktop, both opening the
-// SAME ResponsiveSheet (open state managed here, not by ResponsiveSheet's own optional
-// `trigger` prop, which only accepts one trigger element). Mounted once in
-// app/(app)/layout.tsx (inside a Suspense boundary — see that file's comment) so it's
-// reachable from every page, not just /monthly; replaces the old page-local
-// adhoc-form.tsx entirely (spec.md Phase 10: "rename/refactor adhoc-form.tsx ->
-// quick-add.tsx").
+// The global quick-add sheet + mobile Fab (spec.md Phase 10), mounted once in
+// app/(app)/layout.tsx so it's reachable from every page. The desktop trigger lives in
+// the sidebar (quick-add-context.tsx's NewEntryButton); open state is shared via
+// QuickAddProvider since the sidebar is a separate server-rendered subtree.
 export function QuickAdd({
   categories,
   accounts,
@@ -35,7 +32,7 @@ export function QuickAdd({
   members: Option[];
   entryAttributionEnabled: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const { open, setOpen } = useQuickAddOpen();
   // Defaults to whichever month the CURRENT page's URL is showing (e.g.
   // /monthly?year=&month=), falling back to the current month everywhere else
   // (spec.md Phase 10 edge case: "quick-add from a non-Money page defaults to
@@ -60,32 +57,10 @@ export function QuickAdd({
 
   return (
     <>
-      {/* Fixed header slot (spec.md Phase 10's own explicit "top of sidebar OR a fixed
-          header slot" choice) rather than nesting inside app/(app)/layout.tsx's
-          <aside> — that sidebar is `hidden` below the md breakpoint, and this whole
-          component is mounted OUTSIDE it specifically so the Fab below still renders on
-          mobile; a fixed-position desktop button needs no such placement at all.
-          Labeled "New entry", deliberately NOT containing the substring "add" in any
-          form ("Add", "Quick add", etc.) — a first attempt at "Quick add" broke a real,
-          pre-existing E2E test (categories.spec.ts's bank-account create/delete flow,
-          `getByRole('button', { name: 'Add' }).last()`): Playwright's role-name
-          matching is a case-insensitive SUBSTRING match by default, not exact, so
-          "Quick add" silently satisfied that query too. This button is mounted on
-          EVERY (app) page via the layout — /recurring, /settings/categories,
-          /settings/accounts, and Home's own goal/entry forms all already have their
-          own "Add"/"Add item"/"Add goal" submit buttons using positional
-          `.first()`/`.last()` disambiguation that assumed a fixed element count; any
-          label sharing "add" as a substring adds an uncounted-for match everywhere at
-          once. "New entry" shares no substring with any of those. */}
-      <Button
-        type="button"
-        size="sm"
-        className="fixed top-4 right-4 z-20 hidden gap-1.5 shadow-lg md:inline-flex"
-        onClick={() => setOpen(true)}
-      >
-        <Plus className="size-4" />
-        New entry
-      </Button>
+      {/* aria-label "New entry" must never contain the substring "add" — several E2E
+          specs disambiguate pre-existing "Add"/"Add item"/"Add goal" buttons
+          positionally, and Playwright role-name matching is substring-based; a
+          layout-mounted trigger whose label matched would break them all at once. */}
       <Fab type="button" aria-label="New entry" onClick={() => setOpen(true)}>
         <Plus className="size-5" />
       </Fab>

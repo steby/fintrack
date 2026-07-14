@@ -26,6 +26,12 @@ Start here — every other doc in this repo hangs off one of these:
 Next.js 16 (App Router) · React 19 · TypeScript · Neon Postgres · Drizzle ORM · Tailwind v4 ·
 shadcn/ui · Recharts · Resend · Vercel.
 
+**Single-currency by design:** every stored amount and every aggregate is SGD
+(`lib/format.ts`'s `formatSGD` is the one render path). Multi-currency _accounting_ —
+historical FX rates inside the math — is deliberately out of scope; foreign spends are
+recorded as the SGD amount actually paid (an FX-assisted entry helper converting at
+entry time is planned, but the stored truth stays SGD).
+
 ## Getting started
 
 Prerequisites: Node (see `.nvmrc`), a Neon Postgres project with two branches (one for local

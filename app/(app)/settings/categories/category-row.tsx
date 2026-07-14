@@ -146,6 +146,15 @@ export function CategoryRow({
       {showBudget && capCents !== null && (
         <BudgetBar capCents={capCents} spentCents={currentMonthSpentCents ?? 0} />
       )}
+      {/* Without this line, nothing anywhere reveals that expense categories CAN have a
+          monthly cap — the input only exists inside Edit mode and the add-form, so an
+          owner who never opened either had no way to discover the feature (live-audit
+          finding: the real household had zero caps set). */}
+      {showBudget && capCents === null && (
+        <div className="pl-2 text-[0.65rem] text-muted-foreground">
+          No monthly cap{canManage ? ' — set one via Edit' : ''}
+        </div>
+      )}
       {deleteState?.error && <p className="text-xs text-destructive">{deleteState.error}</p>}
     </div>
   );

@@ -53,13 +53,25 @@ describe('loadEnv', () => {
     ).toThrowError(/DATABASE_URL/);
   });
 
-  it('accepts both postgresql:// and postgres:// schemes', () => {
-    expect(loadEnv(validBase).DATABASE_URL).toBe(validBase.DATABASE_URL);
+  it('accepts both postgresql:// and postgres:// schemes, pinning sslmode to verify-full', () => {
+    // sslmode=require is upgraded to verify-full at load time (lib/db/connection-string.ts) —
+    // the URL is otherwise untouched.
+    expect(loadEnv(validBase).DATABASE_URL).toBe(
+      validBase.DATABASE_URL.replace('sslmode=require', 'sslmode=verify-full'),
+    );
     const result = loadEnv({
       ...validBase,
       DATABASE_URL: 'postgres://user:pass@host/db?sslmode=require',
     });
-    expect(result.DATABASE_URL).toBe('postgres://user:pass@host/db?sslmode=require');
+    expect(result.DATABASE_URL).toBe('postgres://user:pass@host/db?sslmode=verify-full');
+  });
+
+  it('leaves a DATABASE_URL without any sslmode untouched (plain local postgres)', () => {
+    const result = loadEnv({
+      ...validBase,
+      DATABASE_URL: 'postgresql://localhost:5432/fintrack',
+    });
+    expect(result.DATABASE_URL).toBe('postgresql://localhost:5432/fintrack');
   });
 
   it('throws when SESSION_SECRET is shorter than 32 characters', () => {

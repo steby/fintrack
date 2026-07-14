@@ -1,6 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { shouldPropagate, getDifference, entryPaidState } from './entries';
+import { shouldPropagate, getDifference, entryPaidState, entrySettleLabels } from './entries';
+
+describe('entrySettleLabels', () => {
+  it('uses "received" wording for income', () => {
+    const labels = entrySettleLabels('income');
+    expect(labels.action).toBe('Mark received');
+    expect(labels.past).toBe('received');
+    expect(labels.failure).toBe('Could not mark received');
+  });
+
+  it('uses "paid" wording for expense', () => {
+    const labels = entrySettleLabels('expense');
+    expect(labels.action).toBe('Mark paid');
+    expect(labels.past).toBe('paid');
+    expect(labels.failure).toBe('Could not mark paid');
+  });
+
+  it('defaults an uncategorized (null-direction) entry to expense wording', () => {
+    expect(entrySettleLabels(null)).toEqual(entrySettleLabels('expense'));
+  });
+});
 
 describe('shouldPropagate', () => {
   it('propagates a plain forecast row (no actual, not overridden)', () => {

@@ -65,25 +65,47 @@ test.describe('shell: navigation IA', () => {
     await expect(page).toHaveURL('/');
   });
 
-  test('theme toggle persists across reload', async ({ page }) => {
+  test('theme toggle cycles light → dark → system and persists across reload', async ({ page }) => {
     await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
-    const html = page.locator('html');
-    const initiallyDark = await html.evaluate((el) => el.classList.contains('dark'));
+    // Mirrors lib/theme.ts's nextTheme — next-themes stores the PREFERENCE in
+    // localStorage('theme'); an absent key means the provider default ('dark',
+    // app/layout.tsx).
+    const cycle = new Map([
+      ['light', 'dark'],
+      ['dark', 'system'],
+      ['system', 'light'],
+    ]);
+    const storedTheme = () => page.evaluate(() => localStorage.getItem('theme'));
+
+    const initial = (await storedTheme()) ?? 'dark';
+    const expected = cycle.get(initial) ?? 'light';
 
     await page.getByTestId('theme-toggle').click();
+    await expect.poll(storedTheme).toBe(expected);
+    // The html class must agree with the new preference. For 'system' the resolved
+    // class depends on the test browser's own prefers-color-scheme — assert agreement
+    // with that media query instead of a hardcoded value.
     await expect
-      .poll(() => html.evaluate((el) => el.classList.contains('dark')))
-      .toBe(!initiallyDark);
+      .poll(() =>
+        page.evaluate(() => {
+          const dark = document.documentElement.classList.contains('dark');
+          const stored = localStorage.getItem('theme');
+          const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          return stored === 'system' ? dark === systemDark : dark === (stored === 'dark');
+        }),
+      )
+      .toBe(true);
 
     await page.reload();
-    await expect
-      .poll(() => html.evaluate((el) => el.classList.contains('dark')))
-      .toBe(!initiallyDark);
+    await expect.poll(storedTheme).toBe(expected);
 
-    // Restore the original theme so this test doesn't leave persistent state that
-    // affects a later run's "initiallyDark" assumption.
+    // Walk the rest of the 3-step cycle so the stored preference lands back where this
+    // test found it — no persistent state leaks into a later run's assumptions.
     await page.getByTestId('theme-toggle').click();
+    await expect.poll(storedTheme).toBe(cycle.get(expected) ?? 'light');
+    await page.getByTestId('theme-toggle').click();
+    await expect.poll(storedTheme).toBe(initial);
   });
 
   test('a viewer sees no Members link and no write affordances in the shell', async ({ page }) => {

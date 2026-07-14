@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as schema from '../lib/db/schema';
+import { pinStrictSslMode } from '../lib/db/connection-string';
 
 // The Playwright test runner is a separate Node process from the app's own webServer
 // (see playwright.config.ts) — it needs its own DB connection and its own `dotenv/config`
@@ -14,7 +15,9 @@ import * as schema from '../lib/db/schema';
 // needed caused "Cannot use a pool after calling end on the pool", surfacing as a
 // flaky failure that depended on which file happened to finish first.
 export function createTestDb() {
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  // This process reads DATABASE_URL raw (it never goes through lib/env.ts's loadEnv),
+  // so the sslmode pin has to be applied here too — same rationale as lib/env.ts.
+  const pool = new Pool({ connectionString: pinStrictSslMode(process.env.DATABASE_URL ?? '') });
   const db = drizzle(pool, { schema });
   return { db, close: () => pool.end() };
 }

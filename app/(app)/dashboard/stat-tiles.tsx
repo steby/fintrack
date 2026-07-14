@@ -66,7 +66,11 @@ export function StatTiles({ totals }: { totals: YearTotals }) {
               ? `${Math.round((totals.netActualCents / totals.actualIncomeCents) * 100)}%`
               : '—'}
           </div>
-          <div className="text-xs text-muted-foreground">Actual net &divide; actual income</div>
+          <div className="text-xs text-muted-foreground">
+            {totals.actualIncomeCents > 0
+              ? 'Actual net ÷ actual income'
+              : 'No actual income recorded yet'}
+          </div>
         </CardContent>
       </Card>
     </div>
