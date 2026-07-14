@@ -17,6 +17,8 @@ interface Option {
   name: string;
 }
 
+type CategoryOption = Option & { direction: 'income' | 'expense'; isSystem: boolean };
+
 // The global quick-add sheet + mobile Fab (spec.md Phase 10), mounted once in
 // app/(app)/layout.tsx so it's reachable from every page. The desktop trigger lives in
 // the sidebar (quick-add-context.tsx's NewEntryButton); open state is shared via
@@ -27,7 +29,7 @@ export function QuickAdd({
   members,
   entryAttributionEnabled,
 }: {
-  categories: (Option & { direction: 'income' | 'expense' })[];
+  categories: CategoryOption[];
   accounts: Option[];
   members: Option[];
   entryAttributionEnabled: boolean;
@@ -95,7 +97,7 @@ function QuickAddForm({
 }: {
   year: number;
   month: number;
-  categories: (Option & { direction: 'income' | 'expense' })[];
+  categories: CategoryOption[];
   accounts: Option[];
   members: Option[];
   entryAttributionEnabled: boolean;
@@ -139,13 +141,18 @@ function QuickAddForm({
       <div className="grid grid-cols-2 gap-3">
         <label className="flex flex-col gap-1 text-sm">
           Category
+          {/* Empty value = the server files it under the household's reserved
+              Uncategorized expense category (addAdhocAction) — labeled honestly here
+              so nobody expects "None" to mean "outside the numbers". */}
           <select name="categoryId" className="h-9 rounded-md border bg-background px-2 text-sm">
-            <option value="">None</option>
-            {categories.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.direction === 'income' ? '↑' : '↓'} {c.name}
-              </option>
-            ))}
+            <option value="">Uncategorized</option>
+            {categories
+              .filter((c) => !c.isSystem)
+              .map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.direction === 'income' ? '↑' : '↓'} {c.name}
+                </option>
+              ))}
           </select>
         </label>
         <label className="flex flex-col gap-1 text-sm">

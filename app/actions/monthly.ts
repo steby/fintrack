@@ -10,7 +10,7 @@ import { env } from '../../lib/env';
 import { moneyInputSchema, optionalMoneyInputSchema, centsToAmount } from '../../lib/money';
 import { isValidCalendarDate } from '../../lib/domain/month-params';
 import { utcStartOfDay } from '../../lib/domain/today';
-import { resolveOptionalRef } from '../../lib/db/queries';
+import { resolveOptionalRef, getOrCreateUncategorizedCategoryId } from '../../lib/db/queries';
 
 export type MonthlyActionState = { error?: string; success?: boolean } | undefined;
 
@@ -329,12 +329,20 @@ export async function addAdhocAction(
   const paidBy = await resolveOptionalRef(users, actingUser.householdId, parsed.data.paidByUserId);
   if (!paidBy.ok) return { error: 'Household member not found.' };
 
+  // No category picked → the household's reserved Uncategorized (expense) category, so
+  // the entry has a direction and therefore COUNTS. A truly category-less entry is
+  // excluded from every total, forecast, and chart (direction is unknowable), which
+  // made quick-add's fastest path produce entries that changed no number anywhere —
+  // full-app-review finding, live-demonstrated with a $123.45 add that moved nothing.
+  const categoryId =
+    category.value ?? (await getOrCreateUncategorizedCategoryId(actingUser.householdId));
+
   await db.insert(monthlyEntries).values({
     householdId: actingUser.householdId,
     year: parsed.data.year,
     month: parsed.data.month,
     item: parsed.data.item,
-    categoryId: category.value,
+    categoryId,
     budgetedAmount: centsToAmount(budgeted.data),
     actualAmount: actual.data === null ? null : centsToAmount(actual.data),
     actualDate: parsed.data.actualDate ? parsed.data.actualDate : null,

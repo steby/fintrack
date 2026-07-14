@@ -1,4 +1,5 @@
-import { CalendarClock } from 'lucide-react';
+import Link from 'next/link';
+import { CalendarClock, Tags } from 'lucide-react';
 import { eq } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { requireUser } from '../../lib/auth/guards';
@@ -152,6 +153,12 @@ export default async function HomePage({
   const budgetRows = env.FEATURE_CATEGORY_BUDGETS
     ? buildCategoryBudgetRows(currentMonthRows, currentMonthCategories)
     : [];
+  // Uncategorized entries (the reserved system category, plus any legacy truly-null
+  // rows) count as plain expenses in every total, but re-filing them keeps Insights'
+  // category donut and per-category budget caps meaningful — nudge, don't block.
+  const uncategorizedCount = currentMonthRows.filter(
+    (r) => r.categoryIsSystem || r.direction === null,
+  ).length;
 
   return (
     <div className="flex flex-col gap-6">
@@ -169,6 +176,19 @@ export default async function HomePage({
         horizon={horizon}
         canManage={canManage}
       />
+
+      {uncategorizedCount > 0 && (
+        <Link
+          href="/monthly?view=list"
+          data-testid="categorize-nudge"
+          className="flex w-fit items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 text-sm text-warning hover:bg-warning/20"
+        >
+          <Tags className="size-4 shrink-0" aria-hidden />
+          {uncategorizedCount === 1
+            ? '1 entry this month needs a category'
+            : `${uncategorizedCount} entries this month need a category`}
+        </Link>
+      )}
 
       {cashLensActive && <RunwaySparkline points={runwayPoints} />}
 

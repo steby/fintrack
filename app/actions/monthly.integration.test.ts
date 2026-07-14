@@ -258,6 +258,53 @@ describe('addAdhocAction', () => {
     await cleanup(member.household.id);
   });
 
+  it('files a no-category entry under the reserved Uncategorized expense category, self-creating it', async () => {
+    const { addAdhocAction } = await import('./monthly');
+    // makeHouseholdWithUser creates a bare household with NO system category — this
+    // exercises getOrCreateUncategorizedCategoryId's self-heal path, not just the
+    // seeded/migrated happy path.
+    const member = await makeHouseholdWithUser('member', 'Monthly adhoc uncategorized');
+
+    mockToken = member.token;
+    const result = await addAdhocAction(
+      undefined,
+      formData({ year: '2026', month: '3', item: 'Mystery Spend', actualAmount: '42.00' }),
+    );
+    expect(result).toEqual({ success: true });
+
+    const [entry] = await db
+      .select({
+        categoryId: monthlyEntries.categoryId,
+        categoryName: categories.name,
+        direction: categories.direction,
+        isSystem: categories.isSystem,
+      })
+      .from(monthlyEntries)
+      .innerJoin(categories, eq(monthlyEntries.categoryId, categories.id))
+      .where(eq(monthlyEntries.householdId, member.household.id));
+    // The entry HAS a direction now — it counts in totals instead of silently
+    // vanishing from every number (the full-app-review finding this exists to fix).
+    expect(entry.categoryId).not.toBeNull();
+    expect(entry.categoryName).toBe('Uncategorized');
+    expect(entry.direction).toBe('expense');
+    expect(entry.isSystem).toBe(true);
+
+    // A second uncategorized add reuses the SAME system category (no duplicates —
+    // the partial unique index makes a double-create impossible).
+    mockToken = member.token;
+    await addAdhocAction(
+      undefined,
+      formData({ year: '2026', month: '3', item: 'Second Mystery', actualAmount: '7.00' }),
+    );
+    const systemCats = await db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(eq(categories.householdId, member.household.id));
+    expect(systemCats).toHaveLength(1);
+
+    await cleanup(member.household.id);
+  });
+
   // Phase 10: the global quick-add sheet's primary flow logs something that already
   // happened (item + actual amount + date), not just a forecast row — addAdhocSchema
   // gained an optional actualDate field for exactly this, reusing dateInputSchema's

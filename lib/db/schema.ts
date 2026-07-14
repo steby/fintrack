@@ -13,7 +13,7 @@ import {
   index,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
-import { isNull } from 'drizzle-orm';
+import { isNull, sql } from 'drizzle-orm';
 
 // Phase 1 lays down the full domain model in one migration (every later phase adds
 // business logic on top, not new tables — see spec.md's Phase 2 "no new tables"). All
@@ -139,18 +139,35 @@ export const loginAttempts = pgTable(
   (table) => [index('login_attempts_email_ip_idx').on(table.email, table.ip, table.attemptedAt)],
 );
 
-export const categories = pgTable('categories', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  householdId: uuid('household_id')
-    .notNull()
-    .references(() => households.id, { onDelete: 'cascade' }),
-  name: text('name').notNull(),
-  direction: directionEnum('direction').notNull(),
-  color: text('color').notNull().default('#6B7280'),
-  sortOrder: integer('sort_order').notNull().default(0),
-  monthlyBudget: numeric('monthly_budget', { precision: 12, scale: 2 }),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const categories = pgTable(
+  'categories',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    householdId: uuid('household_id')
+      .notNull()
+      .references(() => households.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    direction: directionEnum('direction').notNull(),
+    color: text('color').notNull().default('#6B7280'),
+    sortOrder: integer('sort_order').notNull().default(0),
+    monthlyBudget: numeric('monthly_budget', { precision: 12, scale: 2 }),
+    // The one reserved per-household "Uncategorized" expense category (quick-add's
+    // default when no category is picked — an entry MUST have a direction to count in
+    // any total, so category-less entries used to silently vanish from every number in
+    // the app). Undeletable via deleteCategoryAction; created by seed/migration and
+    // self-healed on demand by getOrCreateUncategorizedCategoryId.
+    isSystem: boolean('is_system').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // At most ONE system category per household, enforced by the DB itself — the
+    // on-demand self-heal path can race (two concurrent quick-adds both finding none),
+    // and this partial index turns that race into a harmless conflict.
+    uniqueIndex('categories_household_system_unique')
+      .on(table.householdId)
+      .where(sql`${table.isSystem}`),
+  ],
+);
 
 export const bankAccounts = pgTable('bank_accounts', {
   id: uuid('id').primaryKey().defaultRandom(),

@@ -243,8 +243,25 @@ test.describe('monthly entries', () => {
     await expect(adhocRow).toBeVisible();
     await expect(adhocRow.getByText('AD-HOC')).toBeVisible();
 
-    await adhocRow.getByRole('button', { name: 'Delete' }).click();
+    // No category was picked — the entry must land under the reserved Uncategorized
+    // expense category (visible as the row's category label), NOT category-less (which
+    // would exclude it from every total — the full-app-review finding), and Home must
+    // show the categorize nudge while it exists.
+    await expect(adhocRow.getByText('Uncategorized')).toBeVisible();
+    await page.goto('/');
+    const nudge = page.getByTestId('categorize-nudge');
+    await expect(nudge).toBeVisible();
+    await expect(nudge).toContainText(/needs? a category/);
+
+    await page.goto(currentMonthUrl());
+    const rowAgain = page.getByTestId('entry-row').filter({ hasText: adhocName });
+    await rowAgain.getByRole('button', { name: 'Delete' }).click();
     await expect(page.getByTestId('entry-row').filter({ hasText: adhocName })).toHaveCount(0);
+
+    // Nudge disappears once nothing needs categorizing (the seed household has no
+    // other uncategorized entries this month).
+    await page.goto('/');
+    await expect(page.getByTestId('categorize-nudge')).toHaveCount(0);
   });
 
   // Phase 10 (mark-paid reachable from list view's compact inline button,

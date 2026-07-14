@@ -339,4 +339,63 @@ describe('deleteCategoryAction', () => {
 
     await cleanup(memberA.household.id, memberB.household.id);
   });
+
+  it('refuses to delete the reserved Uncategorized category, even by direct form post (adversarial)', async () => {
+    const { deleteCategoryAction } = await import('./categories');
+    const member = await makeHouseholdWithUser('member', 'Cat delete system');
+    const [systemCat] = await db
+      .insert(categories)
+      .values({
+        householdId: member.household.id,
+        name: 'Uncategorized',
+        direction: 'expense',
+        isSystem: true,
+      })
+      .returning();
+
+    mockToken = member.token;
+    const result = await deleteCategoryAction(undefined, formData({ id: systemCat.id }));
+
+    expect(result).toEqual({ error: 'The built-in Uncategorized category can’t be deleted.' });
+    const [stillThere] = await db.select().from(categories).where(eq(categories.id, systemCat.id));
+    expect(stillThere).toBeDefined();
+
+    await cleanup(member.household.id);
+  });
+
+  it('refuses to flip the reserved Uncategorized category to income; rename stays allowed (adversarial)', async () => {
+    const { updateCategoryAction } = await import('./categories');
+    const member = await makeHouseholdWithUser('member', 'Cat update system');
+    const [systemCat] = await db
+      .insert(categories)
+      .values({
+        householdId: member.household.id,
+        name: 'Uncategorized',
+        direction: 'expense',
+        isSystem: true,
+      })
+      .returning();
+
+    mockToken = member.token;
+    const result = await updateCategoryAction(
+      undefined,
+      formData({ id: systemCat.id, name: 'Uncategorized', direction: 'income' }),
+    );
+
+    expect(result).toEqual({
+      error: 'The built-in Uncategorized category must stay an expense category.',
+    });
+    const [reloaded] = await db.select().from(categories).where(eq(categories.id, systemCat.id));
+    expect(reloaded.direction).toBe('expense');
+
+    // Rename/color stay allowed on the system row — only direction is pinned.
+    mockToken = member.token;
+    const rename = await updateCategoryAction(
+      undefined,
+      formData({ id: systemCat.id, name: 'Misc', direction: 'expense' }),
+    );
+    expect(rename).toEqual({ success: true });
+
+    await cleanup(member.household.id);
+  });
 });

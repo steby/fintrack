@@ -126,6 +126,27 @@ export async function updateCategoryAction(
     return { error: 'Only expense categories can have a budget cap.' };
   }
 
+  // The reserved Uncategorized category must stay expense-direction — flipping it to
+  // income (only reachable via a forged post; the UI's direction is a hidden input)
+  // would make every quick-added uncategorized spend COUNT AS INCOME. Rename/color/cap
+  // stay editable on it; only direction is pinned.
+  if (parsed.data.direction !== 'expense') {
+    const [systemRow] = await db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(
+        and(
+          eq(categories.id, parsed.data.id),
+          eq(categories.householdId, actingUser.householdId),
+          eq(categories.isSystem, true),
+        ),
+      )
+      .limit(1);
+    if (systemRow) {
+      return { error: 'The built-in Uncategorized category must stay an expense category.' };
+    }
+  }
+
   // household_id in the WHERE clause, not just the id — without it, a member could
   // rewrite another household's category by guessing/reusing a UUID (spec.md threat
   // note: missing household_id filter -> cross-tenant leak).
@@ -171,15 +192,41 @@ export async function deleteCategoryAction(
   // ON DELETE SET NULL (lib/db/schema.ts) — Postgres nullifies every reference to this
   // category as part of this single DELETE, atomically, instead of the reference app's
   // manual two-step "UPDATE ... SET category_id = NULL" before the delete.
+  // is_system = false in the WHERE (not a UI-only guard): the reserved Uncategorized
+  // category must survive even a forged form post — deleting it would SET NULL its
+  // entries back outside every total and fight getOrCreateUncategorizedCategoryId's
+  // self-heal.
   const result = await db
     .delete(categories)
     .where(
-      and(eq(categories.id, parsed.data.id), eq(categories.householdId, actingUser.householdId)),
+      and(
+        eq(categories.id, parsed.data.id),
+        eq(categories.householdId, actingUser.householdId),
+        eq(categories.isSystem, false),
+      ),
     )
     .returning({ id: categories.id });
 
   if (!result[0]) {
-    return { error: 'Category not found.' };
+    // Distinguish "doesn't exist" from "exists but reserved" — the row IS visible in
+    // the UI (which hides its Delete button), so a plain not-found would be confusing
+    // for anyone probing it directly.
+    const [systemRow] = await db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(
+        and(
+          eq(categories.id, parsed.data.id),
+          eq(categories.householdId, actingUser.householdId),
+          eq(categories.isSystem, true),
+        ),
+      )
+      .limit(1);
+    return {
+      error: systemRow
+        ? 'The built-in Uncategorized category can’t be deleted.'
+        : 'Category not found.',
+    };
   }
   revalidatePath('/settings/categories');
   return { success: true };

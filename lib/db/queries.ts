@@ -65,8 +65,44 @@ export async function resolveOptionalRef(
   return { ok: true, value: raw };
 }
 
+// The reserved per-household "Uncategorized" expense category (schema.ts: isSystem).
+// Self-healing: normally created by migration 0004/seed, but any household that somehow
+// lacks one gets it created on first use — the partial unique index
+// (categories_household_system_unique) turns a concurrent double-create race into a
+// harmless conflict, so insert-then-reselect is safe.
+export async function getOrCreateUncategorizedCategoryId(householdId: string): Promise<string> {
+  const systemCategory = () =>
+    db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(and(eq(categories.householdId, householdId), eq(categories.isSystem, true)))
+      .limit(1);
+
+  const [existing] = await systemCategory();
+  if (existing) return existing.id;
+
+  await db
+    .insert(categories)
+    .values({
+      householdId,
+      name: 'Uncategorized',
+      direction: 'expense',
+      color: '#6B7280',
+      sortOrder: 999,
+      isSystem: true,
+    })
+    .onConflictDoNothing();
+  const [created] = await systemCategory();
+  if (!created) {
+    // Unreachable: either our insert landed or a concurrent one did — reselecting must
+    // find a row. Loud beats a silently uncategorized entry.
+    throw new Error(`No system Uncategorized category for household ${householdId}`);
+  }
+  return created.id;
+}
+
 export interface EntryFormOptions {
-  categories: { id: string; name: string; direction: 'income' | 'expense' }[];
+  categories: { id: string; name: string; direction: 'income' | 'expense'; isSystem: boolean }[];
   accounts: { id: string; name: string }[];
   members: { id: string; name: string }[];
 }
@@ -81,7 +117,12 @@ export interface EntryFormOptions {
 export async function getEntryFormOptions(householdId: string): Promise<EntryFormOptions> {
   const [categoryRows, accountRows, memberRows] = await Promise.all([
     db
-      .select({ id: categories.id, name: categories.name, direction: categories.direction })
+      .select({
+        id: categories.id,
+        name: categories.name,
+        direction: categories.direction,
+        isSystem: categories.isSystem,
+      })
       .from(categories)
       .where(eq(categories.householdId, householdId))
       .orderBy(categories.direction, categories.sortOrder),
@@ -203,7 +244,15 @@ export async function getDashboardRowsForMonth(
   year: number,
   month: number,
 ): Promise<
-  Pick<DashboardEntryRow, 'month' | 'direction' | 'budgetedCents' | 'actualCents' | 'categoryId'>[]
+  (Pick<
+    DashboardEntryRow,
+    'month' | 'direction' | 'budgetedCents' | 'actualCents' | 'categoryId'
+  > & {
+    // True when the entry sits in the reserved Uncategorized category — Home's
+    // categorize-nudge counts these (plus legacy null-category rows) without a second
+    // scan; the categories join already exists, zero-new-join addition like categoryId.
+    categoryIsSystem: boolean;
+  })[]
 > {
   const rows = await db
     .select({
@@ -212,6 +261,7 @@ export async function getDashboardRowsForMonth(
       actualAmount: monthlyEntries.actualAmount,
       direction: categories.direction,
       categoryId: monthlyEntries.categoryId,
+      categoryIsSystem: categories.isSystem,
     })
     .from(monthlyEntries)
     .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
@@ -229,6 +279,7 @@ export async function getDashboardRowsForMonth(
     actualCents: row.actualAmount === null ? null : parseAmountToCents(row.actualAmount),
     direction: row.direction,
     categoryId: row.categoryId,
+    categoryIsSystem: row.categoryIsSystem === true,
   }));
 }
 

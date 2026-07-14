@@ -14,6 +14,9 @@ interface Category {
   direction: 'income' | 'expense';
   color: string;
   monthlyBudget: string | null;
+  // The reserved Uncategorized category (quick-add's default) — rename/color/cap stay
+  // editable, but Delete is hidden here AND blocked server-side (categories.ts).
+  isSystem: boolean;
 }
 
 function BudgetBar({ capCents, spentCents }: { capCents: number; spentCents: number }) {
@@ -122,24 +125,31 @@ export function CategoryRow({
             aria-hidden
           />
           <span className="text-sm">{category.name}</span>
+          {category.isSystem && (
+            <span className="rounded bg-muted px-1 py-0.5 text-[0.6rem] font-semibold text-muted-foreground">
+              BUILT-IN
+            </span>
+          )}
         </div>
         {canManage && (
           <div className="flex gap-1">
             <Button type="button" variant="ghost" size="sm" onClick={() => setIsEditing(true)}>
               Edit
             </Button>
-            <form action={deleteAction}>
-              <input type="hidden" name="id" value={category.id} />
-              <Button
-                type="submit"
-                variant="ghost"
-                size="sm"
-                className="text-destructive"
-                disabled={deletePending}
-              >
-                Delete
-              </Button>
-            </form>
+            {!category.isSystem && (
+              <form action={deleteAction}>
+                <input type="hidden" name="id" value={category.id} />
+                <Button
+                  type="submit"
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive"
+                  disabled={deletePending}
+                >
+                  Delete
+                </Button>
+              </form>
+            )}
           </div>
         )}
       </div>

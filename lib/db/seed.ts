@@ -260,6 +260,26 @@ async function seedHouseholdData(
     }
   }
 
+  // The reserved system "Uncategorized" category (quick-add's default) — looked up by
+  // the is_system flag, not by name (it's user-renamable), and deliberately NOT part of
+  // CATEGORY_DEFS' name-keyed flow. Migration 0004 backfills it for households that
+  // existed at migration time; this covers households seeded afterwards (a fresh DB).
+  const [existingSystem] = await db
+    .select({ id: categories.id })
+    .from(categories)
+    .where(and(eq(categories.householdId, householdId), eq(categories.isSystem, true)))
+    .limit(1);
+  if (!existingSystem) {
+    await db.insert(categories).values({
+      householdId,
+      name: 'Uncategorized',
+      direction: 'expense',
+      color: '#6B7280',
+      sortOrder: 999,
+      isSystem: true,
+    });
+  }
+
   const accountIds = new Map<string, string>();
   for (const def of ACCOUNT_DEFS) {
     const [existing] = await db
