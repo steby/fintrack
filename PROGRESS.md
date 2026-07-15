@@ -5038,3 +5038,32 @@ signal for a pure move: every one of the 24 exports exercised through the same
 public path as before.
 
 ---
+
+## Live-pass regression fix — FX prefill race (2026-07-16)
+
+First post-deploy live pass with restored prod credentials surfaced a real race in
+the quick-add FX assist: the SGD estimate only synced from the foreign input's
+onChange, so an amount typed while the rate fetch was still in flight was never
+converted once the rate landed — the field just stayed empty (pickCurrency's closure
+only sees the foreignAmount from its own render). Scripted entry hit it on every run;
+a human on a slow connection hits the same window. Fix: a `useEffect` keyed on `rate`
+back-fills SGD on the rate's null→value transition, with foreignAmount deliberately
+not a dependency (its changes are already synced inline by onChange, which always has
+the current rate).
+
+New E2E (`e2e/monthly.spec.ts`) reproduces the ordering deterministically by stalling
+the rate action's POST via `page.route` for 3s, typing during the stall, asserting
+SGD is still empty, then asserting the back-fill lands at the seeded 1.35 rate.
+
+**Live verification (prod, fintrack.steby.net):** login with the user's new password;
+FX assist USD 20 → S$25.84 @ 1.2922 (live ECB rate, first fx_rates cache fill on
+prod); annotation rendered on the list row and stored (originalAmount/currency/rate);
+transactions search (new entry + seeded data); insights donut legend drill-down to
+category-filtered transactions; offline navigation fallback verified logged-out AND
+logged-in (the scripted live-pass "failure" was Playwright's SW offline-emulation
+race, not the app — two isolated repros both served the precached /offline page).
+
+**Test/CI status (complete runs):** unit 497/497; integration 292/292;
+lint/typecheck/build/format clean; E2E 74/74 (`CI=true`) — 73 at HEAD plus the new
+FX race spec (the 4c entry's "72/72" undercounted by one; `--list` at that commit
+says 73).

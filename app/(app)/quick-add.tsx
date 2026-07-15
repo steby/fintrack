@@ -237,6 +237,17 @@ function AmountWithCurrency() {
   const [rate, setRate] = useState<number | null>(null);
   const [rateError, setRateError] = useState<string | null>(null);
 
+  // Back-fill SGD when the rate LANDS, not only when the foreign amount changes:
+  // typing "20" while the fetch is still in flight used to leave SGD empty forever
+  // (found by the post-deploy live pass — pickCurrency's closure only sees the
+  // foreignAmount from its own render). foreignAmount is deliberately not a dep:
+  // its changes are synced inline by the input's onChange, which always has the
+  // current rate; this effect exists solely for the rate's null→value transition.
+  useEffect(() => {
+    if (rate !== null) syncSgdFrom(foreignAmount, rate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rate]);
+
   async function pickCurrency(next: string) {
     setCurrency(next);
     setRate(null);

@@ -340,6 +340,58 @@ test.describe('monthly entries', () => {
     await expect(page.getByTestId('entry-row').filter({ hasText: fxItemName })).toHaveCount(0);
   });
 
+  test('typing the foreign amount while the rate is still fetching back-fills SGD once it lands', async ({
+    page,
+  }) => {
+    // Regression test for a race found by the post-deploy live pass: the SGD estimate
+    // only synced on the foreign input's onChange, so an amount typed BEFORE the rate
+    // arrived was never converted. Stall the rate action's response to force that
+    // ordering deterministically; no entry is submitted, so nothing to clean up.
+    await testDb
+      .insert(fxRates)
+      .values({ currency: 'USD', rateToSgd: '1.350000', fetchedAt: new Date() })
+      .onConflictDoUpdate({
+        target: fxRates.currency,
+        set: { rateToSgd: '1.350000', fetchedAt: new Date() },
+      });
+
+    await page.goto('/login');
+    await page.getByLabel('Email').fill(OWNER_EMAIL);
+    await page.getByLabel('Password').fill(OWNER_PASSWORD);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL('/');
+
+    // The rate lookup is the first server-action POST whose payload names the picked
+    // currency — hold exactly that one back long enough to type during the fetch.
+    let rateStalled = false;
+    await page.route('**/*', async (route) => {
+      const request = route.request();
+      if (
+        !rateStalled &&
+        request.method() === 'POST' &&
+        (await request.headerValue('next-action')) !== null &&
+        (request.postData() ?? '').includes('USD')
+      ) {
+        rateStalled = true;
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      }
+      await route.continue();
+    });
+
+    await page.goto(currentMonthUrl());
+    await page.getByRole('button', { name: 'New entry' }).click();
+    const sheet = page.getByTestId('quick-add-form');
+    await sheet.getByLabel('Currency').selectOption('USD');
+    await expect(sheet.getByText(/Fetching rate/)).toBeVisible();
+    await sheet.getByLabel('Amount in USD').fill('20');
+    // Typed while the rate was still in flight — the bug's exact precondition.
+    await expect(sheet.getByLabel('Amount in SGD')).toHaveValue('');
+    // Once the stalled rate lands, the already-typed amount converts (20 @ 1.35).
+    await expect(sheet.getByLabel('Amount in SGD')).toHaveValue('27.00');
+    expect(rateStalled).toBe(true);
+    await page.unroute('**/*');
+  });
+
   // Phase 10 (mark-paid reachable from list view's compact inline button,
   // entry-row.tsx) + post-redesign bug-fix pass (clicking "Mark paid" now opens a
   // small confirm popup with an editable date field, defaulting to today, instead of
