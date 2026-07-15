@@ -4964,3 +4964,24 @@ targets instead of the old single CTA.
 lint/typecheck/build/format clean; E2E 72/72 (`CI=true`).
 
 ---
+
+## Improvement batch 4a — hand-rolled SVG runway sparkline (2026-07-15)
+
+Bundle finding from the full app review, now with honest numbers: Home's 472 KB of
+client JS was dominated by a 368 KB chunk whose only Home-side consumer was the runway
+sparkline — a polyline, a dashed zero line, and a nearest-point hover need none of
+Recharts. Rewritten as ~90 lines of plain SVG (viewBox-scaled path, zero-reference
+line always in-domain so it stays on-canvas even for an all-positive runway,
+mouse-position nearest-point tooltip that flips sides at the midpoint to avoid
+clipping). Home now transfers 384 KB (−88 KB); Recharts remains exactly where its
+detailed charts earn the weight (/insights, /accounts), and is no longer in Home's
+graph at all. Live-verified on a local production build: sparkline renders, hover
+tooltip shows date + amount, zero page errors. The `.at(hover)` subscript (vs
+`[hover]`) is deliberate — same semantics for a clamped index without tripping
+eslint's object-injection rule.
+
+**Test/CI status (complete runs):** unit 497/497; integration 292/292;
+lint/typecheck/build/format clean; E2E 72/72 (`CI=true` — home.spec exercises the
+page the sparkline renders on).
+
+---
