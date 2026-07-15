@@ -169,13 +169,14 @@ test.describe('Home: forecast-first affordability', () => {
 
       await login(page, email, password);
       await expect(page.getByText('Nothing on the books yet')).toBeVisible();
-      // EmptyState's action renders via Base UI's Button `render={<Link/>}` composition
-      // with `nativeButton={false}` — Base UI adds `role="button"` (button semantics/
-      // keyboard handling) on top of the underlying `<a>`, so this is exposed to
-      // accessibility tools as a button, not a link, even though it navigates via href.
-      const cta = page.getByRole('button', { name: 'Set up your plan' });
-      await expect(cta).toBeVisible();
-      await expect(cta).toHaveAttribute('href', '/recurring');
+      // The empty state is now the guided onboarding checklist (review finding #9) —
+      // real-state-driven steps, each an actual link. This fresh household has no
+      // accounts/categories/recurring items, so every step renders as an open link.
+      const recurringStep = page.getByRole('link', { name: /Add recurring bills & income/ });
+      await expect(recurringStep).toBeVisible();
+      await expect(recurringStep).toHaveAttribute('href', '/recurring');
+      const accountsStep = page.getByRole('link', { name: /Add your bank accounts/ });
+      await expect(accountsStep).toHaveAttribute('href', '/settings/categories');
     } finally {
       await testDb.delete(users).where(eq(users.email, email));
       await testDb.delete(households).where(eq(households.id, freshHousehold.id));

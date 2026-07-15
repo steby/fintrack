@@ -4946,3 +4946,21 @@ lint/typecheck/build/format clean; E2E 72/72 (`CI=true`; one flake-retry on home
 mark-paid test in the first run, clean 72/72 on the rerun).
 
 ---
+
+## Improvement batch 3e — guided onboarding checklist (2026-07-15)
+
+Review finding #9: a brand-new household got one "Set up your plan" CTA and was dropped
+cold onto the full Plan page. Home's zero-entries branch now renders a four-step guided
+checklist (accounts → categories → recurring items → generate), where every checkmark
+comes from REAL row counts — not a stored wizard-progress flag — so it can never
+disagree with the data or nag after manual setup, and completing a step in any order or
+by any path just works. Open steps are real links (canManage-gated; a viewer in a fresh
+household gets read-only steps and "ask someone with edit access" copy); the count
+queries run ONLY in this branch, never on an in-use household's hot path.
+`e2e/home.spec.ts`'s fresh-household test now asserts two checklist links and their
+targets instead of the old single CTA.
+
+**Test/CI status (complete runs):** unit 497/497; integration 292/292;
+lint/typecheck/build/format clean; E2E 72/72 (`CI=true`).
+
+---

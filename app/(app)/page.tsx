@@ -1,12 +1,17 @@
 import Link from 'next/link';
-import { CalendarClock, Tags } from 'lucide-react';
-import { eq } from 'drizzle-orm';
+import { Tags } from 'lucide-react';
+import { eq, sql } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { requireUser } from '../../lib/auth/guards';
 import { can } from '../../lib/auth/rbac';
 import { env } from '../../lib/env';
 import { db } from '../../lib/db';
-import { goals as goalsTable } from '../../lib/db/schema';
+import {
+  goals as goalsTable,
+  bankAccounts,
+  categories as categoriesTable,
+  recurringSchedule,
+} from '../../lib/db/schema';
 import {
   getAccountsForNetWorth,
   getActualizedCashRows,
@@ -28,7 +33,7 @@ import {
   computeBudgetRemaining,
   buildRunway,
 } from '../../lib/domain/affordability';
-import { EmptyState } from '@/components/ui/empty-state';
+import { OnboardingChecklist } from './home/onboarding-checklist';
 import { SafeToSpendHero } from './home/safe-to-spend-hero';
 import { UpcomingList } from './home/upcoming-list';
 import { RunwaySparkline } from './home/runway-sparkline';
@@ -93,17 +98,32 @@ export default async function HomePage({
   ]);
 
   // A brand-new household with nothing recorded yet has nothing to forecast against —
-  // showing a $0 hero and an empty list would look broken, not reassuring. Guide them to
-  // set up recurring items instead (spec.md Phase 9 edge case).
+  // showing a $0 hero and an empty list would look broken, not reassuring. Guided
+  // checklist instead (review finding #9); the count queries only run in THIS branch,
+  // never for an in-use household.
   if (candidates.length === 0) {
+    const [[accounts], [cats], [recurring]] = await Promise.all([
+      db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(bankAccounts)
+        .where(eq(bankAccounts.householdId, user.householdId)),
+      db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(categoriesTable)
+        .where(eq(categoriesTable.householdId, user.householdId)),
+      db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(recurringSchedule)
+        .where(eq(recurringSchedule.householdId, user.householdId)),
+    ]);
     return (
       <div className="flex flex-col gap-6">
         <h1 className="text-2xl font-semibold">Welcome, {user.name}</h1>
-        <EmptyState
-          icon={CalendarClock}
-          title="Nothing on the books yet"
-          description="Set up recurring bills and income so Home can show what's coming up and whether you can cover it."
-          action={canManage ? { label: 'Set up your plan', href: '/recurring' } : undefined}
+        <OnboardingChecklist
+          accountCount={accounts.n}
+          categoryCount={cats.n}
+          recurringCount={recurring.n}
+          canManage={canManage}
         />
       </div>
     );
