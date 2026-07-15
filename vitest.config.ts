@@ -26,6 +26,15 @@ export default defineConfig({
         'lib/db/seed.ts',
         'lib/db/clean-e2e-debris.ts',
         'lib/db/queries.ts',
+        // The batch-4 split moved queries.ts's contents into this folder — same DB
+        // plumbing, same integration-test coverage, same exclusion. Its omission at
+        // split time dragged the functions gate to 79.51% in CI: the split changed
+        // which FILES the include pattern saw, not what's actually tested.
+        'lib/db/queries/**',
+        // lib/fx.ts's cache-or-fetch path is the same live-DB + live-network shape —
+        // exercised by the seeded-cache E2E and integration paths; the pure rules it
+        // delegates to (lib/domain/fx-rules.ts) ARE unit-tested and stay gated.
+        'lib/fx.ts',
         // Same reasoning as the DB plumbing above: every code path in here touches the
         // real household_settings table (even the cache-hit path needs a real DB read
         // to populate the cache first) — exercised by lib/flags.integration.test.ts.
