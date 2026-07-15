@@ -1,18 +1,22 @@
 'use client';
 
 import { useActionState, useRef, useState } from 'react';
-import { previewImportAction, commitImportAction, type PreviewRow } from '../../actions/import';
+import { previewImportAction, commitImportAction } from '../../actions/import';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import {
   parseCsvText,
+  guessMapping,
+  displayHeader,
+  EMPTY_MAPPING,
+  MAPPING_FIELD_NAMES,
   REQUIRED_FIELDS,
   OPTIONAL_FIELDS,
   type ColumnMapping,
   type MappableField,
 } from '../../../lib/domain/csv';
-import { formatSGD } from '../../../lib/format';
+import { ImportPreviewTable } from './preview-table';
 
 const WIZARD_STEPS = [
   { key: 'upload', label: 'Upload' },
@@ -66,70 +70,6 @@ const FIELD_LABELS: Record<MappableField, string> = {
   category: 'Category (optional)',
   account: 'Account (optional)',
 };
-
-// Column-name substrings to guess a default mapping from — a convenience for the
-// common case, never trusted for anything beyond pre-filling the select the user can
-// still change; the server only ever acts on whatever mapping is actually submitted.
-// Meaningless (and skipped) when the file has no real header row — see guessMapping.
-const FIELD_ALIASES: Record<MappableField, string[]> = {
-  date: ['date'],
-  item: ['item', 'description', 'desc', 'memo', 'payee'],
-  amount: ['amount', 'value'],
-  direction: ['direction', 'type'],
-  category: ['category'],
-  account: ['account'],
-};
-
-const MAPPING_FIELD_NAMES: Record<MappableField, string> = {
-  date: 'mappingDate',
-  item: 'mappingItem',
-  amount: 'mappingAmount',
-  direction: 'mappingDirection',
-  category: 'mappingCategory',
-  account: 'mappingAccount',
-};
-
-const EMPTY_MAPPING: ColumnMapping = {
-  date: '',
-  item: '',
-  amount: '',
-  direction: '',
-  category: '',
-  account: '',
-};
-
-const STATUS_LABEL: Record<PreviewRow['status'], string> = {
-  match: 'Reconcile',
-  new: 'New entry',
-  'already-applied': 'Already imported',
-  'duplicate-in-file': 'Duplicate in file',
-  error: 'Error',
-};
-
-// mapping values are column POSITIONS ("0", "1", ...), never header text — see
-// lib/domain/csv.ts's ColumnMapping doc comment for why (duplicate header names, and
-// files with no header row at all, both need a mapping that doesn't depend on header
-// text being present or unique).
-function guessMapping(headerLabels: string[]): ColumnMapping {
-  const mapping = { ...EMPTY_MAPPING };
-  for (const field of [...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]) {
-    // eslint-disable-next-line security/detect-object-injection
-    const aliases = FIELD_ALIASES[field];
-    const foundIndex = headerLabels.findIndex((h) =>
-      aliases.some((alias) => h.toLowerCase().includes(alias)),
-    );
-    // eslint-disable-next-line security/detect-object-injection
-    if (foundIndex !== -1) mapping[field] = String(foundIndex);
-  }
-  return mapping;
-}
-
-function displayHeader(parsedRows: string[][], hasHeaderRow: boolean): string[] {
-  if (parsedRows.length === 0) return [];
-  if (hasHeaderRow) return parsedRows[0];
-  const columnCount = parsedRows[0].length;
-  return Array.from({ length: columnCount }, (_, i) => `Column ${i + 1}`);
-}
 
 export function ImportForm() {
   const [step, setStep] = useState<'upload' | 'preview' | 'done'>('upload');
@@ -223,80 +163,18 @@ export function ImportForm() {
             <CardTitle>Preview: {fileName}</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="max-h-[28rem] overflow-y-auto">
-              <table className="w-full text-sm" data-testid="import-preview-table">
-                <thead>
-                  <tr className="border-b text-left text-xs text-muted-foreground">
-                    <th className="w-8"></th>
-                    <th className="py-1">Row</th>
-                    <th>Item</th>
-                    <th>When</th>
-                    <th>Amount</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => {
-                    const canToggle = row.status === 'match' || row.status === 'new';
-                    return (
-                      <tr
-                        key={row.rowNumber}
-                        className="border-b last:border-0"
-                        data-testid="import-preview-row"
-                        data-status={row.status}
-                      >
-                        <td>
-                          {canToggle && (
-                            <input
-                              type="checkbox"
-                              checked={!excluded.has(row.rowNumber)}
-                              onChange={(e) =>
-                                setExcluded((prev) => {
-                                  const next = new Set(prev);
-                                  if (e.target.checked) next.delete(row.rowNumber);
-                                  else next.add(row.rowNumber);
-                                  return next;
-                                })
-                              }
-                            />
-                          )}
-                        </td>
-                        <td className="py-1">{row.rowNumber}</td>
-                        <td>{row.item || '—'}</td>
-                        <td>
-                          {row.year && row.month
-                            ? `${row.year}-${String(row.month).padStart(2, '0')}`
-                            : '—'}
-                        </td>
-                        <td>{row.amountCents !== undefined ? formatSGD(row.amountCents) : '—'}</td>
-                        <td>
-                          <span
-                            className={
-                              row.status === 'error'
-                                ? 'text-destructive'
-                                : row.status === 'match'
-                                  ? 'text-income'
-                                  : 'text-muted-foreground'
-                            }
-                          >
-                            {STATUS_LABEL[row.status]}
-                          </span>
-                          {row.message && (
-                            <span className="ml-1 text-xs text-muted-foreground">
-                              {row.message}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <p className="mt-3 text-xs text-muted-foreground">
-              {actionable.length} of {rows.length} row{rows.length === 1 ? '' : 's'} will be
-              applied.
-            </p>
+            <ImportPreviewTable
+              rows={rows}
+              excluded={excluded}
+              onToggle={(rowNumber, included) =>
+                setExcluded((prev) => {
+                  const next = new Set(prev);
+                  if (included) next.delete(rowNumber);
+                  else next.add(rowNumber);
+                  return next;
+                })
+              }
+            />
           </CardContent>
         </Card>
 

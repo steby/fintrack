@@ -8,6 +8,7 @@ import { setFlag } from '../../lib/flags';
 import { runImportPipeline, commitImport } from '../../lib/import-csv';
 import {
   REQUIRED_FIELDS,
+  MAPPING_FIELD_NAMES,
   type ColumnMapping,
   type RowClassification,
   type NormalizedImportRow,
@@ -70,13 +71,15 @@ export type ImportActionState =
   | undefined;
 
 function readMapping(formData: FormData): ColumnMapping {
+  // Field names come from the same MAPPING_FIELD_NAMES the wizard's selects post
+  // under — one constant, either side can't drift.
   return {
-    date: String(formData.get('mappingDate') ?? ''),
-    item: String(formData.get('mappingItem') ?? ''),
-    amount: String(formData.get('mappingAmount') ?? ''),
-    direction: String(formData.get('mappingDirection') ?? ''),
-    category: String(formData.get('mappingCategory') ?? ''),
-    account: String(formData.get('mappingAccount') ?? ''),
+    date: String(formData.get(MAPPING_FIELD_NAMES.date) ?? ''),
+    item: String(formData.get(MAPPING_FIELD_NAMES.item) ?? ''),
+    amount: String(formData.get(MAPPING_FIELD_NAMES.amount) ?? ''),
+    direction: String(formData.get(MAPPING_FIELD_NAMES.direction) ?? ''),
+    category: String(formData.get(MAPPING_FIELD_NAMES.category) ?? ''),
+    account: String(formData.get(MAPPING_FIELD_NAMES.account) ?? ''),
   };
 }
 

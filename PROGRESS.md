@@ -5067,3 +5067,32 @@ race, not the app — two isolated repros both served the precached /offline pag
 lint/typecheck/build/format clean; E2E 74/74 (`CI=true`) — 73 at HEAD plus the new
 FX race spec (the 4c entry's "72/72" undercounted by one; `--list` at that commit
 says 73).
+
+---
+
+## Improvement batch 4d — import wizard split, option 2 (2026-07-16)
+
+The deliberately-deferred import-form.tsx decomposition, done to the scope the user
+picked ("option 2 — small split") after discussion: the real gap was never line
+count, it was that `guessMapping`'s alias-matching logic lived in a client component
+outside the 80% coverage gate, with zero unit tests. Moves, all behavior-preserving:
+
+- `guessMapping`, `displayHeader`, `EMPTY_MAPPING`, `FIELD_ALIASES` (private), and
+  `MAPPING_FIELD_NAMES` now live in lib/domain/csv.ts's column-mapping section —
+  inside the coverage gate, with 10 new unit tests (exact-header positions,
+  case-insensitive substring matching, every item alias, first-match-wins
+  determinism, one header satisfying two fields, unmatched/empty headers, and a
+  fast-check property: any header array yields only ''-or-in-range position strings).
+- app/actions/import.ts's readMapping now reads form fields via the shared
+  MAPPING_FIELD_NAMES — the wizard's selects and the server parser can no longer
+  drift apart silently.
+- The preview table is a presentational component (app/(app)/import/preview-table.tsx,
+  owns no state; ImportForm keeps the exclusion set and passes an onToggle).
+- import-form.tsx: 431 → ~250 lines; the wizard's state machine stays in one place —
+  the full step-per-file split (option 3) was considered and rejected with the user
+  as prop-plumbing churn on a demoted feature.
+
+**Test/CI status (complete runs):** unit 507/507 (+10); integration 292/292;
+coverage thresholds pass; lint/typecheck/build/format clean; E2E 74/74 (`CI=true`) —
+phase5 import specs exercise the moved guessing end-to-end (mapping-date/item/amount
+selects land pre-filled from the alias guess before each spec re-selects explicitly).

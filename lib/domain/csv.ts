@@ -185,6 +185,69 @@ export function buildMappedRows(
   });
 }
 
+export const EMPTY_MAPPING: ColumnMapping = {
+  date: '',
+  item: '',
+  amount: '',
+  direction: '',
+  category: '',
+  account: '',
+};
+
+// The form-field name each mapping select posts under — shared by the import wizard's
+// selects/hidden inputs AND app/actions/import.ts's readMapping, so the client form
+// and the server parser can't silently drift apart.
+export const MAPPING_FIELD_NAMES: Record<MappableField, string> = {
+  date: 'mappingDate',
+  item: 'mappingItem',
+  amount: 'mappingAmount',
+  direction: 'mappingDirection',
+  category: 'mappingCategory',
+  account: 'mappingAccount',
+};
+
+// Column-name substrings to guess a default mapping from — a convenience for the
+// common case, never trusted for anything beyond pre-filling selects the user can
+// still change; the server only ever acts on whatever mapping is actually submitted.
+// Meaningless (and skipped by the caller) when the file has no real header row.
+const FIELD_ALIASES: Record<MappableField, string[]> = {
+  date: ['date'],
+  item: ['item', 'description', 'desc', 'memo', 'payee'],
+  amount: ['amount', 'value'],
+  direction: ['direction', 'type'],
+  category: ['category'],
+  account: ['account'],
+};
+
+// Mapping values are column POSITIONS ("0", "1", ...), never header text — see
+// ColumnMapping's doc comment above for why. First matching column wins per field.
+export function guessMapping(headerLabels: string[]): ColumnMapping {
+  const mapping = { ...EMPTY_MAPPING };
+  for (const field of [...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]) {
+    // `field` ranges over compile-time literals only — same false-positive class as
+    // buildMappedRows above.
+    // eslint-disable-next-line security/detect-object-injection
+    const aliases = FIELD_ALIASES[field];
+    const foundIndex = headerLabels.findIndex((h) =>
+      aliases.some((alias) => h.toLowerCase().includes(alias)),
+    );
+    // eslint-disable-next-line security/detect-object-injection
+    if (foundIndex !== -1) mapping[field] = String(foundIndex);
+  }
+  return mapping;
+}
+
+// What the mapping selects should DISPLAY per column: the real header labels when the
+// file has them, positional "Column N" placeholders when it doesn't (sized off the
+// first row — the parser gives every row whatever cells it actually had, so the first
+// row is as good a width sample as any).
+export function displayHeader(parsedRows: string[][], hasHeaderRow: boolean): string[] {
+  if (parsedRows.length === 0) return [];
+  if (hasHeaderRow) return parsedRows[0];
+  const columnCount = parsedRows[0].length;
+  return Array.from({ length: columnCount }, (_, i) => `Column ${i + 1}`);
+}
+
 // --- Amount / date coercion ---------------------------------------------------------
 
 // Strips currency symbols/commas/whitespace and handles parenthesized negatives

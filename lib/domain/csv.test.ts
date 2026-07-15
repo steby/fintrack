@@ -16,6 +16,9 @@ import {
   classifyRow,
   dedupWithinFile,
   buildCsv,
+  guessMapping,
+  displayHeader,
+  EMPTY_MAPPING,
   type ColumnMapping,
   type NormalizedImportRow,
   type MatchCandidateEntry,
@@ -630,5 +633,93 @@ describe('buildCsv', () => {
   it('renders numbers as plain digits', () => {
     const csv = buildCsv(['Year'], [[2026]]);
     expect(csv).toBe('Year\r\n2026\r\n');
+  });
+});
+
+describe('guessMapping', () => {
+  it('maps every field from exact header names, positionally', () => {
+    expect(guessMapping(['Date', 'Item', 'Amount', 'Direction', 'Category', 'Account'])).toEqual({
+      date: '0',
+      item: '1',
+      amount: '2',
+      direction: '3',
+      category: '4',
+      account: '5',
+    });
+  });
+
+  it('matches case-insensitively and on substrings of real bank headers', () => {
+    expect(guessMapping(['TRANSACTION DATE', 'Payee Name', 'Value (SGD)'])).toEqual({
+      ...EMPTY_MAPPING,
+      date: '0',
+      item: '1',
+      amount: '2',
+    });
+  });
+
+  it('covers every item alias a bank statement is likely to use', () => {
+    for (const header of ['Description', 'desc', 'Memo', 'PAYEE', 'item']) {
+      expect(guessMapping([header]).item).toBe('0');
+    }
+  });
+
+  it('first matching column wins when several match one field', () => {
+    // Both headers contain "amount"; the guess must be deterministic, not last-wins.
+    expect(guessMapping(['Amount', 'Amount (foreign)']).amount).toBe('0');
+  });
+
+  it('one header can satisfy multiple fields', () => {
+    // "value date" contains both a date alias and the "value" amount alias — each
+    // field guesses independently, so both point at the same column and the user
+    // resolves it in the selects.
+    expect(guessMapping(['value date'])).toEqual({
+      ...EMPTY_MAPPING,
+      date: '0',
+      amount: '0',
+    });
+  });
+
+  it('leaves unmatched fields unmapped and handles an empty header row', () => {
+    expect(guessMapping(['foo', 'bar'])).toEqual(EMPTY_MAPPING);
+    expect(guessMapping([])).toEqual(EMPTY_MAPPING);
+  });
+
+  it('never throws and always returns position strings or empty, for arbitrary headers', () => {
+    fc.assert(
+      fc.property(fc.array(fc.string()), (headers) => {
+        const mapping = guessMapping(headers);
+        for (const value of Object.values(mapping)) {
+          expect(value === '' || /^\d+$/.test(value)).toBe(true);
+          if (value !== '') expect(Number(value)).toBeLessThan(headers.length);
+        }
+      }),
+    );
+  });
+});
+
+describe('displayHeader', () => {
+  it('returns the first row verbatim when the file has a header row', () => {
+    expect(
+      displayHeader(
+        [
+          ['Date', 'Item'],
+          ['2026-01-01', 'Rent'],
+        ],
+        true,
+      ),
+    ).toEqual(['Date', 'Item']);
+  });
+
+  it('returns positional labels sized off the first row when there is no header row', () => {
+    expect(displayHeader([['2026-01-01', 'Rent', '100']], false)).toEqual([
+      'Column 1',
+      'Column 2',
+      'Column 3',
+    ]);
+  });
+
+  it('returns empty for an empty file either way', () => {
+    expect(displayHeader([], true)).toEqual([]);
+    expect(displayHeader([], false)).toEqual([]);
   });
 });
