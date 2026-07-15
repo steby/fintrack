@@ -43,6 +43,13 @@
       "when": 1784050226097,
       "tag": "0005_chunky_meltdown",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784128953338,
+      "tag": "0006_cheerful_rogue",
+      "breakpoints": true
     }
   ]
 }

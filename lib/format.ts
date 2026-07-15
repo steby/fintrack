@@ -16,6 +16,21 @@ export function formatSGD(cents: number): string {
   return formatter.format(cents / 100);
 }
 
+// FX-assist annotation display ("US$20.00 @ 1.3005") — the ONLY non-SGD formatting in
+// the app, and display-only by design: the amount is what the user typed at entry
+// time, never something math is done on. Falls back to a plain "CUR 20.00" if Intl
+// doesn't know the code (can't happen for SUPPORTED_FX_CURRENCIES, but a DB row is a
+// trust boundary).
+export function formatForeignAmount(currency: string, amount: string): string {
+  const numeric = Number(amount);
+  if (!Number.isFinite(numeric)) return `${currency} ${amount}`;
+  try {
+    return new Intl.NumberFormat('en-SG', { style: 'currency', currency }).format(numeric);
+  } catch {
+    return `${currency} ${numeric.toFixed(2)}`;
+  }
+}
+
 // Compact form for tight spaces (calendar cells) — mirrors the reference app's
 // formatShort, ported to SGD and integer cents.
 export function formatSGDCompact(cents: number): string {

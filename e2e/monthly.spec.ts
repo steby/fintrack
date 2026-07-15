@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import { eq, and, inArray } from 'drizzle-orm';
 import { createTestDb } from './test-db';
 import { requireEnv } from './env';
-import { recurringSchedule, monthlyEntries, users, categories } from '../lib/db/schema';
+import { recurringSchedule, monthlyEntries, users, categories, fxRates } from '../lib/db/schema';
 import { hashPassword } from '../lib/auth/password';
 
 const OWNER_EMAIL = requireEnv('SEED_OWNER_EMAIL');
@@ -36,6 +36,7 @@ test.describe('monthly entries', () => {
   const renamedItemName = `${itemName} propagated`;
   const adhocName = `E2E Adhoc ${Date.now()}`;
   const markPaidName = `E2E MarkPaid ${Date.now()}`;
+  const fxItemName = `E2E FX ${Date.now()}`;
   const categoryName = `E2E Monthly Category ${Date.now()}`;
 
   test.beforeAll(async () => {
@@ -86,6 +87,7 @@ test.describe('monthly entries', () => {
       .delete(monthlyEntries)
       .where(inArray(monthlyEntries.item, [adhocName, `${adhocName} renamed`]));
     await testDb.delete(monthlyEntries).where(eq(monthlyEntries.item, markPaidName));
+    await testDb.delete(monthlyEntries).where(eq(monthlyEntries.item, fxItemName));
     await testDb.delete(categories).where(eq(categories.name, categoryName));
     await testDb.delete(users).where(eq(users.email, VIEWER_EMAIL));
     await closeTestDb();
@@ -281,6 +283,61 @@ test.describe('monthly entries', () => {
     await page.goto(currentMonthUrl());
     await renamedRow.getByRole('button', { name: 'Delete' }).click();
     await expect(page.getByTestId('entry-row').filter({ hasText: renamedAdhoc })).toHaveCount(0);
+  });
+
+  test('quick add in a foreign currency pre-fills the SGD estimate and stores the annotation', async ({
+    page,
+  }) => {
+    // Seed a fresh cached USD rate so the flow is deterministic and network-free —
+    // getRateToSgd serves the cache while it's within TTL, so frankfurter is never hit.
+    await testDb
+      .insert(fxRates)
+      .values({ currency: 'USD', rateToSgd: '1.350000', fetchedAt: new Date() })
+      .onConflictDoUpdate({
+        target: fxRates.currency,
+        set: { rateToSgd: '1.350000', fetchedAt: new Date() },
+      });
+
+    await page.goto('/login');
+    await page.getByLabel('Email').fill(OWNER_EMAIL);
+    await page.getByLabel('Password').fill(OWNER_PASSWORD);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL('/');
+
+    await page.goto(currentMonthUrl());
+    await page.getByRole('button', { name: 'New entry' }).click();
+    const sheet = page.getByTestId('quick-add-form');
+    await sheet.getByPlaceholder('e.g. Car Repair').fill(fxItemName);
+    await sheet.getByLabel('Currency').selectOption('USD');
+    // Rate arrives async (server action against the seeded cache) — the estimate line
+    // renders once it lands.
+    await expect(sheet.getByText(/estimated/)).toBeVisible();
+    await sheet.getByLabel('Amount in USD').fill('20');
+    // 20 USD @ 1.35 = S$27.00, pre-filled but editable.
+    await expect(sheet.getByLabel('Amount in SGD')).toHaveValue('27.00');
+    await sheet.getByRole('button', { name: 'Add entry' }).click();
+
+    const row = page.getByTestId('entry-row').filter({ hasText: fxItemName });
+    await expect(row).toBeVisible();
+    // The display-only annotation renders alongside the stored SGD amount.
+    await expect(row.getByText(/US\$20\.00 @ 1\.3500/)).toBeVisible();
+
+    await expect
+      .poll(async () => {
+        const [persisted] = await testDb
+          .select({
+            actualAmount: monthlyEntries.actualAmount,
+            originalAmount: monthlyEntries.originalAmount,
+            originalCurrency: monthlyEntries.originalCurrency,
+          })
+          .from(monthlyEntries)
+          .where(eq(monthlyEntries.item, fxItemName));
+        return persisted;
+      })
+      .toMatchObject({ actualAmount: '27.00', originalAmount: '20.00', originalCurrency: 'USD' });
+
+    await row.getByRole('button', { name: 'Delete' }).click();
+    await expect(page.getByTestId('entry-row').filter({ hasText: fxItemName })).toHaveCount(0);
   });
 
   // Phase 10 (mark-paid reachable from list view's compact inline button,

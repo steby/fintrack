@@ -3,7 +3,7 @@
 import { useActionState, useState } from 'react';
 import { updateActualAction, overrideBudgetAction, deleteEntryAction } from '../../actions/monthly';
 import { Button } from '@/components/ui/button';
-import { formatSGD } from '../../../lib/format';
+import { formatSGD, formatForeignAmount } from '../../../lib/format';
 import { parseAmountToCents } from '../../../lib/money';
 import { getDifference } from '../../../lib/domain/entries';
 import { MarkPaidButton } from '../home/mark-paid-button';
@@ -187,6 +187,14 @@ export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canMana
               <span className="text-xs text-muted-foreground">{entry.actualDate}</span>
             )}
           </div>
+        )}
+        {/* FX-assist annotation (display-only): what was typed in a foreign currency
+            and the estimated rate used — the SGD figure above stays the truth. */}
+        {entry.originalCurrency && entry.originalAmount && (
+          <p className="text-right text-[0.65rem] text-muted-foreground">
+            {formatForeignAmount(entry.originalCurrency, entry.originalAmount)}
+            {entry.fxRate ? ` @ ${Number(entry.fxRate).toFixed(4)}` : ''}
+          </p>
         )}
         {actualState?.error && <p className="text-xs text-destructive">{actualState.error}</p>}
       </td>

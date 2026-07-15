@@ -11,6 +11,7 @@ import { moneyInputSchema, optionalMoneyInputSchema, centsToAmount } from '../..
 import { isValidCalendarDate } from '../../lib/domain/month-params';
 import { utcStartOfDay } from '../../lib/domain/today';
 import { resolveOptionalRef, getOrCreateUncategorizedCategoryId } from '../../lib/db/queries';
+import { SUPPORTED_FX_CURRENCIES } from '../../lib/domain/fx-rules';
 
 export type MonthlyActionState = { error?: string; success?: boolean } | undefined;
 
@@ -361,6 +362,12 @@ const addAdhocSchema = z.object({
   actualDate: dateInputSchema.optional(),
   bankAccountId: uuidOrEmpty,
   paidByUserId: uuidOrEmpty,
+  // FX-assist annotation (all-or-nothing; see schema.ts): what the user typed in a
+  // foreign currency and the estimated rate. Display-only — actualAmount (SGD) is
+  // still the stored truth for every calculation.
+  originalAmount: z.string().optional(),
+  originalCurrency: z.enum(SUPPORTED_FX_CURRENCIES).optional(),
+  fxRate: z.coerce.number().positive().max(1_000_000).optional(),
 });
 
 export async function addAdhocAction(
@@ -379,6 +386,9 @@ export async function addAdhocAction(
     actualDate: formData.get('actualDate') || undefined,
     bankAccountId: formData.get('bankAccountId') || undefined,
     paidByUserId: formData.get('paidByUserId') || undefined,
+    originalAmount: formData.get('originalAmount') || undefined,
+    originalCurrency: formData.get('originalCurrency') || undefined,
+    fxRate: formData.get('fxRate') || undefined,
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? 'Invalid entry.' };
@@ -387,6 +397,29 @@ export async function addAdhocAction(
   const actual = optionalMoneyInputSchema.safeParse(parsed.data.actualAmount || '');
   if (!actual.success) {
     return { error: 'Enter a valid, non-negative actual amount.' };
+  }
+
+  // FX annotation is all-or-nothing: a partial triple (forged or a client bug) is
+  // rejected rather than stored half-meaningfully; it also requires a real actual
+  // amount (annotating a forecast-only row with "what was paid" is a contradiction).
+  const fxProvided = [
+    parsed.data.originalAmount,
+    parsed.data.originalCurrency,
+    parsed.data.fxRate,
+  ].filter((v) => v !== undefined).length;
+  if (fxProvided !== 0 && fxProvided !== 3) {
+    return { error: 'Incomplete foreign-currency details.' };
+  }
+  let originalCents: number | null = null;
+  if (fxProvided === 3) {
+    if (actual.data === null) {
+      return { error: 'Foreign-currency entries need the SGD amount too.' };
+    }
+    const parsedOriginal = optionalMoneyInputSchema.safeParse(parsed.data.originalAmount ?? '');
+    if (!parsedOriginal.success || parsedOriginal.data === null) {
+      return { error: 'Enter a valid, non-negative foreign-currency amount.' };
+    }
+    originalCents = parsedOriginal.data;
   }
   // Quick-add's primary flow (spec.md Phase 10) only exposes ONE visible "Amount" field
   // (bound to actualAmount — logging something that already happened), with a
@@ -450,6 +483,9 @@ export async function addAdhocAction(
     actualDate: parsed.data.actualDate ? parsed.data.actualDate : null,
     bankAccountId: account.value,
     paidByUserId: paidBy.value,
+    originalAmount: originalCents === null ? null : centsToAmount(originalCents),
+    originalCurrency: originalCents === null ? null : (parsed.data.originalCurrency ?? null),
+    fxRate: originalCents === null ? null : String(parsed.data.fxRate),
   });
 
   // Also revalidates Home (post-redesign bug-fix pass): a quick-added entry can land

@@ -251,6 +251,14 @@ export const monthlyEntries = pgTable(
     }),
     paidByUserId: uuid('paid_by_user_id').references(() => users.id, { onDelete: 'set null' }),
     isOverridden: boolean('is_overridden').notNull().default(false),
+    // FX-assist annotation, all-or-nothing (either all three set or all null): what the
+    // user actually typed in a foreign currency and the estimated rate used at entry
+    // time. DISPLAY-ONLY — actualAmount (SGD) stays the single source of truth for
+    // every calculation; there is deliberately no revaluation, ever (README:
+    // single-currency by design).
+    originalAmount: numeric('original_amount', { precision: 12, scale: 2 }),
+    originalCurrency: text('original_currency'),
+    fxRate: numeric('fx_rate', { precision: 14, scale: 6 }),
     notes: text('notes'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -293,6 +301,17 @@ export const goals = pgTable('goals', {
 // reminders (at most one reminder digest per household per day), a year-month
 // ("2026-07") for recap (at most one per household per month) — free-form text rather
 // than a typed date/month column since the two shapes don't share a column type.
+// Cached FX rates for the entry-assist conversion (lib/fx.ts): one row per foreign
+// currency, rate = how many SGD one unit buys, refreshed lazily when older than the
+// TTL. GLOBAL (not per-household) — an exchange rate isn't tenant data. Estimates by
+// design ("refreshed whenever, no need to be exact" — user's spec); the user can
+// always overwrite the converted SGD figure before saving.
+export const fxRates = pgTable('fx_rates', {
+  currency: text('currency').primaryKey(),
+  rateToSgd: numeric('rate_to_sgd', { precision: 14, scale: 6 }).notNull(),
+  fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const emailLog = pgTable(
   'email_log',
   {

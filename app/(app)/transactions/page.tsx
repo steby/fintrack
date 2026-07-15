@@ -10,27 +10,12 @@ import {
   TRANSACTION_SEARCH_LIMIT,
   type TransactionSearchRow,
 } from '../../../lib/db/queries';
-import { formatSGD } from '../../../lib/format';
+import { formatSGD, MONTH_SHORT } from '../../../lib/format';
 import { parseAmountToCents } from '../../../lib/money';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
-
-const MONTH_SHORT = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
 
 // Cross-month search (full app review finding #5) — a plain GET form over server-
 // rendered results: the URL is the whole state (shareable, back-button-friendly), no

@@ -4,6 +4,7 @@ import { useActionState, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Plus, ChevronDown } from 'lucide-react';
 import { addAdhocAction } from '../actions/monthly';
+import { getFxRateAction } from '../actions/fx';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Fab } from '@/components/ui/fab';
@@ -11,6 +12,8 @@ import { ResponsiveSheet } from '@/components/ui/responsive-sheet';
 import { useQuickAddOpen } from './quick-add-context';
 import { parseYearParam, parseMonthParam } from '../../lib/domain/month-params';
 import { currentYearMonth } from '../../lib/domain/today';
+import { SUPPORTED_FX_CURRENCIES, convertToSgdCents } from '../../lib/domain/fx-rules';
+import { parseAmountToCents, centsToAmount } from '../../lib/money';
 
 interface Option {
   id: string;
@@ -134,10 +137,7 @@ function QuickAddForm({
         Item
         <Input name="item" placeholder="e.g. Car Repair" required autoFocus />
       </label>
-      <label className="flex flex-col gap-1 text-sm">
-        Amount
-        <Input name="actualAmount" type="number" step="0.01" min="0" placeholder="0.00" />
-      </label>
+      <AmountWithCurrency />
       <div className="grid grid-cols-2 gap-3">
         <label className="flex flex-col gap-1 text-sm">
           Category
@@ -220,5 +220,120 @@ function QuickAddForm({
       </Button>
       {state?.error && <p className="text-xs text-destructive">{state.error}</p>}
     </form>
+  );
+}
+
+// Amount entry with optional foreign-currency assist (full app review FX item): pick a
+// currency, type what you actually paid, and the SGD field pre-fills from a cached
+// estimated rate (lib/fx.ts) — EDITABLE, because the rate is an estimate and the card
+// statement is the truth. SGD stays the stored value (name="actualAmount"); the
+// foreign amount/currency/rate ride along as a display-only annotation. Rate fetch is
+// lazy (only when a foreign currency is picked) and failure degrades to manual SGD
+// entry with no annotation.
+function AmountWithCurrency() {
+  const [currency, setCurrency] = useState('SGD');
+  const [foreignAmount, setForeignAmount] = useState('');
+  const [sgdAmount, setSgdAmount] = useState('');
+  const [rate, setRate] = useState<number | null>(null);
+  const [rateError, setRateError] = useState<string | null>(null);
+
+  async function pickCurrency(next: string) {
+    setCurrency(next);
+    setRate(null);
+    setRateError(null);
+    if (next === 'SGD') return;
+    const result = await getFxRateAction(next);
+    if (!result || 'error' in result) {
+      setRateError(result?.error ?? 'Rate unavailable — enter the SGD amount manually.');
+      return;
+    }
+    setRate(result.rate);
+  }
+
+  function syncSgdFrom(foreignRaw: string, currentRate: number | null) {
+    if (currentRate === null || foreignRaw === '') return;
+    try {
+      setSgdAmount(centsToAmount(convertToSgdCents(parseAmountToCents(foreignRaw), currentRate)));
+    } catch {
+      // Partial input mid-typing ("12.") — leave the SGD field as-is.
+    }
+  }
+
+  const foreign = currency !== 'SGD';
+
+  return (
+    <div className="flex flex-col gap-1 text-sm">
+      <span>Amount</span>
+      <div className="flex gap-2">
+        <select
+          aria-label="Currency"
+          value={currency}
+          onChange={(e) => void pickCurrency(e.target.value)}
+          className="h-9 w-24 rounded-md border bg-background px-2 text-sm"
+        >
+          <option value="SGD">SGD</option>
+          {SUPPORTED_FX_CURRENCIES.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+        {foreign ? (
+          <Input
+            aria-label={`Amount in ${currency}`}
+            type="number"
+            step="0.01"
+            min="0"
+            placeholder="0.00"
+            value={foreignAmount}
+            onChange={(e) => {
+              setForeignAmount(e.target.value);
+              syncSgdFrom(e.target.value, rate);
+            }}
+            className="flex-1"
+          />
+        ) : (
+          <Input
+            name="actualAmount"
+            type="number"
+            step="0.01"
+            min="0"
+            placeholder="0.00"
+            className="flex-1"
+          />
+        )}
+      </div>
+      {foreign && (
+        <>
+          <label className="mt-1 flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">
+              {rate !== null
+                ? `≈ SGD @ ${rate.toFixed(4)} (estimated — adjust if your statement differs)`
+                : (rateError ?? 'Fetching rate…')}
+            </span>
+            <Input
+              name="actualAmount"
+              aria-label="Amount in SGD"
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="0.00"
+              value={sgdAmount}
+              onChange={(e) => setSgdAmount(e.target.value)}
+              required
+            />
+          </label>
+          {/* Annotation only rides along when a rate was actually involved — manual
+              SGD entry after a failed fetch is a plain SGD entry. */}
+          {rate !== null && foreignAmount !== '' && (
+            <>
+              <input type="hidden" name="originalAmount" value={foreignAmount} />
+              <input type="hidden" name="originalCurrency" value={currency} />
+              <input type="hidden" name="fxRate" value={rate} />
+            </>
+          )}
+        </>
+      )}
+    </div>
   );
 }

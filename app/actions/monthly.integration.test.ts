@@ -401,6 +401,69 @@ describe('addAdhocAction', () => {
     await cleanup(member.household.id);
   });
 
+  it('stores the FX annotation alongside the SGD amount, and rejects a partial triple', async () => {
+    const { addAdhocAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Monthly adhoc fx');
+
+    mockToken = member.token;
+    const result = await addAdhocAction(
+      undefined,
+      formData({
+        year: '2026',
+        month: '7',
+        item: 'Holiday Lunch',
+        actualAmount: '26.01',
+        originalAmount: '20.00',
+        originalCurrency: 'USD',
+        fxRate: '1.3005',
+      }),
+    );
+    expect(result).toEqual({ success: true });
+    const [entry] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.householdId, member.household.id));
+    expect(entry).toMatchObject({
+      actualAmount: '26.01',
+      originalAmount: '20.00',
+      originalCurrency: 'USD',
+      fxRate: '1.300500',
+    });
+
+    // Partial triple (adversarial: currency without amount/rate) — rejected, not
+    // stored half-meaningfully.
+    mockToken = member.token;
+    const partial = await addAdhocAction(
+      undefined,
+      formData({
+        year: '2026',
+        month: '7',
+        item: 'Broken FX',
+        actualAmount: '10.00',
+        originalCurrency: 'USD',
+      }),
+    );
+    expect(partial).toEqual({ error: 'Incomplete foreign-currency details.' });
+
+    // Unsupported currency — schema-rejected.
+    mockToken = member.token;
+    const bogus = await addAdhocAction(
+      undefined,
+      formData({
+        year: '2026',
+        month: '7',
+        item: 'Bogus FX',
+        actualAmount: '10.00',
+        originalAmount: '5.00',
+        originalCurrency: 'ZZZ',
+        fxRate: '2',
+      }),
+    );
+    expect(bogus?.error).toBeTruthy();
+
+    await cleanup(member.household.id);
+  });
+
   it('files a no-category entry under the reserved Uncategorized expense category, self-creating it', async () => {
     const { addAdhocAction } = await import('./monthly');
     // makeHouseholdWithUser creates a bare household with NO system category — this

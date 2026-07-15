@@ -4904,3 +4904,45 @@ format clean; E2E 71/71 (`CI=true`, +2: text search over seeded data with row-li
 contract + legend drill-down; shell.spec's sidebar-surfaces list gained Transactions).
 
 ---
+
+## Improvement batch 3d — FX-assisted entry (2026-07-15)
+
+The user's own spec from the review discussion: "enter 20USD for a lunch while on
+holiday without needing to calculate conversion rates in my head... but still math
+everything into SGD at time of entry (keep the foreign currency entry as a note, with
+an estimated FX rate, refreshed whenever)." Quick-add's Amount row gained a currency
+select (SGD + 17 curated currencies, lib/domain/fx-rules.ts): pick USD, type 20, and
+the SGD field pre-fills from a cached estimated rate — EDITABLE, because the rate is
+an estimate and the card statement is the truth. SGD stays the ONLY stored/calculated
+value (README's single-currency constraint is untouched); the foreign
+amount/currency/rate ride along as a display-only annotation (migration 0006: three
+nullable columns on monthly_entries + a global fx_rates cache table, applied to dev +
+production pre-push).
+
+- Rates: frankfurter.app (ECB, no key, no signup), cached 24h (`isFxRateStale`,
+  unit-tested at the exact boundary), fetched lazily ONLY when a foreign currency is
+  picked, never on page load. Fetch failure serves the stale cached rate if one exists
+  (an old estimate beats none for an editable pre-fill) or degrades to manual SGD
+  entry with no annotation — an FX hiccup can never break entry logging, and
+  getRateToSgd never throws.
+- Server-side validation (addAdhocAction): the annotation triple is all-or-nothing (a
+  forged partial triple is rejected, tested), requires a real SGD actual, currency is
+  enum-checked, rate bounded positive. `convertToSgdCents` is pure with a fast-check
+  property (always a finite non-negative integer).
+- Display: list-view rows show "US$20.00 @ 1.3500" under the actual amount
+  (`formatForeignAmount` — the app's only non-SGD formatting, display-only, with a
+  fallback for unknown codes since a DB row is a trust boundary). Also deduped
+  transactions/page.tsx's hand-rolled MONTH_SHORT into lib/format's export (reuse
+  slip from 3c, caught in this pass).
+- E2E is deterministic and network-free: seeds a fresh USD rate row into fx_rates so
+  the cache path serves it — frankfurter is never hit in tests. Asserts the 27.00
+  pre-fill (20 @ 1.35), the rendered annotation, and the persisted triple via DB poll.
+
+**Test/CI status (complete runs):** unit 497/497 (+4 fx-rules incl. property);
+integration 292/292 (+1 FX storage/partial/bogus-currency); coverage 94.61/95.38 on
+lib/** (lib/fx.ts's network branches are E2E/cache-covered, not unit-covered — same
+convention as the email modules; the 80% gate holds with wide margin);
+lint/typecheck/build/format clean; E2E 72/72 (`CI=true`; one flake-retry on home.spec's
+mark-paid test in the first run, clean 72/72 on the rerun).
+
+---

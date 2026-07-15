@@ -85,6 +85,9 @@ export default async function MonthlyPage({
       categoryDirection: categories.direction,
       accountName: bankAccounts.name,
       scheduledDay: recurringSchedule.actualDateDay,
+      originalAmount: monthlyEntries.originalAmount,
+      originalCurrency: monthlyEntries.originalCurrency,
+      fxRate: monthlyEntries.fxRate,
     })
     .from(monthlyEntries)
     .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
