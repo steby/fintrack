@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNotNull, lt, or, sql } from 'drizzle-orm';
 import { db } from './index';
 import { logger } from '../log';
 import { isUnusuallyLargeRowCount } from '../domain/query-limits';
@@ -701,6 +701,69 @@ export async function getEmailRecipients(
 // down) is not retried until the next scheduled period, matching spec.md's documented
 // failure mode ("retry w/ backoff, then log + degrade") rather than adding a second,
 // unbounded retry loop across cron runs.
+export const TRANSACTION_SEARCH_LIMIT = 100;
+
+export interface TransactionSearchRow {
+  id: string;
+  item: string;
+  year: number;
+  month: number;
+  budgetedAmount: string;
+  actualAmount: string | null;
+  actualDate: string | null;
+  categoryId: string | null;
+  categoryName: string | null;
+  categoryColor: string | null;
+  direction: 'income' | 'expense' | null;
+}
+
+// Cross-month transaction search (/transactions — full app review finding #5: Money is
+// strictly month-scoped, so "when did I last pay the dentist?" meant clicking through
+// months one at a time). Text match is a case-insensitive substring on the item name
+// with LIKE metacharacters escaped — a search for "100%" must match the literal text,
+// not turn into a wildcard (and `\` itself must be escaped first, or a trailing
+// backslash in the query corrupts the pattern). Newest first (year, month, then dated
+// actuals before undated forecasts within a month), LIMIT-bounded — this is a search
+// surface, not an export; api/export remains the complete-data path.
+export async function searchTransactions(
+  householdId: string,
+  filters: { q?: string; categoryId?: string },
+): Promise<TransactionSearchRow[]> {
+  const conditions = [eq(monthlyEntries.householdId, householdId)];
+  if (filters.q) {
+    const escaped = filters.q.replace(/\\/g, '\\\\').replace(/[%_]/g, (m) => `\\${m}`);
+    conditions.push(ilike(monthlyEntries.item, `%${escaped}%`));
+  }
+  if (filters.categoryId) {
+    conditions.push(eq(monthlyEntries.categoryId, filters.categoryId));
+  }
+
+  return db
+    .select({
+      id: monthlyEntries.id,
+      item: monthlyEntries.item,
+      year: monthlyEntries.year,
+      month: monthlyEntries.month,
+      budgetedAmount: monthlyEntries.budgetedAmount,
+      actualAmount: monthlyEntries.actualAmount,
+      actualDate: monthlyEntries.actualDate,
+      categoryId: monthlyEntries.categoryId,
+      categoryName: categories.name,
+      categoryColor: categories.color,
+      direction: categories.direction,
+    })
+    .from(monthlyEntries)
+    .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
+    .where(and(...conditions))
+    .orderBy(
+      desc(monthlyEntries.year),
+      desc(monthlyEntries.month),
+      sql`${monthlyEntries.actualDate} DESC NULLS LAST`,
+      monthlyEntries.item,
+    )
+    .limit(TRANSACTION_SEARCH_LIMIT);
+}
+
 export async function claimEmailSlot(
   householdId: string,
   type: EmailType,

@@ -49,6 +49,12 @@ export default async function SettingsHubPage() {
         <Link href="/insights" className="flex min-h-14 items-center px-4 text-sm hover:bg-muted">
           Insights
         </Link>
+        <Link
+          href="/transactions"
+          className="flex min-h-14 items-center px-4 text-sm hover:bg-muted"
+        >
+          Transactions
+        </Link>
       </nav>
 
       <nav className="flex flex-col divide-y rounded-2xl border bg-card shadow-card">

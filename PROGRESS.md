@@ -4875,3 +4875,32 @@ same as invite.ts — the 80% gate holds with margin); lint/typecheck/build/form
 E2E 69/69 (`CI=true`, new spec included).
 
 ---
+
+## Improvement batch 3c — transactions search + Insights drill-down (2026-07-15)
+
+Review findings #5/#6: Money was strictly month-scoped ("when did I last pay the
+dentist?" meant clicking through months one by one) and every Insights chart was a
+dead end. New `/transactions` (sidebar "Track" entry + Settings-hub mobile link):
+a plain GET form over server-rendered results — the URL is the whole state, no client
+component. `searchTransactions` (queries.ts) does a case-insensitive substring match
+with LIKE metacharacters escaped (backslash first, then %/_ — a search for "100%" must
+match the literal text, not go wildcard; adversarially tested incl. a trailing
+backslash) plus an optional category filter, household-scoped, newest-first,
+LIMIT 100 (api/export stays the complete-data path). Rows link into that month's list
+view. The category param is validated as a UUID or ignored outright — garbage means
+"no filter", never an error page.
+
+Insights' donut now drills down: sector clicks navigate to
+`/transactions?category=…`, and the legend is HAND-ROLLED as real buttons that do the
+same — recharts' own `<Legend onClick>` never fired for Pie legends (observed, not
+assumed), and a wide arc's clickable bbox center can land inside the donut hole
+(Playwright's click landed on the svg — a real-user problem too, not just a test
+artifact). Mount animation is off on the Pie: sectors detach/reattach mid-animation,
+making early clicks flaky for humans and impossible for Playwright's stability checks.
+
+**Test/CI status (complete runs):** unit 493/493; integration 291/291 (+2:
+scoping/order/category filter, LIKE-metacharacter adversarial); lint/typecheck/build/
+format clean; E2E 71/71 (`CI=true`, +2: text search over seeded data with row-link
+contract + legend drill-down; shell.spec's sidebar-surfaces list gained Transactions).
+
+---

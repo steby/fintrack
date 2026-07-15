@@ -3,6 +3,7 @@ import {
   Home,
   Calendar,
   Repeat,
+  Search,
   Wallet,
   Target,
   ChartPie,
@@ -57,6 +58,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               href="/recurring"
               label="Plan"
               icon={<Repeat className="size-4 shrink-0" />}
+              matchPrefix
+            />
+            <NavLink
+              href="/transactions"
+              label="Transactions"
+              icon={<Search className="size-4 shrink-0" />}
               matchPrefix
             />
           </nav>

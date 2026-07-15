@@ -15,6 +15,7 @@ import {
   getNameLookup,
   getUpcomingEntryCandidates,
   getActualizedCashRows,
+  searchTransactions,
 } from './queries';
 
 async function makeHousehold(label: string) {
@@ -1301,6 +1302,80 @@ describe('getActualizedCashRows', () => {
     } finally {
       await cleanup(householdA.id);
       await cleanup(householdB.id);
+    }
+  });
+});
+
+describe('searchTransactions', () => {
+  it('matches case-insensitive substrings, filters by category, and never leaks across households', async () => {
+    const householdA = await makeHousehold('Search A');
+    const householdB = await makeHousehold('Search B');
+    try {
+      const [food] = await db
+        .insert(categories)
+        .values({ householdId: householdA.id, name: 'Food', direction: 'expense' })
+        .returning();
+      await db.insert(monthlyEntries).values([
+        {
+          householdId: householdA.id,
+          year: 2025,
+          month: 11,
+          item: 'Dentist Checkup',
+          categoryId: food.id,
+          budgetedAmount: '120.00',
+          actualAmount: '135.50',
+          actualDate: '2025-11-12',
+        },
+        { householdId: householdA.id, year: 2026, month: 2, item: 'Groceries' },
+        // Same item name in ANOTHER household — must never surface.
+        { householdId: householdB.id, year: 2025, month: 11, item: 'Dentist Checkup' },
+      ]);
+
+      const byText = await searchTransactions(householdA.id, { q: 'dentist' });
+      expect(byText).toHaveLength(1);
+      expect(byText[0]).toMatchObject({
+        item: 'Dentist Checkup',
+        actualAmount: '135.50',
+        categoryName: 'Food',
+        direction: 'expense',
+      });
+
+      const byCategory = await searchTransactions(householdA.id, { categoryId: food.id });
+      expect(byCategory).toHaveLength(1);
+      expect(byCategory[0].item).toBe('Dentist Checkup');
+
+      const all = await searchTransactions(householdA.id, { q: 'e' });
+      // newest first: 2026-02 Groceries before 2025-11 Dentist
+      expect(all.map((r) => r.item)).toEqual(['Groceries', 'Dentist Checkup']);
+    } finally {
+      await cleanup(householdA.id);
+      await cleanup(householdB.id);
+    }
+  });
+
+  it('treats LIKE metacharacters as literals (adversarial: % _ and trailing backslash)', async () => {
+    const household = await makeHousehold('Search C');
+    try {
+      await db.insert(monthlyEntries).values([
+        { householdId: household.id, year: 2026, month: 1, item: '100% Cotton Shirt' },
+        { householdId: household.id, year: 2026, month: 1, item: 'Cotton Shirt' },
+        { householdId: household.id, year: 2026, month: 1, item: 'under_score item' },
+        { householdId: household.id, year: 2026, month: 1, item: 'underscore item' },
+      ]);
+
+      // '%' must match only the literal percent item, not act as a wildcard.
+      const percent = await searchTransactions(household.id, { q: '100%' });
+      expect(percent.map((r) => r.item)).toEqual(['100% Cotton Shirt']);
+
+      // '_' must not match any-single-character.
+      const underscore = await searchTransactions(household.id, { q: 'under_' });
+      expect(underscore.map((r) => r.item)).toEqual(['under_score item']);
+
+      // A trailing backslash must not corrupt the pattern (or throw).
+      const backslash = await searchTransactions(household.id, { q: 'shirt' + '\\' });
+      expect(backslash).toEqual([]);
+    } finally {
+      await cleanup(household.id);
     }
   });
 });

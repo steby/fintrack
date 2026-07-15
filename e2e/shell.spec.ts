@@ -50,6 +50,7 @@ test.describe('shell: navigation IA', () => {
     const surfaces: { label: string; urlPattern: RegExp }[] = [
       { label: 'Money', urlPattern: /\/monthly/ },
       { label: 'Plan', urlPattern: /\/recurring/ },
+      { label: 'Transactions', urlPattern: /\/transactions/ },
       { label: 'Net worth', urlPattern: /\/accounts/ },
       { label: 'Goals', urlPattern: /\/goals/ },
       { label: 'Insights', urlPattern: /\/insights/ },
