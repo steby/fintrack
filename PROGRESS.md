@@ -5011,3 +5011,30 @@ register, before going offline); it passed on a retry in the full serial run
 (worker-state ordering with earlier specs) and 4/4 twice in isolation.
 
 ---
+
+## Improvement batch 4c — queries.ts split into domain modules (2026-07-16)
+
+The 778-line lib/db/queries.ts monolith (review codebase finding) is now eight domain
+modules under lib/db/queries/ — shared (resolveOptionalRef, warnIfUnusuallyLarge, now
+exported for its sibling consumers), entry-form, dashboard, net-worth, csv, forecast,
+transactions, email — with lib/db/queries.ts left as a BARREL re-exporting all of
+them plus the CategoryBudgetRow type re-export. Zero import sites changed anywhere in
+the app: every consumer keeps importing from '../../lib/db/queries', which is the
+whole point of the barrel. The split itself was script-driven (each export plus its
+contiguous leading comment moved as one block; per-module imports derived by token
+presence) rather than hand-retyped — the one systematic slip that produced (a
+token-presence regex matching the English word "or" inside comments, importing an
+unused drizzle operator into four modules) was caught by lint and removed. Every
+comment moved verbatim with its function.
+
+**Deliberately still open:** app/(app)/import/import-form.tsx (431 lines) remains
+unsplit — it's a stateful client wizard whose decomposition needs real design
+attention, not a mechanical block move; forcing it through at the tail of this pass
+would trade correctness risk for zero user-facing value. It stays on the list.
+
+**Test/CI status (complete runs):** unit 497/497; integration 292/292;
+lint/typecheck/build/format clean; E2E 72/72 (`CI=true`) — the strongest possible
+signal for a pure move: every one of the 24 exports exercised through the same
+public path as before.
+
+---
