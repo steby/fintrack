@@ -4831,3 +4831,47 @@ clean; E2E 68/68 (`CI=true`) — the mark-paid spec now asserts the prefilled 42
 edits it to 39.75, and DB-polls that 39.75 + the custom date both persisted.
 
 ---
+
+## Improvement batch 3b — password reset via email (2026-07-15)
+
+The full app review's #1 finding: there was NO password recovery path at all — no
+"forgot password" link, no reset flow anywhere; a forgotten owner password meant manual
+DB surgery. Now: `/login` links to `/forgot-password` (public), which mints a
+single-use, 1-hour token (`password_reset_tokens`, migration 0005 — stores
+`hashToken(token)` only, same at-rest rule as sessions) and emails a `/reset/[token]`
+link via Resend (keys-optional: logged instead of sent without a key, same as invites).
+`/reset/[token]` sets the new password, revokes EVERY session (a reset IS the
+stolen-credential remedy — unlike change-password there's no current session to spare),
+and auto-logs-in like invite-accept.
+
+Hardening, each with a test: the request response is CONSTANT for existing and
+nonexistent emails (no enumeration oracle — the flooded-cap path returns the same
+response too); issuance capped at 3 tokens/user/hour (pure rules in
+`lib/auth/password-reset-rules.ts`, unit-tested incl. the exact expiry boundary and
+used-beats-expired); consumption is race-safe (the usedAt claim is a conditional UPDATE
+inside the transaction — two racing submits can both pass the read, only one wins the
+claim, the loser gets the generic message via a sentinel that deliberately does NOT
+swallow real DB failures); a failed password-policy check does not burn the link;
+missing/expired/used tokens all get one generic message.
+
+E2E (`e2e/password-reset.spec.ts`, new file — auth.spec deliberately untouched): full
+flow with a dedicated throwaway user (NEVER the seed owner — every other spec logs in
+as them), covering request → reset → auto-login → replay rejected → old password dead →
+new password works. Two real bugs found by running it: React 19 resets uncontrolled
+form fields after every action submit (the second login attempt needs BOTH fields
+refilled), and repeated runs within 15 minutes accumulated this spec's one deliberate
+failed login into RESET_EMAIL's rate-limit bucket until "Too many attempts" broke the
+final assertion — fixed with the same beforeAll loginAttempts clear auth.spec already
+documents for exactly this reason.
+
+**Deploy note:** migration 0005 ran against production (verified:
+`password_reset_tokens` exists) BEFORE this push, same expand-only ordering as 0004.
+
+**Test/CI status (complete runs):** unit 493/493 (+5 reset rules); integration 289/289
+(+6: enumeration constant, issuance cap, happy path incl. session revocation +
+auto-login, replay rejected, expired=garbage, policy-failure preserves token); coverage
+98.16/97.31/97.56/98.55 (new keys-optional email module has uncovered send branches,
+same as invite.ts — the 80% gate holds with margin); lint/typecheck/build/format clean;
+E2E 69/69 (`CI=true`, new spec included).
+
+---

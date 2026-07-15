@@ -23,10 +23,12 @@ import { logger } from './lib/log';
 // Proxy must never be the only line of defense, since a matcher change or a Server
 // Action moved to an unmatched route would silently remove this coverage.
 
-const PUBLIC_ROUTES = new Set(['/login']);
+const PUBLIC_ROUTES = new Set(['/login', '/forgot-password']);
 
 function isPublicRoute(pathname: string): boolean {
-  return PUBLIC_ROUTES.has(pathname) || pathname.startsWith('/invite/');
+  return (
+    PUBLIC_ROUTES.has(pathname) || pathname.startsWith('/invite/') || pathname.startsWith('/reset/')
+  );
 }
 
 export async function proxy(request: NextRequest) {

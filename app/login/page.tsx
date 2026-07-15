@@ -1,6 +1,7 @@
 'use client';
 
 import { useActionState } from 'react';
+import Link from 'next/link';
 import { loginAction } from '../actions/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -37,6 +38,12 @@ export default function LoginPage() {
             <Button type="submit" disabled={pending} className="w-full">
               {pending ? 'Signing in...' : 'Sign in'}
             </Button>
+            <Link
+              href="/forgot-password"
+              className="text-center text-sm text-muted-foreground underline underline-offset-2"
+            >
+              Forgot password?
+            </Link>
           </form>
         </CardContent>
       </Card>

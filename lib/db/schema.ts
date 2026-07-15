@@ -60,8 +60,9 @@ export const users = pgTable(
   ],
 );
 
-// Session id IS the opaque bearer token (32 random bytes, base64url-encoded) — not a
-// separate lookup key. See lib/auth/token.ts.
+// Session id stores hashToken(cookie token) — never the raw bearer token. See
+// lib/auth/token.ts (at-rest hardening: a leaked table dump can't be replayed as
+// session cookies).
 export const sessions = pgTable(
   'sessions',
   {
@@ -73,6 +74,27 @@ export const sessions = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('sessions_user_id_idx').on(table.userId)],
+);
+
+// Forgot-password reset tokens. tokenHash stores hashToken(emailed token) — same
+// at-rest rule as sessions (the emailed link is the credential; the DB holds only its
+// hash). Single-use (usedAt) + short-lived (lib/auth/password-reset-rules.ts).
+export const passwordResetTokens = pgTable(
+  'password_reset_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('password_reset_tokens_hash_unique').on(table.tokenHash),
+    index('password_reset_tokens_user_id_idx').on(table.userId),
+  ],
 );
 
 export const householdInvitations = pgTable(
