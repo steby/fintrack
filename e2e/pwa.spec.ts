@@ -70,4 +70,37 @@ test.describe('PWA installability', () => {
     });
     expect(registered).toBe(true);
   });
+
+  test('an offline navigation gets the precached fallback page, not a browser error', async ({
+    page,
+    context,
+  }) => {
+    // /offline itself is public (proxy.ts PUBLIC_ROUTES) and data-free — the ONLY
+    // page the worker is allowed to serve from cache for a navigation; live
+    // navigation responses are never cached (the SW's load-bearing policy).
+    const offlineDirect = await page.request.get('/offline');
+    expect(offlineDirect.ok()).toBe(true);
+
+    await page.goto('/login');
+    // Wait until the active worker CONTROLS this client — registration alone isn't
+    // enough for navigation interception, and install's waitUntil (which precaches
+    // /offline) must have completed for the fallback to exist.
+    await page.evaluate(async () => {
+      await navigator.serviceWorker.ready;
+      if (!navigator.serviceWorker.controller) {
+        await new Promise((resolve) => {
+          navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true });
+        });
+      }
+    });
+
+    await context.setOffline(true);
+    try {
+      await page.goto('/monthly');
+      await expect(page.getByText(/You(’|')re offline/)).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
+    } finally {
+      await context.setOffline(false);
+    }
+  });
 });

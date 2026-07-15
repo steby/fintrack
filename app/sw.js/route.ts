@@ -27,11 +27,11 @@ const CACHE_VERSION = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ?? 'local-
 // early unless escaped (see the already-escaped `` \`.catch\` `` a few dozen lines down).
 // A future comment added here without escaping its backticks breaks this file at build
 // time at best, silently truncates the shipped service worker at worst.
-const SW_SCRIPT: string = `// Minimal service worker: cache-first for immutable static assets ONLY. Every other
-// request (navigation/HTML, RSC payloads, /api/*, /login, /settings/*, etc.) is left
-// completely untouched — the fetch handler returns without calling
-// event.respondWith(), so the browser makes the request exactly as if no service
-// worker were installed.
+const SW_SCRIPT: string = `// Minimal service worker: cache-first for immutable static assets, plus ONE precached
+// public fallback page (/offline) served when a NAVIGATION's network fetch fails.
+// Every other request (RSC payloads, /api/*, Server Actions, etc.) is left completely
+// untouched — the fetch handler returns without calling event.respondWith(), so the
+// browser makes the request exactly as if no service worker were installed.
 //
 // Load-bearing gotcha (spec.md Phase 7 edge case): this app has no static, logged-out
 // pages — every route is either an authed page scoped to one household or a public
@@ -39,7 +39,11 @@ const SW_SCRIPT: string = `// Minimal service worker: cache-first for immutable 
 // Caching any of that with a stale-while-revalidate or network-falling-back-to-cache
 // strategy risks serving one user's page (or a stale permission/error state) to the
 // next person on a shared device after logout. A future edit that "simplifies" this
-// into caching navigation requests would reintroduce that bug — don't.
+// into caching navigation RESPONSES would reintroduce that bug — don't. The offline
+// fallback below does NOT violate this policy: navigations are network-ONLY (their
+// responses are never cache.put anywhere); the only thing ever served from cache for
+// a navigation is /offline, a static page that renders identically for everyone and
+// contains no personal data by construction (see app/offline/page.tsx).
 //
 // CACHE_NAME is generated at BUILD TIME from the deploying commit (see
 // app/sw.js/route.ts) — a real static PWA asset change (e.g. lib/pwa/icon.tsx's
@@ -67,12 +71,25 @@ function isCacheableStatic(url) {
   );
 }
 
-self.addEventListener('install', () => {
-  // No precache list to manage (build-hashed filenames change every deploy); assets
-  // populate the cache opportunistically on first fetch instead. Take over from any
-  // previous worker immediately — safe here specifically because this worker never
-  // caches anything version-sensitive (see isCacheableStatic).
-  self.skipWaiting();
+const OFFLINE_FALLBACK = '/offline';
+
+self.addEventListener('install', (event) => {
+  // The ONE precached entry: the public, data-free offline fallback page. Everything
+  // else (build-hashed static assets) populates the cache opportunistically on first
+  // fetch — no precache list of hashed filenames to manage. cache.add({cache:
+  // 'reload'}) bypasses the HTTP cache so a fresh copy ships with every new worker.
+  event.waitUntil(
+    (async () => {
+      const cache = await caches.open(CACHE_NAME);
+      await cache
+        .add(new Request(OFFLINE_FALLBACK, { cache: 'reload' }))
+        .catch(() => {}); // a failed precache must not brick installation
+      // Take over from any previous worker immediately — safe here specifically
+      // because this worker never caches anything version-sensitive
+      // (see isCacheableStatic) beyond the fallback it just refreshed.
+      await self.skipWaiting();
+    })(),
+  );
 });
 
 self.addEventListener('activate', (event) => {
@@ -89,6 +106,23 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+
+  // Navigations: network-ONLY, with the precached /offline page as the sole fallback.
+  // The live response is deliberately never written to any cache (see the policy
+  // comment at the top) — this branch only changes what a FAILED fetch shows: a
+  // friendly page instead of the browser's dinosaur.
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).catch(async () => {
+        const cache = await caches.open(CACHE_NAME);
+        const fallback = await cache.match(OFFLINE_FALLBACK);
+        // Response.error() when even the fallback is missing (e.g. precache failed
+        // and the very first navigation is offline) — equivalent to no SW at all.
+        return fallback ?? Response.error();
+      }),
+    );
+    return;
+  }
 
   const url = new URL(event.request.url);
   if (!isCacheableStatic(url)) return;

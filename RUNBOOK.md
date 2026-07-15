@@ -224,13 +224,17 @@ worth knowing before assuming "the UI looks broken" means "the feature is broken
   every prior phase's write affordances, not merely hidden by CSS; there is no
   "read-only user sees a broken button" failure mode by construction, only "read-only
   user sees no button at all."
-- **The service worker's static-only caching policy is unaffected by any of this
-  redesign** — `app/sw.js/route.ts`'s fetch handler still only intercepts
-  `_next/static/*` and the fixed PWA asset list (`lib/pwa/static-paths.ts`); no page
-  route, RSC payload, or Server Action response is ever cached by it, so a stale toast/
-  dialog/switch UI from a cached page is not a failure mode this redesign introduces —
-  verify by checking the request in DevTools' Network tab was actually served
-  `(ServiceWorker)` before assuming the SW is implicated in anything UI-related.
+- **The service worker never caches authed pages** — `app/sw.js/route.ts`'s fetch
+  handler intercepts `_next/static/*`, the fixed PWA asset list
+  (`lib/pwa/static-paths.ts`), and — since the offline-support pass — navigations, but
+  navigations are network-ONLY with a single precached, public, data-free `/offline`
+  fallback served on network failure; no live page route, RSC payload, or Server
+  Action response is ever cached by it. A stale toast/dialog/switch UI from a cached
+  page is therefore still not a failure mode the SW can cause — verify by checking the
+  request in DevTools' Network tab was actually served `(ServiceWorker)` before
+  assuming the SW is implicated in anything UI-related. If users report seeing "You're
+  offline" while online, the network fetch inside the SW is failing (server down, DNS)
+  — the fallback is doing its job; fix the outage, not the worker.
 
 ## Session / auth incidents
 

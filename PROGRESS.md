@@ -4985,3 +4985,29 @@ lint/typecheck/build/format clean; E2E 72/72 (`CI=true` — home.spec exercises 
 page the sparkline renders on).
 
 ---
+
+## Improvement batch 4b — offline fallback for the PWA (2026-07-16)
+
+Review finding #12, scoped DOWN from my own original pitch after re-reading the
+service worker's load-bearing policy comment: the pitch included "a cached last-loaded
+Home snapshot", but the SW's documented policy (spec.md Phase 7 edge case: no
+static logged-out pages exist; caching any navigation risks serving one user's page to
+the next person on a shared device after logout) is right and wins. What shipped
+instead: navigations are now intercepted network-ONLY with a single precached,
+public, data-free `/offline` fallback (app/offline/page.tsx, force-static, in
+proxy.ts's PUBLIC_ROUTES) served when the network fetch FAILS — an installed app on
+the subway gets a friendly "You're offline / Try again" instead of the browser
+dinosaur, while live navigation responses are still never written to any cache. The
+fallback precaches at install with {cache: 'reload'} so every new deploy ships a
+fresh copy; a failed precache degrades to Response.error() (exactly no-SW behavior)
+rather than bricking installation. RUNBOOK's SW section updated, including the new
+"users report 'You're offline' while online means the server is down — the fallback
+is doing its job" triage note.
+
+**Test/CI status (complete runs):** unit 497/497; integration 292/292;
+lint/typecheck/build/format clean; E2E 72/72 (`CI=true`) — pwa.spec gained the
+offline-navigation test (waits for the worker to CONTROL the client, not just
+register, before going offline); it passed on a retry in the full serial run
+(worker-state ordering with earlier specs) and 4/4 twice in isolation.
+
+---
