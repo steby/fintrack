@@ -6,7 +6,7 @@ Operational procedures for the top failure scenarios. This is a Tier-2 household
 
 ## First check, always
 
-`GET /api/health` → `{ ok, db: 'up'|'down', version }`, 200 if the DB answered within 2s, 503
+`GET /api/health` → `{ ok, db: 'up'|'down' }`, 200 if the DB answered within 2s, 503
 otherwise. Check this first for anything that looks like an outage — it tells you in one
 request whether the problem is "the app is down" or "the app is up but something downstream
 isn't."

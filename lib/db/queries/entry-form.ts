@@ -40,6 +40,28 @@ export async function getOrCreateUncategorizedCategoryId(householdId: string): P
   return created.id;
 }
 
+// "Is this category the household's reserved system (Uncategorized) row" — the named
+// pre-check for actions that must refuse a mutation on it with a SPECIFIC error message
+// (e.g. updateCategoryAction pinning its direction). Actions whose protection must be
+// atomic with the write itself (deleteCategoryAction) embed eq(isSystem, false) in the
+// write's own WHERE instead — both mechanisms exist on purpose; this helper is the one
+// to reach for when adding a new category-mutating action's validation (review altitude
+// finding: the guard used to be re-derived ad hoc per action with nothing to grep for).
+export async function isSystemCategory(householdId: string, categoryId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: categories.id })
+    .from(categories)
+    .where(
+      and(
+        eq(categories.id, categoryId),
+        eq(categories.householdId, householdId),
+        eq(categories.isSystem, true),
+      ),
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
 export interface EntryFormOptions {
   categories: { id: string; name: string; direction: 'income' | 'expense'; isSystem: boolean }[];
   accounts: { id: string; name: string }[];

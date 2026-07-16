@@ -21,13 +21,13 @@ import {
 } from '../../lib/db/queries';
 import { getSetting } from '../../lib/settings';
 import { sumNetCentsByAccount } from '../../lib/domain/net-worth';
-import { addMonths } from '../../lib/domain/recurring';
 import { currentYearMonth, utcStartOfDay } from '../../lib/domain/today';
 import { parseYearParam } from '../../lib/domain/month-params';
-import { buildCategoryBudgetRows } from '../../lib/domain/dashboard';
+import { buildCategoryBudgetRows, isUncategorizedRow } from '../../lib/domain/dashboard';
 import {
   parseHorizon,
   resolveHorizonDays,
+  horizonCandidateBuckets,
   selectUpcomingItems,
   computeSafeToSpend,
   computeBudgetRemaining,
@@ -68,7 +68,6 @@ export default async function HomePage({
   const canManage = can(user.role, 'write');
   const today = utcStartOfDay();
   const current = currentYearMonth(today);
-  const nextMonth = addMonths(current, 1);
 
   const [
     rawHorizon,
@@ -80,7 +79,9 @@ export default async function HomePage({
     topGoals,
   ] = await Promise.all([
     getSetting(user.householdId, 'affordability_horizon'),
-    getUpcomingEntryCandidates(user.householdId, [current, nextMonth]),
+    // Three months, horizon-independent — a rolling 30-day window can spill into a
+    // third calendar month at the end of January (see horizonCandidateBuckets).
+    getUpcomingEntryCandidates(user.householdId, horizonCandidateBuckets(today)),
     env.FEATURE_NET_WORTH ? getAccountsForNetWorth(user.householdId) : Promise.resolve([]),
     env.FEATURE_NET_WORTH ? getActualizedCashRows(user.householdId) : Promise.resolve([]),
     getDashboardRowsForMonth(user.householdId, current.year, current.month),
@@ -173,12 +174,11 @@ export default async function HomePage({
   const budgetRows = env.FEATURE_CATEGORY_BUDGETS
     ? buildCategoryBudgetRows(currentMonthRows, currentMonthCategories)
     : [];
-  // Uncategorized entries (the reserved system category, plus any legacy truly-null
-  // rows) count as plain expenses in every total, but re-filing them keeps Insights'
-  // category donut and per-category budget caps meaningful — nudge, don't block.
-  const uncategorizedCount = currentMonthRows.filter(
-    (r) => r.categoryIsSystem || r.direction === null,
-  ).length;
+  // Uncategorized entries count as plain expenses in every total, but re-filing them
+  // keeps Insights' category donut and per-category budget caps meaningful — nudge,
+  // don't block. Predicate lives in lib/domain/dashboard.ts so any future "N
+  // uncategorized" surface counts the same two representations.
+  const uncategorizedCount = currentMonthRows.filter(isUncategorizedRow).length;
 
   return (
     <div className="flex flex-col gap-6">

@@ -7,7 +7,7 @@ import { formatSGD, formatForeignAmount } from '../../../lib/format';
 import { parseAmountToCents } from '../../../lib/money';
 import { getDifference } from '../../../lib/domain/entries';
 import { MarkPaidButton } from '../home/mark-paid-button';
-import { EntryEditButton } from '../entry-edit-button';
+import { EntryEditButton, toEditableEntry } from '../entry-edit-button';
 import type { MonthlyEntryRow } from './types';
 
 export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canManage: boolean }) {
@@ -212,17 +212,7 @@ export function EntryRow({ entry, canManage }: { entry: MonthlyEntryRow; canMana
       <td className="p-2 text-right">
         {canManage && (
           <div className="flex items-center justify-end gap-0.5">
-            <EntryEditButton
-              entry={{
-                id: entry.id,
-                item: entry.item,
-                categoryId: entry.categoryId,
-                actualAmount: entry.actualAmount,
-                actualDate: entry.actualDate,
-                recurringLinked: entry.recurringScheduleId !== null,
-              }}
-              className="text-muted-foreground"
-            />
+            <EntryEditButton entry={toEditableEntry(entry)} className="text-muted-foreground" />
             {!entry.recurringScheduleId && (
               <form action={deleteAction}>
                 <input type="hidden" name="id" value={entry.id} />

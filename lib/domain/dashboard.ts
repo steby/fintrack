@@ -44,6 +44,20 @@ export function actualOnlyCents(row: Pick<DashboardEntryRow, 'actualCents'>): nu
   return row.actualCents;
 }
 
+// "Is this entry uncategorized" has TWO representations that must always be counted
+// together: filed under the household's reserved system category (categoryIsSystem —
+// the normal case since batch 2b), or a legacy/import row with no category at all
+// (direction null). Home's categorize nudge counts these; any future surface showing
+// an "N uncategorized" figure must use this same predicate or the counts will disagree
+// for the same household in the same session (review altitude finding — the predicate
+// was previously inlined in page.tsx where a second call site couldn't find it).
+export function isUncategorizedRow(row: {
+  categoryIsSystem?: boolean;
+  direction: 'income' | 'expense' | null;
+}): boolean {
+  return Boolean(row.categoryIsSystem) || row.direction === null;
+}
+
 export interface MonthlyPoint {
   month: number;
   budgetedIncomeCents: number;

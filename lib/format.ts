@@ -60,7 +60,10 @@ export const MONTH_SHORT = [
   'Dec',
 ];
 
-const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// Exported for the same reason as MONTH_SHORT: one shared lookup instead of views
+// hand-rolling their own copy that can drift (the calendar grid's weekday header row
+// used to re-declare an identical array — review finding).
+export const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 // "Tue 15 Jul" — Home's upcoming-list due-date display (Phase 9). Takes a YYYY-MM-DD
 // string (already UTC-normalized upstream by lib/domain/affordability.ts's dueDate)

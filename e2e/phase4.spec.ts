@@ -262,4 +262,21 @@ test.describe('Phase 4: category budgets, goals, net worth', () => {
     await expect(page.getByRole('button', { name: 'Edit' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Delete' })).toHaveCount(0);
   });
+  test('the net-worth "Learn more" sheet survives a viewport resize across the breakpoint', async ({
+    page,
+  }) => {
+    // Regression (review finding): uncontrolled ResponsiveSheet usage never engaged the
+    // breakpoint lock, so crossing 768px while open remounted Dialog<->Drawer with a
+    // fresh (closed) internal state — the sheet silently vanished mid-read.
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
+    await page.goto('/accounts');
+    await page.getByRole('button', { name: 'Learn more' }).click();
+    await expect(page.getByText('About net worth')).toBeVisible();
+
+    await page.setViewportSize({ width: 500, height: 800 });
+    await expect(page.getByText('About net worth')).toBeVisible();
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect(page.getByText('About net worth')).toBeVisible();
+  });
 });

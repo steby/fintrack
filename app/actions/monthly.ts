@@ -7,29 +7,13 @@ import { monthlyEntries, categories, bankAccounts, users } from '../../lib/db/sc
 import { requireRole, requireConfigFlag } from '../../lib/auth/guards';
 import { env } from '../../lib/env';
 import { moneyInputSchema, optionalMoneyInputSchema, centsToAmount } from '../../lib/money';
-import { isValidCalendarDate } from '../../lib/domain/month-params';
+import { uuidOrEmpty, dateInputSchema } from '../../lib/validation';
 import { utcStartOfDay } from '../../lib/domain/today';
 import { resolveOptionalRef, getOrCreateUncategorizedCategoryId } from '../../lib/db/queries';
 import { SUPPORTED_FX_CURRENCIES } from '../../lib/domain/fx-rules';
 import { revalidateEntryViews } from '../../lib/revalidate';
 
 export type MonthlyActionState = { error?: string; success?: boolean } | undefined;
-
-const uuidOrEmpty = z.union([z.literal(''), z.string().uuid()]).optional();
-
-// Empty string means "clear the date"; otherwise must be a real YYYY-MM-DD calendar
-// date. The regex alone isn't enough — Postgres's own date parsing silently ROLLS OVER
-// an out-of-range day instead of rejecting it (e.g. "2026-02-30" becomes 2026-03-02),
-// so a shape-only check would let a malformed-but-regex-shaped date land as a
-// different, unintended date rather than being rejected. isValidCalendarDate (shared
-// with lib/domain/csv.ts's CSV-import date coercion) catches both totally malformed
-// strings ("not-a-date", caught by the regex here first) and shape-valid-but-
-// nonexistent dates (caught by its ISO round-trip check).
-const dateInputSchema = z.string().refine((v) => {
-  if (v === '') return true;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
-  return isValidCalendarDate(v);
-}, 'Enter a valid date (YYYY-MM-DD)');
 
 const updateActualSchema = z.object({
   id: z.string().uuid(),

@@ -18,10 +18,10 @@ import { FixedVariableCard } from '../dashboard/fixed-variable-card';
 import { YoyCard } from '../dashboard/yoy-card';
 import { YearPicker } from '../dashboard/year-picker';
 
-// Year analytics — the same widgets/queries app/(app)/page.tsx (the dashboard) has
-// always rendered, lifted onto their own route (spec.md Phase 8). The old dashboard
-// KEEPS rendering all of this too, unchanged, until Phase 9 replaces it with the
-// forecast-first Home — the duplication is deliberate so nothing is orphaned mid-phase.
+// Year analytics — the pre-redesign dashboard's widgets on their own route (moved here
+// in Phase 8; this page has been their ONLY home since Phase 9 replaced that dashboard
+// with the forecast-first Home — an earlier comment here described the transitional
+// duplication as still pending; review finding).
 export default async function InsightsPage({
   searchParams,
 }: {

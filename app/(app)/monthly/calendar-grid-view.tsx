@@ -2,16 +2,14 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { formatSGDCompact, formatSGD, MONTH_FULL } from '../../../lib/format';
+import { formatSGDCompact, formatSGD, MONTH_FULL, WEEKDAY_SHORT } from '../../../lib/format';
 import { parseAmountToCents } from '../../../lib/money';
 import { daysInMonth } from '../../../lib/domain/reminders';
 import { ResponsiveSheet } from '@/components/ui/responsive-sheet';
 import { MarkPaidButton } from '../home/mark-paid-button';
-import { useDayBuckets } from './use-day-buckets';
+import { useDayBuckets, dailyNetCents } from './use-day-buckets';
 import { directionDotClass, paidTextClass, paidPrefix } from './entry-style';
 import type { MonthlyEntryRow } from './types';
-
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 // Phase 10: client component (it wasn't before) so a day cell can open a per-day
 // ResponsiveSheet — the local `openDay` state is what requires it. `today` arrives as
@@ -50,7 +48,7 @@ export function CalendarGridView({
     <div className="flex flex-col gap-4">
       <div className="overflow-x-auto rounded-2xl border bg-card shadow-card">
         <div className="grid min-w-[800px] grid-cols-7 gap-px bg-border">
-          {DAY_NAMES.map((d) => (
+          {WEEKDAY_SHORT.map((d) => (
             <div
               key={d}
               className="bg-muted/40 p-2 text-center text-xs font-semibold text-muted-foreground uppercase"
@@ -63,15 +61,7 @@ export function CalendarGridView({
           ))}
           {cells.map((day) => {
             const dayEntries = byDay.get(day) ?? [];
-            // Uncategorized entries (categoryDirection null) are excluded from the net,
-            // not treated as expenses — consistent with summary-bar.tsx/page.tsx's
-            // sumCents, which excludes them from both income and expense totals for the
-            // same reason: a direction-less amount can't be classified as either.
-            const dailyNetCents = dayEntries.reduce((sum, e) => {
-              if (e.categoryDirection === null) return sum;
-              const cents = parseAmountToCents(e.budgetedAmount);
-              return sum + (e.categoryDirection === 'income' ? cents : -cents);
-            }, 0);
+            const netCents = dailyNetCents(dayEntries);
             const isToday = isCurrentMonth && day === today.day;
             // Day-cell-click-opens-a-sheet is grid-only (spec.md Phase 10 task 4) —
             // agenda rows already show full entries with an inline MarkPaidButton each,
@@ -103,12 +93,12 @@ export function CalendarGridView({
               >
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-semibold">{day}</span>
-                  {dailyNetCents !== 0 && (
+                  {netCents !== 0 && (
                     <span
-                      className={`rounded bg-muted px-1 text-[0.65rem] font-bold ${dailyNetCents > 0 ? 'text-income' : 'text-expense'}`}
+                      className={`rounded bg-muted px-1 text-[0.65rem] font-bold ${netCents > 0 ? 'text-income' : 'text-expense'}`}
                     >
-                      {dailyNetCents > 0 ? '+' : ''}
-                      {formatSGDCompact(dailyNetCents)}
+                      {netCents > 0 ? '+' : ''}
+                      {formatSGDCompact(netCents)}
                     </span>
                   )}
                 </div>

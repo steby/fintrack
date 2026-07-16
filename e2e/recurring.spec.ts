@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 import { eq, and, inArray } from 'drizzle-orm';
 import { createTestDb } from './test-db';
 import { requireEnv } from './env';
+import { login } from './login';
 import {
   recurringSchedule,
   monthlyEntries,
@@ -67,11 +68,7 @@ test.describe('recurring schedule', () => {
   test('create, generate a forecast, edit with propagate, and delete a recurring item', async ({
     page,
   }) => {
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(OWNER_EMAIL);
-    await page.getByLabel('Password').fill(OWNER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     await page.goto('/recurring');
     await expect(page.getByRole('heading', { name: 'Plan' })).toBeVisible();
@@ -159,11 +156,7 @@ test.describe('recurring schedule', () => {
   });
 
   test('a viewer sees the recurring schedule read-only', async ({ page }) => {
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(VIEWER_EMAIL);
-    await page.getByLabel('Password').fill(VIEWER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, VIEWER_EMAIL, VIEWER_PASSWORD);
 
     await page.goto('/recurring');
     await expect(page.getByRole('heading', { name: 'Plan' })).toBeVisible();
@@ -191,11 +184,7 @@ test.describe('recurring schedule', () => {
         role: 'owner',
       });
 
-      await page.goto('/login');
-      await page.getByLabel('Email').fill(email);
-      await page.getByLabel('Password').fill(password);
-      await page.getByRole('button', { name: 'Sign in' }).click();
-      await expect(page).toHaveURL('/');
+      await login(page, email, password);
 
       await page.goto('/recurring');
       await expect(page.getByText('No recurring items yet')).toBeVisible();
@@ -208,11 +197,7 @@ test.describe('recurring schedule', () => {
   test('an owner can toggle the auto_generate kill-switch off and back on from the Plan page', async ({
     page,
   }) => {
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(OWNER_EMAIL);
-    await page.getByLabel('Password').fill(OWNER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     await page.goto('/recurring');
     // auto_generate defaults ON — the toggle exists (previously this kill-switch had no

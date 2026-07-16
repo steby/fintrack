@@ -21,6 +21,26 @@ export interface EditableEntry {
   recurringLinked: boolean;
 }
 
+// The one mapping from a fetched entry row to what the edit sheet needs — entry-row.tsx
+// and agenda-list-view.tsx used to hand-write identical object literals (review
+// finding): both independently satisfied the interface, so a field added to
+// EditableEntry could be wired in one view and silently left stale in the other
+// without any type error. Structural Pick so any row shape carrying these fields works.
+export function toEditableEntry(
+  entry: Pick<EditableEntry, 'id' | 'item' | 'categoryId' | 'actualAmount' | 'actualDate'> & {
+    recurringScheduleId: string | null;
+  },
+): EditableEntry {
+  return {
+    id: entry.id,
+    item: entry.item,
+    categoryId: entry.categoryId,
+    actualAmount: entry.actualAmount,
+    actualDate: entry.actualDate,
+    recurringLinked: entry.recurringScheduleId !== null,
+  };
+}
+
 // Per-row edit affordance (full-app-review finding N1: ad-hoc entries had no edit path
 // at all after creation — not even to assign a category, making the categorize nudge a
 // dead end). One pencil per row rather than tap-the-row: rows already contain their own

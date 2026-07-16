@@ -1,7 +1,23 @@
 'use client';
 
 import { useMemo } from 'react';
+import { parseAmountToCents } from '../../../lib/money';
 import type { MonthlyEntryRow } from './types';
+
+// One day's signed net (budgeted amounts) for the grid/agenda day headers. Uncategorized
+// entries (categoryDirection null) are excluded from the net, not treated as expenses —
+// consistent with summary-bar.tsx/page.tsx's sumCents, which excludes them from both
+// income and expense totals for the same reason: a direction-less amount can't be
+// classified as either. Lives beside useDayBuckets because the two views that bucket
+// per-day (grid, agenda) are exactly the two that render this figure — it was
+// copy-pasted into both before (review finding).
+export function dailyNetCents(dayEntries: MonthlyEntryRow[]): number {
+  return dayEntries.reduce((sum, e) => {
+    if (e.categoryDirection === null) return sum;
+    const cents = parseAmountToCents(e.budgetedAmount);
+    return sum + (e.categoryDirection === 'income' ? cents : -cents);
+  }, 0);
+}
 
 // Shared by CalendarGridView and AgendaListView (split out of the single CalendarView
 // this repo used to have) — both views need the exact same "which entries fall on

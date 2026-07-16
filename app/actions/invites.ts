@@ -99,9 +99,13 @@ export async function createInviteAction(
 }
 
 const acceptInviteSchema = z.object({
-  token: z.string().min(1),
-  name: z.string().min(1, 'Name is required'),
-  password: z.string(),
+  token: z.string().min(1).max(200),
+  // .max caps match the rest of the app: 200 on name (same as account.ts's
+  // updateNameSchema — this value becomes users.name and renders on every page) and
+  // 200 on password (loginSchema's documented defense-in-depth against feeding argon2
+  // an attacker-sized input on a pre-auth endpoint).
+  name: z.string().min(1, 'Name is required').max(200),
+  password: z.string().max(200),
 });
 
 export type AcceptInviteState = { error?: string } | undefined;

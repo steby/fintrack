@@ -8,16 +8,14 @@ import { revalidateGoalViews } from '../../lib/revalidate';
 import { requireRole, requireConfigFlag } from '../../lib/auth/guards';
 import { env } from '../../lib/env';
 import { moneyInputSchema, optionalMoneyInputSchema, centsToAmount } from '../../lib/money';
+import { dateInputSchema } from '../../lib/validation';
 
 export type GoalActionState = { error?: string; success?: boolean } | undefined;
 
 // Empty string means "no target date" — a goal isn't required to have a deadline.
-const targetDateSchema = z.string().refine((v) => {
-  if (v === '') return true;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
-  const parsed = new Date(`${v}T00:00:00Z`);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === v;
-}, 'Enter a valid date (YYYY-MM-DD)');
+// dateInputSchema is the shared calendar-date validator (lib/validation.ts); this file
+// previously hand-rolled an identical round-trip check the review flagged as drift-prone.
+const targetDateSchema = dateInputSchema;
 
 const createGoalSchema = z.object({
   name: z.string().trim().min(1, 'Goal name is required').max(100),

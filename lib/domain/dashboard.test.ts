@@ -10,6 +10,7 @@ import {
   sumIncomeExpense,
   bestEstimateCents,
   actualOnlyCents,
+  isUncategorizedRow,
   buildCategoryBudgetRows,
   type DashboardEntryRow,
   type CategoryBudgetInput,
@@ -354,5 +355,14 @@ describe('buildCategoryBudgetRows', () => {
         spentCents: 0,
       },
     ]);
+  });
+});
+
+describe('isUncategorizedRow', () => {
+  it('counts BOTH representations: system-category rows and legacy direction-null rows', () => {
+    expect(isUncategorizedRow({ categoryIsSystem: true, direction: 'expense' })).toBe(true);
+    expect(isUncategorizedRow({ direction: null })).toBe(true);
+    expect(isUncategorizedRow({ categoryIsSystem: false, direction: 'expense' })).toBe(false);
+    expect(isUncategorizedRow({ direction: 'income' })).toBe(false);
   });
 });

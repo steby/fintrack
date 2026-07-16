@@ -38,4 +38,40 @@ describe('pinStrictSslMode', () => {
     const dsn = 'host=localhost port=5432 dbname=fintrack';
     expect(pinStrictSslMode(dsn)).toBe(dsn);
   });
+
+  it('leaves a key=value DSN with sslmode untouched (space-separated, not query-string)', () => {
+    const dsn = 'host=localhost port=5432 dbname=fintrack sslmode=require';
+    expect(pinStrictSslMode(dsn)).toBe(dsn);
+  });
+
+  it('still upgrades when the password contains an un-percent-encoded # (review finding)', () => {
+    // new URL() parses everything after '#' as the fragment, hiding sslmode from
+    // searchParams — the old implementation silently skipped the upgrade here.
+    const out = pinStrictSslMode('postgresql://user:p@ss#word@host/db?sslmode=require');
+    expect(out).toBe('postgresql://user:p@ss#word@host/db?sslmode=verify-full');
+  });
+
+  it('leaves a #-password DSN with explicit disable untouched', () => {
+    const raw = 'postgresql://user:p#word@host/db?sslmode=disable';
+    expect(pinStrictSslMode(raw)).toBe(raw);
+  });
+
+  it('does not touch a lookalike param that merely ends in "sslmode"', () => {
+    const raw = 'postgresql://h/db?fake_sslmode=require';
+    expect(pinStrictSslMode(raw)).toBe(raw);
+  });
+
+  it('does not touch a value that merely starts with an upgradeable mode', () => {
+    const raw = 'postgresql://h/db?sslmode=requires-thought';
+    expect(pinStrictSslMode(raw)).toBe(raw);
+  });
+
+  it('is byte-identical everywhere except the sslmode value (no URL re-serialization)', () => {
+    const out = pinStrictSslMode(
+      'postgresql://user:pa%40ss@ep-x.neon.tech/db?channel_binding=require&sslmode=prefer#frag',
+    );
+    expect(out).toBe(
+      'postgresql://user:pa%40ss@ep-x.neon.tech/db?channel_binding=require&sslmode=verify-full#frag',
+    );
+  });
 });

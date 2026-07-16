@@ -5,6 +5,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { bankAccounts, accountTypeEnum } from '../../lib/db/schema';
 import { revalidateAccountViews } from '../../lib/revalidate';
+import { uuidOrEmpty } from '../../lib/validation';
 import { requireRole, requireConfigFlag } from '../../lib/auth/guards';
 import { env } from '../../lib/env';
 import { parseAmountToCents, centsToAmount } from '../../lib/money';
@@ -30,10 +31,9 @@ const openingBalanceSchema = z
   )
   .transform(parseAmountToCents);
 
-// Empty string from an unselected <select> means "no link" — distinct from an actual
-// UUID. z.literal('') lets the union accept both without a `|| undefined` string dance
-// at every call site.
-const linkedAccountIdSchema = z.union([z.literal(''), z.string().uuid()]).optional();
+// Empty string from an unselected <select> means "no link" — the shared uuidOrEmpty
+// fragment (lib/validation.ts), aliased to the domain-specific name this file reads as.
+const linkedAccountIdSchema = uuidOrEmpty;
 
 async function resolveLinkedAccountId(
   householdId: string,

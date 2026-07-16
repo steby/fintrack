@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 import { eq, and, inArray } from 'drizzle-orm';
 import { createTestDb } from './test-db';
 import { requireEnv } from './env';
+import { login } from './login';
 import { recurringSchedule, monthlyEntries, users, categories, fxRates } from '../lib/db/schema';
 import { hashPassword } from '../lib/auth/password';
 
@@ -116,11 +117,7 @@ test.describe('monthly entries', () => {
     // number with no real headroom data behind it.
     test.setTimeout(45000);
 
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(OWNER_EMAIL);
-    await page.getByLabel('Password').fill(OWNER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     // Create a Monthly recurring item and generate it for the current month.
     await page.goto('/recurring');
@@ -236,11 +233,7 @@ test.describe('monthly entries', () => {
   // md:hidden counterpart, covered separately by e2e/mobile.spec.ts), not a per-page
   // "Ad-hoc entry" button/form (that component, adhoc-form.tsx, no longer exists).
   test('quick add: add then delete', async ({ page }) => {
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(OWNER_EMAIL);
-    await page.getByLabel('Password').fill(OWNER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     await page.goto(currentMonthUrl());
     await page.getByRole('button', { name: 'New entry' }).click();
@@ -298,11 +291,7 @@ test.describe('monthly entries', () => {
         set: { rateToSgd: '1.350000', fetchedAt: new Date() },
       });
 
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(OWNER_EMAIL);
-    await page.getByLabel('Password').fill(OWNER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     await page.goto(currentMonthUrl());
     await page.getByRole('button', { name: 'New entry' }).click();
@@ -355,11 +344,7 @@ test.describe('monthly entries', () => {
         set: { rateToSgd: '1.350000', fetchedAt: new Date() },
       });
 
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(OWNER_EMAIL);
-    await page.getByLabel('Password').fill(OWNER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     // The rate lookup is the first server-action POST whose payload names the picked
     // currency — hold exactly that one back long enough to type during the fetch.
@@ -411,11 +396,7 @@ test.describe('monthly entries', () => {
   test('mark-paid popup: editing the date to a custom value persists that exact date, and the button disappears once paid', async ({
     page,
   }) => {
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(OWNER_EMAIL);
-    await page.getByLabel('Password').fill(OWNER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     // Quick-add's primary "Amount" field is actualAmount; leaving it blank and setting
     // ONLY the "More options" budgeted amount produces a genuinely unpaid forecast row
@@ -469,11 +450,7 @@ test.describe('monthly entries', () => {
   // wrap incorrectly (lib/domain/month-params.ts's monthNav, unit-tested in isolation;
   // this confirms the real link renders and navigates correctly end to end).
   test('month chevrons cross the year boundary (Dec -> Jan)', async ({ page }) => {
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(OWNER_EMAIL);
-    await page.getByLabel('Password').fill(OWNER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     await page.goto('/monthly?year=2026&month=12&view=list');
     await expect(page.getByTestId('month-header-label')).toHaveText('December 2026');
@@ -493,11 +470,7 @@ test.describe('monthly entries', () => {
   // parsing logic; this confirms the real cookie read in page.tsx honors the same
   // precedence end to end).
   test('the view URL param wins over a stale fintrack_view cookie', async ({ page, context }) => {
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(OWNER_EMAIL);
-    await page.getByLabel('Password').fill(OWNER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     await context.addCookies([
       {
@@ -526,11 +499,7 @@ test.describe('monthly entries', () => {
   // Standalone, it gets its own full timeout instead of inheriting timing pressure
   // from everything that ran before it.
   test('calendar and agenda views render without crashing', async ({ page }) => {
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(OWNER_EMAIL);
-    await page.getByLabel('Password').fill(OWNER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     await page.goto(currentMonthUrl());
     await page.getByTestId('view-toggle-calendar').click();
@@ -540,11 +509,7 @@ test.describe('monthly entries', () => {
   });
 
   test('a viewer sees monthly entries read-only', async ({ page }) => {
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(VIEWER_EMAIL);
-    await page.getByLabel('Password').fill(VIEWER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, VIEWER_EMAIL, VIEWER_PASSWORD);
 
     await page.goto(currentMonthUrl());
     // Phase 10: the global quick-add trigger ("New entry" at this desktop viewport) is
@@ -560,11 +525,7 @@ test.describe('monthly entries', () => {
   test('an invalid amount is rejected with a visible error (spec.md Phase 2 failure-path requirement)', async ({
     page,
   }) => {
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(OWNER_EMAIL);
-    await page.getByLabel('Password').fill(OWNER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     await page.goto(currentMonthUrl());
     await page.getByRole('button', { name: 'New entry' }).click();

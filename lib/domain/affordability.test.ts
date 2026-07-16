@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { centsToAmount } from '../money';
+import { utcStartOfDay } from './today';
 import {
   parseHorizon,
   resolveHorizonDays,
+  horizonCandidateBuckets,
   selectUpcomingItems,
   computeSafeToSpend,
   computeBudgetRemaining,
   buildRunway,
+  type Horizon,
   type UpcomingEntryCandidate,
   type UpcomingItem,
 } from './affordability';
@@ -427,5 +430,43 @@ describe('property: selectUpcomingItems never selects a paid or uncategorized ca
         },
       ),
     );
+  });
+});
+
+describe('horizonCandidateBuckets', () => {
+  it('property: the month containing the END of every allowed horizon window is always fetched', () => {
+    fc.assert(
+      fc.property(
+        fc.date({ min: new Date('2000-01-01T00:00:00Z'), max: new Date('2099-12-01T00:00:00Z') }),
+        fc.constantFrom<Horizon>('month', 7, 14, 30),
+        (rawToday, horizon) => {
+          const today = utcStartOfDay(rawToday);
+          const horizonDays = resolveHorizonDays(horizon, today);
+          const end = new Date(today.getTime() + horizonDays * 86_400_000);
+          expect(horizonCandidateBuckets(today)).toContainEqual({
+            year: end.getUTCFullYear(),
+            month: end.getUTCMonth() + 1,
+          });
+        },
+      ),
+    );
+  });
+
+  it('spans three months for the end-of-January 30-day spill (the regression case)', () => {
+    // Jan 31 + 30 days = Mar 2 (2027 is not a leap year): the window touches Jan, Feb,
+    // AND Mar — fetching only [current, next] dropped the March tail entirely.
+    expect(horizonCandidateBuckets(new Date('2027-01-31T00:00:00Z'))).toEqual([
+      { year: 2027, month: 1 },
+      { year: 2027, month: 2 },
+      { year: 2027, month: 3 },
+    ]);
+  });
+
+  it('wraps the year boundary (Nov -> Nov, Dec, Jan)', () => {
+    expect(horizonCandidateBuckets(new Date('2026-11-15T00:00:00Z'))).toEqual([
+      { year: 2026, month: 11 },
+      { year: 2026, month: 12 },
+      { year: 2027, month: 1 },
+    ]);
   });
 });

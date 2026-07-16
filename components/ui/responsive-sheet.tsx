@@ -83,21 +83,38 @@ function ResponsiveSheet({
   children,
 }: ResponsiveSheetProps) {
   const liveIsDesktop = useIsDesktop();
-  const [lockedIsDesktop, setLockedIsDesktop] = React.useState<boolean | null>(null);
-  const [prevOpen, setPrevOpen] = React.useState(open);
 
-  if (open !== prevOpen) {
-    setPrevOpen(open);
+  // Review finding: the breakpoint lock below keys off the open flag, so an
+  // UNCONTROLLED usage (trigger-only, no `open` prop — e.g. the net-worth "Learn more"
+  // sheet) never engaged it: Dialog/Drawer managed their own hidden open state, and a
+  // resize across 768px while open swapped the subtree to the OTHER primitive, whose
+  // fresh internal state is `closed` — the sheet silently vanished. Standard
+  // controlled/uncontrolled mirror instead: when no `open` prop is passed, this
+  // component holds the open state itself and passes it down, so BOTH usages flow
+  // through the same `effectiveOpen` and the lock always engages.
+  const isControlled = open !== undefined;
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
+  const effectiveOpen = isControlled ? open : uncontrolledOpen;
+  const handleOpenChange = (next: boolean) => {
+    if (!isControlled) setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  };
+
+  const [lockedIsDesktop, setLockedIsDesktop] = React.useState<boolean | null>(null);
+  const [prevOpen, setPrevOpen] = React.useState(effectiveOpen);
+
+  if (effectiveOpen !== prevOpen) {
+    setPrevOpen(effectiveOpen);
     // Capture on the false -> true transition; release on the true -> false one, so
     // the NEXT open re-evaluates the viewport fresh instead of reusing a stale lock.
-    setLockedIsDesktop(open ? liveIsDesktop : null);
+    setLockedIsDesktop(effectiveOpen ? liveIsDesktop : null);
   }
 
-  const isDesktop = open ? (lockedIsDesktop ?? liveIsDesktop) : liveIsDesktop;
+  const isDesktop = effectiveOpen ? (lockedIsDesktop ?? liveIsDesktop) : liveIsDesktop;
 
   if (isDesktop) {
     return (
-      <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog open={effectiveOpen} onOpenChange={handleOpenChange}>
         {trigger && <DialogTrigger render={trigger} />}
         <DialogContent>
           <DialogHeader>
@@ -111,7 +128,7 @@ function ResponsiveSheet({
   }
 
   return (
-    <Drawer open={open} onOpenChange={onOpenChange}>
+    <Drawer open={effectiveOpen} onOpenChange={handleOpenChange}>
       {trigger && <DrawerTrigger render={trigger} />}
       <DrawerContent>
         <DrawerTitle>{title}</DrawerTitle>

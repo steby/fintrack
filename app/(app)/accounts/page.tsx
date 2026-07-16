@@ -23,10 +23,11 @@ import { AccountBalancesTable } from '../dashboard/account-balances-table';
 import { BankSummaryTable } from '../dashboard/bank-summary-table';
 import { YearPicker } from '../dashboard/year-picker';
 
-// Net worth — NetWorthChart + AccountBalancesTable + BankSummaryTable, the same
-// balance-walk (lib/domain/net-worth.ts) app/(app)/page.tsx (the dashboard) has always
-// run, lifted onto their own route (spec.md Phase 8). The old dashboard KEEPS rendering
-// all of this too, unchanged, until Phase 9 — the duplication is deliberate.
+// Net worth — NetWorthChart + AccountBalancesTable + BankSummaryTable on their own
+// route (moved off the pre-redesign dashboard in Phase 8; this page has been the ONLY
+// home of the lib/domain/net-worth.ts balance-walk since Phase 9 replaced that
+// dashboard with the forecast-first Home — an earlier comment here described the
+// transitional duplication as still pending; review finding).
 //
 // post-redesign bug-fix pass: BankSummaryTable (buildBankSummary) needs only entries
 // tagged to a bank account for the selected year — no opening-balance carry-forward, no

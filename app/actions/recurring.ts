@@ -18,10 +18,9 @@ import { generateEntriesForRange } from '../../lib/generate-entries';
 import { resolveOptionalRef } from '../../lib/db/queries';
 import { setFlag } from '../../lib/flags';
 import { revalidateEntryViews } from '../../lib/revalidate';
+import { uuidOrEmpty } from '../../lib/validation';
 
 export type RecurringActionState = { error?: string; success?: boolean } | undefined;
-
-const uuidOrEmpty = z.union([z.literal(''), z.string().uuid()]).optional();
 
 const recurringItemFormSchema = z.object({
   item: z.string().trim().min(1, 'Item name is required').max(200),

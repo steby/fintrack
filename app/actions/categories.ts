@@ -5,6 +5,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { categories, directionEnum } from '../../lib/db/schema';
 import { revalidateCategoryViews } from '../../lib/revalidate';
+import { isSystemCategory } from '../../lib/db/queries';
 import { requireRole, requireConfigFlag } from '../../lib/auth/guards';
 import { env } from '../../lib/env';
 import { optionalMoneyInputSchema, centsToAmount } from '../../lib/money';
@@ -130,21 +131,11 @@ export async function updateCategoryAction(
   // income (only reachable via a forged post; the UI's direction is a hidden input)
   // would make every quick-added uncategorized spend COUNT AS INCOME. Rename/color/cap
   // stay editable on it; only direction is pinned.
-  if (parsed.data.direction !== 'expense') {
-    const [systemRow] = await db
-      .select({ id: categories.id })
-      .from(categories)
-      .where(
-        and(
-          eq(categories.id, parsed.data.id),
-          eq(categories.householdId, actingUser.householdId),
-          eq(categories.isSystem, true),
-        ),
-      )
-      .limit(1);
-    if (systemRow) {
-      return { error: 'The built-in Uncategorized category must stay an expense category.' };
-    }
+  if (
+    parsed.data.direction !== 'expense' &&
+    (await isSystemCategory(actingUser.householdId, parsed.data.id))
+  ) {
+    return { error: 'The built-in Uncategorized category must stay an expense category.' };
   }
 
   // household_id in the WHERE clause, not just the id — without it, a member could

@@ -1,5 +1,6 @@
 import { daysInMonth, clampedDueDate } from './reminders';
 import { utcDaysBetween, utcStartOfDay, currentYearMonth } from './today';
+import { addMonths } from './recurring';
 import { parseAmountToCents } from '../money';
 
 // Pure logic for Phase 9's forecast-first Home — spec.md: "Home answers 'Can I cover
@@ -86,6 +87,21 @@ export function resolveHorizonDays(h: Horizon, today: Date): number {
   if (h !== 'month') return h;
   const start = utcStartOfDay(today);
   return daysInMonth(start.getUTCFullYear(), start.getUTCMonth() + 1) - start.getUTCDate();
+}
+
+// Which (year, month) buckets Home must fetch candidates for: the current month plus
+// the next TWO. The widest horizon is 30 rolling days, and a 30-day window starting
+// Jan 30-31 ends Mar 1-2 — THREE calendar months (the only span that can exceed two;
+// a fourth month would need a window of two-plus full months, which no allowed horizon
+// produces). Review finding: fetching only [current, next] silently dropped a bill due
+// in that third month from the hero, list, and runway for the last day or two of
+// January. Deliberately horizon-INDEPENDENT (always three buckets, one extra month of
+// rows in the common case) so Home can fetch the horizon setting and the candidates in
+// the same parallel round-trip — computing exact buckets would serialize a DB hop on
+// the setting first; selectUpcomingItems filters to the real window either way.
+export function horizonCandidateBuckets(today: Date): { year: number; month: number }[] {
+  const current = currentYearMonth(today);
+  return [current, addMonths(current, 1), addMonths(current, 2)];
 }
 
 // Selects and shapes every candidate worth showing on Home's upcoming list within

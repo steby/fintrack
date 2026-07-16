@@ -74,8 +74,12 @@ export async function requestPasswordResetAction(
 }
 
 const resetSchema = z.object({
-  token: z.string().min(1),
-  password: z.string(),
+  token: z.string().min(1).max(200),
+  // .max(200) is the same defense-in-depth cap loginSchema documents (app/actions/
+  // auth.ts) — argon2 is memory-hard by design, so hashing an attacker-sized
+  // (megabytes) password would be a cheap CPU/memory-exhaustion lever on this pre-auth
+  // endpoint. Real quality rules live in validatePassword below.
+  password: z.string().max(200),
 });
 
 // Consumes a reset link: single-use, short-lived, looked up by hashToken(token) (the

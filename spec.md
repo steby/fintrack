@@ -146,15 +146,19 @@ Households = tenancy boundary; **every domain query scoped by `household_id`** v
 helpers in `lib/db/queries.ts`.
 
 - `households` — id, name, `base_currency` (default `'SGD'`), created_at
-- `users` — id, household_id, email (unique), password_hash, name, `role` pgEnum(owner|member|viewer), created_at
-- `sessions` — id (opaque 32-byte token), user_id, expires_at, created_at
-- `household_invitations` — id, household_id, email, role, token (single-use), invited_by_user_id, expires_at, accepted_at
-- `household_settings` — household_id, key, value (kill-switch flags live here)
-- `categories` — + household_id, + `monthly_budget` numeric nullable
+- `users` — id, household_id, email (unique), password_hash, name, `role` pgEnum(owner|member|viewer), created_at, `notify_by_email`
+- `sessions` — id (SHA-256 hash of the opaque 32-byte token — hashed at rest since the improvement pass; raw token lives only in the cookie), user_id, expires_at, created_at
+- `household_invitations` — id, household_id, email, role, token (single-use; deliberately raw — 7-day in-email token, unlike sessions/resets), invited_by_user_id, expires_at, accepted_at
+- `household_settings` — household_id, key, value (kill-switch flags + `affordability_horizon` live here)
+- `categories` — + household_id, + `monthly_budget` numeric nullable, + `is_system` boolean (the reserved per-household Uncategorized expense category; partial unique index, undeletable, direction-pinned — improvement batch 2b)
 - `bank_accounts` — + household_id, + `opening_balance` numeric default 0; credit→bank self-link
 - `recurring_schedule` — + household_id (item, category_id, budgeted_amount, bank_account_id, frequency pgEnum, schedule_months, actual_date_day, is_active, notes)
-- `monthly_entries` — + household_id, + `paid_by_user_id` nullable, + `is_overridden` boolean default false; `UNIQUE(household_id, year, month, recurring_schedule_id)`
+- `monthly_entries` — + household_id, + `paid_by_user_id` nullable, + `is_overridden` boolean default false, + `original_amount`/`original_currency`/`fx_rate` nullable (FX-assist display annotation, all-or-nothing — batch 3d); `UNIQUE(household_id, year, month, recurring_schedule_id)`
 - `goals` — id, household_id, name, target_amount, saved_amount, target_date nullable, created_at
+- `login_attempts` — email+IP failed-login rate-limit buckets (Phase 7 hardening; also documented at the top of this file)
+- `email_log` — type+period+household dedup ledger for cron sends (Phase 6)
+- `password_reset_tokens` — token_hash (unique; raw never stored), user_id, expires_at (1h), used_at — single-use reset links, issuance capped at 3 active per user (improvement batch 3b)
+- `fx_rates` — currency (PK), rate_to_sgd numeric(14,6), fetched_at — global (NOT household-scoped: a USD rate is the same fact for everyone) 24h-TTL cache for the FX assist (batch 3d)
 
 Money columns use `numeric(12,2)` (not float — original used REAL; this is a correctness fix).
 Seed = standalone idempotent `lib/db/seed.ts` (npm script; ports the original's categories/
@@ -183,11 +187,30 @@ _Kill-switch_ = runtime-toggleable without redeploy, required for risky/external
 | `email_reminders`   | Bill-due reminders (email blast radius)               | **kill-switch (DB)** | **off** |
 | `monthly_recap`     | Month-end summary email                               | **kill-switch (DB)** | **off** |
 
+Every kill-switch has a **bidirectional** owner-only in-app toggle (user decision,
+post-1.0): csv_import inline on `/import`, auto_generate on `/recurring`,
+email_reminders/monthly_recap on Settings → Notifications — never enable-only.
+
+**Post-1.0 mandatory additions (no flag — classification recorded here):** password
+reset (`/forgot-password` + `/reset/[token]`, batch 3b — account recovery can't be
+behind a flag); cross-month transactions search (`/transactions`, batch 3c — read-only,
+household-scoped, same trust surface as the Monthly list view, so no kill-switch: it
+mutates nothing and triggers nothing external); FX entry assist (batch 3d — degrades to
+manual SGD entry on any rate failure by design, so a kill-switch would add a control
+with no blast radius to control).
+
 ## Out of Scope
 
-Open-banking/Plaid sync; real money movement; multi-currency conversion (SGD only v1);
-settle-up; public self-serve signup (invite-only); native mobile apps (PWA only);
-receipts/attachments; investment tracking.
+Open-banking/Plaid sync; real money movement; settle-up; public self-serve signup
+(invite-only); native mobile apps (PWA only); receipts/attachments; investment tracking.
+
+**Superseded (was "multi-currency conversion — SGD only v1"):** the post-1.0 improvement
+pass added the FX **entry assist** (batch 3d, user-requested): pick a currency in
+quick-add, type what you paid, and the SGD field pre-fills from a cached estimated rate.
+SGD remains the ONLY stored truth for every calculation — the foreign
+amount/currency/rate ride along as a display-only annotation, cleared if the SGD actual
+is later edited. This is deliberately NOT multi-currency accounting (no per-currency
+balances, no revaluation); full multi-currency stays out of scope.
 
 ## Threat notes (one line per feature)
 
@@ -198,7 +221,15 @@ tested directly. RBAC: viewer writes → tampering; server-side `requireRole`. C
 huge/malicious file → DoS/injection; size/row caps, zod rows, no formula eval, export escapes
 `=-@` cells (CSV injection). Cron: unauth trigger → spam/abuse; `CRON_SECRET` check. Money
 math: bad propagation/rollover → silent corruption; pure functions, property tests, never
-overwrite actualized rows.
+overwrite actualized rows. Password reset (post-1.0): token guessing/replay/flooding →
+takeover or mailbox spam; SHA-256-hashed single-use 1h tokens, 3-active cap, constant
+response regardless of account existence, all sessions revoked on success, capped
+password length (argon2 DoS). FX assist (post-1.0): third-party rate dependency
+(frankfurter.app/ECB, keyless) → availability/poisoning; zod-validated response, 4s
+timeout, 24h DB cache with stale-fallback, degrades to manual SGD entry, rate is
+display-only annotation (never stored truth). Transactions search (post-1.0): hostile
+query strings → injection/scan abuse; ilike with escaped `%_\`, household-scoped,
+LIMIT 100, no mutation surface.
 
 ---
 
@@ -685,7 +716,10 @@ query is household-scoped; a cross-household entry-id probe returns "Entry not f
    `KillSwitchKey` subset of, deliberately NOT added to that union (a horizon isn't a
    kill-switch) and deliberately uncached (a single per-request read on Home's render
    path, not a hot path).
-4. **Actions**: `markPaidAction` (`app/actions/monthly.ts`) — zod `{ id: uuid }`,
+4. **Actions**: `markPaidAction` (`app/actions/monthly.ts`) — zod `{ id: uuid }` (later
+   extended post-1.0, batches 3a + the redesign fix pass: optional `actualDate` and
+   `actualAmount` overrides — the confirm sheet lets the user correct both before
+   recording; empty/absent falls back to the original behavior below),
    `requireRole('write')`, household-scoped select; an already-paid entry
    (`actualAmount !== null`) returns `{ success: true, alreadyPaid: true }` (idempotent,
    double-tap safe — no second write); otherwise sets `actualAmount` to the entry's own
@@ -1255,3 +1289,34 @@ read-only on mobile → recurring auto-generates → monthly entry across 3 view
 red → goal + net worth render → CSV import reconciles, re-import no-ops → export valid/safe →
 cron secured + deduped → kill-switch flips features live → PWA installs → full CI green →
 `npm run build` Vercel-ready.
+
+---
+
+# Post-1.0 improvement pass (2026-07-14 → 2026-07-17) — spec reconciliation
+
+The user-approved full-app review produced four improvement batches plus two review-fix
+batches, executed and logged in `PROGRESS.md` (entries "Improvement batch 1" through
+"Review fix-now batch" and onward). This section back-propagates the spec-relevant
+deltas (AGENTS.md: update spec.md rather than silently deviating); the per-batch detail
+stays in PROGRESS.md.
+
+**Security/infra:** session tokens SHA-256-hashed at rest (raw only in the cookie;
+invite tokens deliberately still raw — 7-day in-email); `DATABASE_URL` sslmode pinned
+to verify-full at the env choke point; password-reset flow (tables/threat notes above);
+login and reset/invite inputs length-capped; `/api/health` no longer echoes a version.
+
+**Domain/UX:** reserved per-household Uncategorized system category (undeletable,
+direction-pinned, self-healing; quick-add/edit/import all file category-less EXPENSE
+entries under it so nothing vanishes from totals); edit-entry sheet on every row
+(recurring rows rename-locked to their Plan template); mark-paid amount+date overrides
+with toast Undo; guided onboarding checklist for empty households; 3-way theme toggle
+(light/dark/system); cross-month `/transactions` search; FX entry assist (Out of Scope
+note above); offline navigation fallback (`/offline` precached; authed HTML still never
+cached); Home hero horizon options This-month/7/14/30 — This-month is calendar-anchored
+(today → month end), 7/14/30 are ROLLING windows from today (user-confirmed semantics),
+with candidate fetch spanning the full window (up to three calendar months).
+
+**Structure:** `lib/db/queries.ts` split into eight domain modules behind a barrel;
+import wizard's column-mapping logic moved into `lib/domain/csv.ts` under the coverage
+gate + presentational preview table; `lib/revalidate.ts` owns "which pages show which
+data" for every mutation; shared zod fragments in `lib/validation.ts`.

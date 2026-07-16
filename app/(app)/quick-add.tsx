@@ -297,8 +297,13 @@ function AmountWithCurrency() {
             </option>
           ))}
         </select>
+        {/* Distinct keys force React to REMOUNT rather than adopt when the branch
+            flips: the SGD input is uncontrolled (plain name-only) while the foreign one
+            is controlled, and letting one element instance switch between the two trips
+            Base UI's controlled/uncontrolled warning in dev (review finding). */}
         {foreign ? (
           <Input
+            key="amount-foreign"
             aria-label={`Amount in ${currency}`}
             type="number"
             step="0.01"
@@ -313,6 +318,7 @@ function AmountWithCurrency() {
           />
         ) : (
           <Input
+            key="amount-sgd"
             name="actualAmount"
             type="number"
             step="0.01"

@@ -5158,3 +5158,61 @@ the others). email_reminders/monthly_recap were already bidirectional. New E2E f
 integration 294/294 (+2: FX-clear on edit, expense/income uncategorized import); E2E
 75/75 (+1 auto_generate toggle; the csv_import test was extended, not added);
 lint/typecheck/build/format clean.
+
+---
+
+## Review deferred + cleanup batch — "fix all" (2026-07-17)
+
+The remaining review findings, all user-triaged "fix all" in one pass.
+
+**Hardening:**
+
+- **Horizon window fully fetched.** `horizonCandidateBuckets` (lib/domain/affordability.ts)
+  returns [current, +1, +2] months — a rolling 30-day window starting Jan 30-31 ends
+  Mar 1-2, THREE calendar months, and Home previously fetched only two, silently
+  dropping the third month's bills from the hero/list/runway. Horizon-independent on
+  purpose: the horizon setting is fetched in the same Promise.all, so exact-month
+  computation would serialize a DB hop. User confirmed the semantics stay as designed:
+  "This month" is calendar-anchored; 7/14/30 are rolling windows. fast-check property:
+  the month containing every allowed window's end is always fetched.
+- **Input caps** on the two pre-auth argon2 endpoints (reset + invite-accept: password
+  .max(200) matching loginSchema's documented defense-in-depth; invite name .max(200))
+  and `/api/health` no longer echoes the package version (fingerprinting).
+- **ResponsiveSheet safe when uncontrolled.** The breakpoint lock keyed off the `open`
+  prop, so trigger-only usage (net-worth "Learn more") never engaged it — a resize
+  across 768px while open swapped Dialog↔Drawer and silently closed the sheet. Standard
+  controlled/uncontrolled mirror: internal state when no `open` prop, one effectiveOpen
+  path for both. New E2E resizes across the breakpoint with the sheet open.
+- **sslmode pin survives '#' in a password.** pinStrictSslMode is now a raw-string
+  regex replace — new URL() treated everything after an un-encoded '#' as the fragment,
+  hiding sslmode and silently skipping the verify-full upgrade. Six new unit cases
+  (incl. byte-identity and key=value DSN passthrough).
+
+**Dedup (review reuse findings):** 17 inline E2E login blocks now call e2e/login.ts's
+helper; `uuidOrEmpty` + `dateInputSchema` live once in lib/validation.ts (goals.ts's
+hand-rolled targetDateSchema deleted; monthly/recurring/accounts import the shared
+fragments); WEEKDAY_SHORT exported from lib/format.ts (calendar grid's DAY_NAMES copy
+deleted); `dailyNetCents` shared beside useDayBuckets (was copy-pasted in grid+agenda);
+`toEditableEntry` mapper in entry-edit-button.tsx (was two hand-written literals).
+
+**Sweep (simplification/altitude):** stale comments fixed (fab.tsx "not mounted
+anywhere yet" — it's the live mobile trigger; accounts/insights "until Phase 9" — Phase
+9 shipped); YearPicker's dead `basePath='/'` default removed (required prop — Home
+ignores ?year=); `isSystemCategory` query helper is the named pre-check for
+category-mutating actions (updateCategoryAction uses it; delete keeps its atomic
+WHERE); `isUncategorizedRow` predicate moved into lib/domain/dashboard.ts;
+quick-add's amount inputs got distinct keys (Base UI dev warning about one element
+switching controlled↔uncontrolled).
+
+**spec.md reconciled (AGENTS.md rule):** Data Model lists all 13 tables + new columns;
+Out of Scope's "multi-currency (SGD only)" marked superseded by the FX assist with its
+actual boundaries; Feature Matrix records the no-flag classification decisions for
+password reset/transactions/FX and the bidirectional kill-switch toggles; threat notes
+added for reset/FX/search; markPaid task annotated with the amount override; dated
+post-1.0 reconciliation section appended.
+
+**Test/CI status (complete runs):** unit 523/523 (+15: horizon buckets ×3,
+isUncategorizedRow, lib/validation ×5, connection-string ×6); integration 294/294; E2E
+76/76 (75 clean + the known pwa offline-emulation flake passing on retry — the same
+Playwright SW race documented in the live-pass entry, not this batch);
+lint/typecheck/build/format clean.

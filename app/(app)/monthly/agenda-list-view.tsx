@@ -5,8 +5,8 @@ import { formatSGDCompact, formatSGD } from '../../../lib/format';
 import { parseAmountToCents } from '../../../lib/money';
 import { daysInMonth } from '../../../lib/domain/reminders';
 import { MarkPaidButton } from '../home/mark-paid-button';
-import { EntryEditButton } from '../entry-edit-button';
-import { useDayBuckets } from './use-day-buckets';
+import { EntryEditButton, toEditableEntry } from '../entry-edit-button';
+import { useDayBuckets, dailyNetCents } from './use-day-buckets';
 import { directionDotClass, paidTextClass } from './entry-style';
 import type { MonthlyEntryRow } from './types';
 
@@ -52,15 +52,7 @@ export function AgendaListView({
             // empty row for every day of the month like the grid does — a compact list
             // is the whole point of this view.
             if (dayEntries.length === 0) return null;
-            // Uncategorized entries (categoryDirection null) are excluded from the net,
-            // not treated as expenses — consistent with summary-bar.tsx/page.tsx's
-            // sumCents, which excludes them from both income and expense totals for the
-            // same reason: a direction-less amount can't be classified as either.
-            const dailyNetCents = dayEntries.reduce((sum, e) => {
-              if (e.categoryDirection === null) return sum;
-              const cents = parseAmountToCents(e.budgetedAmount);
-              return sum + (e.categoryDirection === 'income' ? cents : -cents);
-            }, 0);
+            const netCents = dailyNetCents(dayEntries);
             const isToday = isCurrentMonth && day === today.day;
 
             return (
@@ -73,12 +65,12 @@ export function AgendaListView({
               >
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-semibold">{day}</span>
-                  {dailyNetCents !== 0 && (
+                  {netCents !== 0 && (
                     <span
-                      className={`rounded bg-muted px-1 text-[0.65rem] font-bold ${dailyNetCents > 0 ? 'text-income' : 'text-expense'}`}
+                      className={`rounded bg-muted px-1 text-[0.65rem] font-bold ${netCents > 0 ? 'text-income' : 'text-expense'}`}
                     >
-                      {dailyNetCents > 0 ? '+' : ''}
-                      {formatSGDCompact(dailyNetCents)}
+                      {netCents > 0 ? '+' : ''}
+                      {formatSGDCompact(netCents)}
                     </span>
                   )}
                 </div>
@@ -162,17 +154,7 @@ function AgendaRow({ entry, canManage }: { entry: MonthlyEntryRow; canManage: bo
           />
         )}
         {canManage && (
-          <EntryEditButton
-            entry={{
-              id: entry.id,
-              item: entry.item,
-              categoryId: entry.categoryId,
-              actualAmount: entry.actualAmount,
-              actualDate: entry.actualDate,
-              recurringLinked: entry.recurringScheduleId !== null,
-            }}
-            className="text-muted-foreground"
-          />
+          <EntryEditButton entry={toEditableEntry(entry)} className="text-muted-foreground" />
         )}
       </div>
     </div>

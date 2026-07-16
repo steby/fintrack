@@ -4,10 +4,11 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 // Fixed bottom-right, positioned above BottomNav's fixed bar plus its own safe-area
-// padding (same offset math as the toast viewport) — md:hidden because desktop gets a
-// header-area "+ Add" button instead. Not mounted anywhere yet: spec.md Phase 10 wires
-// this into app/(app)/layout.tsx as the global quick-add trigger; Phase 8 only builds
-// the primitive itself.
+// padding (same offset math as the toast viewport) — md:hidden because desktop gets the
+// sidebar's "New entry" button instead. LIVE on every authed page: this is the mobile
+// global quick-add trigger, mounted via app/(app)/quick-add.tsx from the app layout
+// (Phase 10 wired it in; an earlier comment here still said "not mounted anywhere yet"
+// — review finding).
 function Fab({ className, ...props }: ComponentProps<typeof Button>) {
   return (
     <Button

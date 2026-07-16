@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 import { eq, inArray } from 'drizzle-orm';
 import { createTestDb } from './test-db';
 import { requireEnv } from './env';
+import { login } from './login';
 import { categories, bankAccounts, users } from '../lib/db/schema';
 import { hashPassword } from '../lib/auth/password';
 
@@ -59,11 +60,7 @@ test.describe('categories & accounts', () => {
   });
 
   test('a category can be created, edited, and deleted end to end', async ({ page }) => {
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(OWNER_EMAIL);
-    await page.getByLabel('Password').fill(OWNER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     await page.goto('/settings/categories');
     await expect(page.getByRole('heading', { name: 'Categories & accounts' })).toBeVisible();
@@ -87,11 +84,7 @@ test.describe('categories & accounts', () => {
   });
 
   test('a bank account can be created and deleted', async ({ page }) => {
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(OWNER_EMAIL);
-    await page.getByLabel('Password').fill(OWNER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, OWNER_EMAIL, OWNER_PASSWORD);
 
     await page.goto('/settings/categories');
     await page.getByPlaceholder('Account name').fill(accountName);
@@ -106,11 +99,7 @@ test.describe('categories & accounts', () => {
   test('a viewer sees categories and accounts but no Add/Edit/Delete controls (server-enforced, not just hidden)', async ({
     page,
   }) => {
-    await page.goto('/login');
-    await page.getByLabel('Email').fill(VIEWER_EMAIL);
-    await page.getByLabel('Password').fill(VIEWER_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
-    await expect(page).toHaveURL('/');
+    await login(page, VIEWER_EMAIL, VIEWER_PASSWORD);
 
     await page.goto('/settings/categories');
     await expect(page.getByRole('heading', { name: 'Categories & accounts' })).toBeVisible();
