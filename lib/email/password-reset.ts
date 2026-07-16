@@ -23,7 +23,7 @@ export async function sendPasswordResetEmail(email: string, resetUrl: string): P
   const resend = new Resend(env.RESEND_API_KEY);
 
   try {
-    await Promise.race([
+    const result = await Promise.race([
       resend.emails.send({
         from: EMAIL_FROM,
         to: email,
@@ -33,10 +33,18 @@ export async function sendPasswordResetEmail(email: string, resetUrl: string): P
           `<p><a href="${resetUrl}">Choose a new password</a> — this link works once and expires in 1 hour.</p>` +
           `<p>If this wasn't you, you can ignore this email; your password is unchanged.</p>`,
       }),
-      new Promise((_resolve, reject) =>
+      new Promise<never>((_resolve, reject) =>
         setTimeout(() => reject(new Error('Resend request timed out')), SEND_TIMEOUT_MS),
       ),
     ]);
+    // The Resend SDK RESOLVES (never rejects) on API-level failures, returning
+    // { data: null, error: {...} } — without this check a rate-limited or rejected send
+    // looks like success and the user silently never gets a reset link (lib/email/
+    // resend.ts's sendOnce does the same check). The catch below keeps the action's
+    // response constant either way.
+    if (result.error) {
+      throw new Error(`Resend API error (${result.error.name}): ${result.error.message}`);
+    }
   } catch (err) {
     // The token row already exists; the user can request another link. Never let a
     // flaky provider turn into a thrown error that reveals timing differences to the

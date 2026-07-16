@@ -1,7 +1,6 @@
 'use server';
 
 import { z } from 'zod';
-import { revalidatePath } from 'next/cache';
 import { eq, and, isNull } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { monthlyEntries, categories, bankAccounts, users } from '../../lib/db/schema';
@@ -12,6 +11,7 @@ import { isValidCalendarDate } from '../../lib/domain/month-params';
 import { utcStartOfDay } from '../../lib/domain/today';
 import { resolveOptionalRef, getOrCreateUncategorizedCategoryId } from '../../lib/db/queries';
 import { SUPPORTED_FX_CURRENCIES } from '../../lib/domain/fx-rules';
+import { revalidateEntryViews } from '../../lib/revalidate';
 
 export type MonthlyActionState = { error?: string; success?: boolean } | undefined;
 
@@ -78,13 +78,10 @@ export async function updateActualAction(
   if (!result[0]) {
     return { error: 'Entry not found.' };
   }
-  // Also revalidates Home (Phase 9): this is the exact action markPaidAction's toast
-  // Undo replays to restore the pre-mark-paid actualAmount/actualDate, and Home's
-  // safe-to-spend/upcoming-list read those same two columns — without this, an Undo
-  // triggered from Home would leave its cash figure and list stale until some other
-  // navigation happened to revalidate '/'.
-  revalidatePath('/');
-  revalidatePath('/monthly');
+  // This is the exact action markPaidAction's toast Undo replays to restore the
+  // pre-mark-paid actualAmount/actualDate; every entry-showing surface (Home, Money,
+  // Transactions, Insights) reads those columns — see lib/revalidate.ts.
+  revalidateEntryViews();
   return { success: true };
 }
 
@@ -125,7 +122,11 @@ export async function updateEntryDetailsAction(
   }
 
   const [entry] = await db
-    .select({ item: monthlyEntries.item, recurringScheduleId: monthlyEntries.recurringScheduleId })
+    .select({
+      item: monthlyEntries.item,
+      recurringScheduleId: monthlyEntries.recurringScheduleId,
+      actualAmount: monthlyEntries.actualAmount,
+    })
     .from(monthlyEntries)
     .where(
       and(
@@ -155,13 +156,24 @@ export async function updateEntryDetailsAction(
   const categoryId =
     category.value ?? (await getOrCreateUncategorizedCategoryId(actingUser.householdId));
 
+  const newActualAmount = amount.data === null ? null : centsToAmount(amount.data);
+  // The FX annotation (originalAmount/currency/fxRate) says "this SGD figure came from
+  // converting X foreign at rate R." The edit sheet has no currency fields, so a manual
+  // change to the SGD actual makes that note describe a conversion that no longer
+  // matches — clear the whole triple when the amount changes (a no-op on entries that
+  // never had one). A pure rename / recategorize (amount unchanged) leaves it intact.
+  const actualAmountChanged = newActualAmount !== entry.actualAmount;
+
   await db
     .update(monthlyEntries)
     .set({
       item: parsed.data.item,
       categoryId,
-      actualAmount: amount.data === null ? null : centsToAmount(amount.data),
+      actualAmount: newActualAmount,
       actualDate: parsed.data.actualDate === '' ? null : parsed.data.actualDate,
+      ...(actualAmountChanged
+        ? { originalAmount: null, originalCurrency: null, fxRate: null }
+        : {}),
     })
     .where(
       and(
@@ -170,8 +182,7 @@ export async function updateEntryDetailsAction(
       ),
     );
 
-  revalidatePath('/');
-  revalidatePath('/monthly');
+  revalidateEntryViews();
   return { success: true };
 }
 
@@ -219,14 +230,9 @@ export async function overrideBudgetAction(
   if (!result[0]) {
     return { error: 'Entry not found.' };
   }
-  // Also revalidates Home (post-redesign bug-fix pass): a category-budget override
-  // changes this month's budgetedAmount, which Home's budget-remaining lens
-  // (computeBudgetRemaining, fed by getDashboardRowsForMonth) reads directly — without
-  // this, Home would show a stale figure until some other navigation happened to
-  // revalidate '/'. Same pattern as updateActualAction's and markPaidAction's own
-  // revalidatePath('/') just above/below.
-  revalidatePath('/');
-  revalidatePath('/monthly');
+  // A budget override changes this month's budgetedAmount, which Home's budget-remaining
+  // lens and the Insights charts both read — see lib/revalidate.ts.
+  revalidateEntryViews();
   return { success: true };
 }
 
@@ -333,8 +339,7 @@ export async function markPaidAction(
       and(eq(monthlyEntries.id, entry.id), eq(monthlyEntries.householdId, actingUser.householdId)),
     );
 
-  revalidatePath('/');
-  revalidatePath('/monthly');
+  revalidateEntryViews();
   // entry.actualAmount is provably null here (the branch above already excluded
   // non-null) — spelled out as the literal `null` rather than `entry.actualAmount` so
   // the return shape's own type (previous.actualAmount: null) is visibly satisfied by
@@ -488,13 +493,9 @@ export async function addAdhocAction(
     fxRate: originalCents === null ? null : String(parsed.data.fxRate),
   });
 
-  // Also revalidates Home (post-redesign bug-fix pass): a quick-added entry can land
-  // in the CURRENT month (e.g. an actualAmount logged today), which Home's
-  // upcoming-list/safe-to-spend/budget-remaining figures all depend on — without this,
-  // Home would show stale data until some other navigation happened to revalidate '/'.
-  // Same pattern as updateActualAction's/markPaidAction's own revalidatePath('/').
-  revalidatePath('/');
-  revalidatePath('/monthly');
+  // A quick-added entry can land in the current month (an actualAmount logged today),
+  // which every entry-showing surface depends on — see lib/revalidate.ts.
+  revalidateEntryViews();
   return { success: true };
 }
 
@@ -530,12 +531,7 @@ export async function deleteEntryAction(
   if (!result[0]) {
     return { error: 'Entry not found.' };
   }
-  // Also revalidates Home (post-redesign bug-fix pass): a deleted ad-hoc entry can be
-  // one Home is currently counting toward its upcoming list/safe-to-spend/
-  // budget-remaining figures — without this, Home would keep showing it until some
-  // other navigation happened to revalidate '/'. Same pattern as updateActualAction's/
-  // markPaidAction's own revalidatePath('/').
-  revalidatePath('/');
-  revalidatePath('/monthly');
+  // A deleted ad-hoc entry can be one Home is currently counting — see lib/revalidate.ts.
+  revalidateEntryViews();
   return { success: true };
 }

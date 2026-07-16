@@ -1,10 +1,10 @@
 'use server';
 
 import { z } from 'zod';
-import { revalidatePath } from 'next/cache';
 import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { bankAccounts, accountTypeEnum } from '../../lib/db/schema';
+import { revalidateAccountViews } from '../../lib/revalidate';
 import { requireRole, requireConfigFlag } from '../../lib/auth/guards';
 import { env } from '../../lib/env';
 import { parseAmountToCents, centsToAmount } from '../../lib/money';
@@ -134,7 +134,7 @@ export async function createAccountAction(
     openingBalance: centsToAmount(parsed.data.openingBalance),
   });
 
-  revalidatePath('/settings/categories');
+  revalidateAccountViews();
   return { success: true };
 }
 
@@ -236,7 +236,7 @@ export async function updateAccountAction(
   if (!result[0]) {
     return { error: 'Account not found.' };
   }
-  revalidatePath('/settings/categories');
+  revalidateAccountViews();
   return { success: true };
 }
 
@@ -269,6 +269,6 @@ export async function deleteAccountAction(
   if (!result[0]) {
     return { error: 'Account not found.' };
   }
-  revalidatePath('/settings/categories');
+  revalidateAccountViews();
   return { success: true };
 }

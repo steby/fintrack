@@ -3,7 +3,13 @@ import { test, expect } from '@playwright/test';
 import { eq, and, inArray } from 'drizzle-orm';
 import { createTestDb } from './test-db';
 import { requireEnv } from './env';
-import { recurringSchedule, monthlyEntries, users, households } from '../lib/db/schema';
+import {
+  recurringSchedule,
+  monthlyEntries,
+  users,
+  households,
+  householdSettings,
+} from '../lib/db/schema';
 import { hashPassword } from '../lib/auth/password';
 
 const OWNER_EMAIL = requireEnv('SEED_OWNER_EMAIL');
@@ -52,6 +58,9 @@ test.describe('recurring schedule', () => {
       .delete(recurringSchedule)
       .where(inArray(recurringSchedule.item, [itemName, `${itemName} renamed`]));
     await testDb.delete(users).where(eq(users.email, VIEWER_EMAIL));
+    // Restore auto_generate to its default (ON) by removing the row the toggle test
+    // wrote — leaving it off would silently disable auto-generation for other specs.
+    await testDb.delete(householdSettings).where(eq(householdSettings.key, 'auto_generate'));
     await closeTestDb();
   });
 
@@ -194,5 +203,27 @@ test.describe('recurring schedule', () => {
       await testDb.delete(users).where(eq(users.email, email));
       await testDb.delete(households).where(eq(households.id, freshHousehold.id));
     }
+  });
+
+  test('an owner can toggle the auto_generate kill-switch off and back on from the Plan page', async ({
+    page,
+  }) => {
+    await page.goto('/login');
+    await page.getByLabel('Email').fill(OWNER_EMAIL);
+    await page.getByLabel('Password').fill(OWNER_PASSWORD);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page).toHaveURL('/');
+
+    await page.goto('/recurring');
+    // auto_generate defaults ON — the toggle exists (previously this kill-switch had no
+    // UI at all) and reflects that state.
+    const toggle = page.getByTestId('toggle-auto-generate');
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+
+    // Turn it off, then back on — a real bidirectional control, not enable-only.
+    await toggle.click();
+    await expect(page.getByTestId('toggle-auto-generate')).toHaveAttribute('aria-checked', 'false');
+    await page.getByTestId('toggle-auto-generate').click();
+    await expect(page.getByTestId('toggle-auto-generate')).toHaveAttribute('aria-checked', 'true');
   });
 });

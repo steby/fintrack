@@ -5096,3 +5096,65 @@ outside the 80% coverage gate, with zero unit tests. Moves, all behavior-preserv
 coverage thresholds pass; lint/typecheck/build/format clean; E2E 74/74 (`CI=true`) —
 phase5 import specs exercise the moved guessing end-to-end (mapping-date/item/amount
 selects land pre-filled from the alias guess before each spec re-selects explicitly).
+
+---
+
+## Review fix-now batch — correctness + bidirectional kill-switches (2026-07-16)
+
+The application-wide review's fix-now findings (user-triaged "fix them"), plus making
+the kill-switches on/off-toggleable. All behavior-preserving except where a bug is
+named.
+
+**Correctness / silent-failure fixes:**
+
+- **CSV import: same-month repeat purchase no longer dropped.** classifyRow's
+  "already-applied" check now compares the actual DATE too, not just amount + fuzzy
+  item — two real $15 coffees on the 3rd and 17th of one month are distinct entries,
+  not a re-import no-op (matching dedupWithinFile, which already keys on the full date).
+  MatchCandidateEntry + getMatchCandidates carry actualDate. Import still writes both
+  amount and date together, so re-importing the same file stays idempotent. New unit
+  regression test.
+- **CSV import: unmatched-category EXPENSE rows now count.** A "new" row whose category
+  is unmapped/unresolved is filed under the reserved Uncategorized (expense) category
+  instead of categoryId: null (null direction → skipped in every total — the exact
+  pre-batch-2b vanishing bug, on the untouched import path). Deliberately expense-only:
+  the system category is expense-direction, so routing an income row through it would
+  misreport it AND break re-import idempotency (stored expense vs the row's inferred
+  income direction); income rows with no category stay null. New integration test.
+- **Editing an entry clears a stale FX annotation.** updateEntryDetailsAction now nulls
+  the originalAmount/currency/fxRate triple when the SGD actual changes (the edit sheet
+  has no currency fields, so a manual amount change makes "US$20 @ 1.35" describe a
+  conversion that no longer matches). A pure rename/recategorize leaves it intact. New
+  integration test.
+- **FX currency-switch race guarded.** pickCurrency now tags each pick with a monotonic
+  id and drops a superseded (out-of-order) rate response — picking USD then quickly EUR
+  can no longer let USD's slower reply overwrite EUR's rate and convert at the wrong one
+  (adjacent to the rate-arrival race fixed in e09e7bf).
+- **Email sends no longer fail silently.** sendInviteEmail and sendPasswordResetEmail
+  now inspect Resend's resolved `{ data: null, error }` shape (the SDK resolves, never
+  rejects, on rate-limit/bad-recipient) and route it into the existing catch/log —
+  previously a failed invite or reset link looked identical to success. Matches
+  resend.ts's sendOnce.
+- **getRateToSgd honors its "never throws" contract.** The initial cache SELECT moved
+  inside the try/catch, so a DB blip degrades to null (enter SGD manually) instead of
+  throwing through getFxRateAction (which has no catch by contract).
+- **Mark-paid Undo surfaces failures.** The toast's Undo now handles updateActualAction's
+  result and shows an error toast if the undo is rejected, instead of `void`-ing it.
+
+**revalidatePath coverage — fixed at the right depth.** New lib/revalidate.ts owns
+"which pages show this kind of data" (revalidateEntryViews / CategoryViews / AccountViews
+/ GoalViews). Every entry/category/account/goal mutation now refreshes ALL relevant
+surfaces — closing gaps where Home's cash lens, budget mini, goals mini, and the
+Transactions/Insights pages went stale after an edit until an unrelated navigation. Also
+resolves the review's "revalidate scattering" altitude item.
+
+**Kill-switches are now bidirectional (user request).** csv_import's inline toggle
+reflects state and stays on the enabled Import page, so an owner can turn it back OFF
+(it was enable-only). auto_generate — the one kill-switch with no UI at all — gets a
+bidirectional owner toggle on the Plan page (new toggleAutoGenerateAction, per-flag like
+the others). email_reminders/monthly_recap were already bidirectional. New E2E for both.
+
+**Test/CI status (complete runs):** unit 508/508 (+1 CSV same-month regression);
+integration 294/294 (+2: FX-clear on edit, expense/income uncategorized import); E2E
+75/75 (+1 auto_generate toggle; the csv_import test was extended, not added);
+lint/typecheck/build/format clean.

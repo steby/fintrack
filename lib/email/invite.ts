@@ -21,17 +21,24 @@ export async function sendInviteEmail(email: string, acceptUrl: string): Promise
   const resend = new Resend(env.RESEND_API_KEY);
 
   try {
-    await Promise.race([
+    const result = await Promise.race([
       resend.emails.send({
         from: EMAIL_FROM,
         to: email,
         subject: "You've been invited to a FinTrack household",
         html: `<p>You've been invited to join a household on FinTrack.</p><p><a href="${acceptUrl}">Accept invite</a></p>`,
       }),
-      new Promise((_resolve, reject) =>
+      new Promise<never>((_resolve, reject) =>
         setTimeout(() => reject(new Error('Resend request timed out')), SEND_TIMEOUT_MS),
       ),
     ]);
+    // The Resend SDK RESOLVES (never rejects) on API-level failures — bad/restricted
+    // key, rate limit, validation error — returning { data: null, error: {...} }. Without
+    // this check a real failure looks identical to a success and the invite is silently
+    // never delivered (lib/email/resend.ts's sendOnce does the same check).
+    if (result.error) {
+      throw new Error(`Resend API error (${result.error.name}): ${result.error.message}`);
+    }
   } catch (err) {
     // Never let a flaky email provider block invite creation — the invite row already
     // exists, and the owner can always share acceptUrl manually. Full retry-with-backoff

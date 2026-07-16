@@ -88,7 +88,18 @@ export function MarkPaidButton({
             undoFormData.set('id', entryId);
             undoFormData.set('actualAmount', previous.actualAmount ?? '');
             undoFormData.set('actualDate', previous.actualDate ?? '');
-            void updateActualAction(undefined, undoFormData);
+            // Surface a failed undo instead of swallowing it — if the entry was deleted
+            // concurrently, or the write is rejected, the user must not be left believing
+            // the mark-paid was reverted when it wasn't.
+            void updateActualAction(undefined, undoFormData).then((undoResult) => {
+              if (undoResult?.error) {
+                toastManager.add({
+                  type: 'error',
+                  title: "Couldn't undo",
+                  description: undoResult.error,
+                });
+              }
+            });
           },
         },
       });

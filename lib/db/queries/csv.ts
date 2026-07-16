@@ -69,6 +69,7 @@ export async function getMatchCandidates(
       direction: categories.direction,
       budgetedAmount: monthlyEntries.budgetedAmount,
       actualAmount: monthlyEntries.actualAmount,
+      actualDate: monthlyEntries.actualDate,
     })
     .from(monthlyEntries)
     .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
@@ -86,6 +87,7 @@ export async function getMatchCandidates(
     direction: row.direction,
     budgetedCents: parseAmountToCents(row.budgetedAmount),
     actualCents: row.actualAmount === null ? null : parseAmountToCents(row.actualAmount),
+    actualDate: row.actualDate,
   }));
 }
 

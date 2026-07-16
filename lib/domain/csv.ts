@@ -459,6 +459,10 @@ export interface MatchCandidateEntry {
   direction: 'income' | 'expense' | null;
   budgetedCents: number;
   actualCents: number | null;
+  // The stored actual date (YYYY-MM-DD) or null — used to keep "already-applied" from
+  // collapsing two genuinely different-day transactions of the same amount/item in the
+  // same month into one (see classifyRow).
+  actualDate: string | null;
 }
 
 export type RowClassification =
@@ -475,14 +479,22 @@ function amountsClose(a: number, b: number): boolean {
 
 // Classifies one already-normalized row against the entries already in its
 // household/year/month (candidates is expected to be pre-filtered by the caller to
-// exactly that year+month — this function doesn't re-filter by date). Idempotent
-// re-import falls directly out of this: a row whose target entry ALREADY has this
-// exact actual amount recorded (whether that entry came from a recurring forecast or
-// a PRIOR run of this same import) is "already-applied", not "match" — so re-running
-// the identical file a second time classifies every row as a no-op rather than
-// re-writing the same value or creating a duplicate ad-hoc entry. No stored content
-// hash needed (a deviation from spec.md's literal "content hash" wording, logged in
-// spec.md) — the DB's own current state IS the hash-equivalent check.
+// exactly that year+month). Idempotent re-import falls directly out of this: a row
+// whose target entry ALREADY has this exact actual amount AND actual date recorded
+// (whether that entry came from a recurring forecast or a PRIOR run of this same
+// import) is "already-applied", not "match" — so re-running the identical file a second
+// time classifies every row as a no-op rather than re-writing the same value or
+// creating a duplicate ad-hoc entry. No stored content hash needed (a deviation from
+// spec.md's literal "content hash" wording, logged in spec.md) — the DB's own current
+// state IS the hash-equivalent check.
+//
+// The actual-DATE must match too, not just the amount: two real, distinct transactions
+// of the same amount and merchant in the same month (e.g. two $15 coffees on the 3rd
+// and the 17th) are NOT the same already-applied entry — matching on amount alone would
+// silently drop the second one as a no-op. This mirrors dedupWithinFile below, which
+// also keys on the full date for exactly this reason. Import always writes both actual
+// amount and date together (commitImport), so an import-created entry re-imported from
+// the same file still matches on both and stays idempotent.
 //
 // `claimedEntryIds` is how the caller (lib/import-csv.ts's runImportPipeline, which
 // calls this once per row in a loop over the SAME candidates array) prevents two
@@ -506,6 +518,7 @@ export function classifyRow(
     (c) =>
       (c.direction === null || c.direction === row.direction) &&
       c.actualCents === row.amountCents &&
+      c.actualDate === row.actualDate &&
       itemNameSimilarity(c.item, row.item) >= FUZZY_MATCH_THRESHOLD,
   );
   if (alreadyApplied) {

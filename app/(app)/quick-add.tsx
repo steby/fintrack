@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useEffect, useState } from 'react';
+import { useActionState, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Plus, ChevronDown } from 'lucide-react';
 import { addAdhocAction } from '../actions/monthly';
@@ -248,12 +248,20 @@ function AmountWithCurrency() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rate]);
 
+  // Monotonic id per currency pick: a fetch may resolve out of order (pick USD, then
+  // quickly EUR — USD's slower response could land last), so only the latest pick's
+  // response is allowed to write state. Without this, a stale rate overwrites the
+  // current currency's, and the rate-arrival effect below then converts at the wrong one.
+  const fxRequestId = useRef(0);
+
   async function pickCurrency(next: string) {
+    const requestId = ++fxRequestId.current;
     setCurrency(next);
     setRate(null);
     setRateError(null);
     if (next === 'SGD') return;
     const result = await getFxRateAction(next);
+    if (requestId !== fxRequestId.current) return; // a newer pick superseded this one
     if (!result || 'error' in result) {
       setRateError(result?.error ?? 'Rate unavailable — enter the SGD amount manually.');
       return;

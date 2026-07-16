@@ -1,10 +1,10 @@
 'use server';
 
 import { z } from 'zod';
-import { revalidatePath } from 'next/cache';
 import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { categories, directionEnum } from '../../lib/db/schema';
+import { revalidateCategoryViews } from '../../lib/revalidate';
 import { requireRole, requireConfigFlag } from '../../lib/auth/guards';
 import { env } from '../../lib/env';
 import { optionalMoneyInputSchema, centsToAmount } from '../../lib/money';
@@ -80,7 +80,7 @@ export async function createCategoryAction(
       parsed.data.monthlyBudget === null ? null : centsToAmount(parsed.data.monthlyBudget),
   });
 
-  revalidatePath('/settings/categories');
+  revalidateCategoryViews();
   return { success: true };
 }
 
@@ -171,7 +171,7 @@ export async function updateCategoryAction(
   if (!result[0]) {
     return { error: 'Category not found.' };
   }
-  revalidatePath('/settings/categories');
+  revalidateCategoryViews();
   return { success: true };
 }
 
@@ -228,6 +228,6 @@ export async function deleteCategoryAction(
         : 'Category not found.',
     };
   }
-  revalidatePath('/settings/categories');
+  revalidateCategoryViews();
   return { success: true };
 }

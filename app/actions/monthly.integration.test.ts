@@ -273,6 +273,75 @@ describe('updateEntryDetailsAction', () => {
     await cleanup(member.household.id);
   });
 
+  it('clears a stale FX annotation when the actual amount is edited, but keeps it on a pure rename', async () => {
+    const { updateEntryDetailsAction } = await import('./monthly');
+    const member = await makeHouseholdWithUser('member', 'Entry details FX');
+    const [cat] = await db
+      .insert(categories)
+      .values({ householdId: member.household.id, name: 'Travel', direction: 'expense' })
+      .returning();
+    // Seed an entry as if quick-add's FX assist created it: SGD 27.00 from USD 20 @ 1.35.
+    const [entry] = await db
+      .insert(monthlyEntries)
+      .values({
+        householdId: member.household.id,
+        year: 2026,
+        month: 6,
+        item: 'Lunch abroad',
+        categoryId: cat.id,
+        budgetedAmount: '27.00',
+        actualAmount: '27.00',
+        actualDate: '2026-06-10',
+        originalAmount: '20.00',
+        originalCurrency: 'USD',
+        fxRate: '1.350000',
+      })
+      .returning();
+
+    mockToken = member.token;
+
+    // A pure rename (amount unchanged) leaves the annotation intact.
+    await updateEntryDetailsAction(
+      undefined,
+      formData({
+        id: entry.id,
+        item: 'Lunch in NYC',
+        categoryId: cat.id,
+        actualAmount: '27.00',
+        actualDate: '2026-06-10',
+      }),
+    );
+    const [afterRename] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entry.id));
+    expect(afterRename.originalCurrency).toBe('USD');
+    expect(afterRename.fxRate).toBe('1.350000');
+
+    // Editing the SGD actual makes the "US$20 @ 1.35" note describe a conversion that no
+    // longer matches — the whole triple must clear.
+    await updateEntryDetailsAction(
+      undefined,
+      formData({
+        id: entry.id,
+        item: 'Lunch in NYC',
+        categoryId: cat.id,
+        actualAmount: '30.00',
+        actualDate: '2026-06-10',
+      }),
+    );
+    const [afterEdit] = await db
+      .select()
+      .from(monthlyEntries)
+      .where(eq(monthlyEntries.id, entry.id));
+    expect(afterEdit.actualAmount).toBe('30.00');
+    expect(afterEdit.originalAmount).toBeNull();
+    expect(afterEdit.originalCurrency).toBeNull();
+    expect(afterEdit.fxRate).toBeNull();
+
+    await cleanup(member.household.id);
+  });
+
   it('files an emptied category back under the reserved Uncategorized category', async () => {
     const { updateEntryDetailsAction } = await import('./monthly');
     const member = await makeHouseholdWithUser('member', 'Entry details B');

@@ -3,15 +3,21 @@ import { Repeat } from 'lucide-react';
 import { requireUser } from '../../../lib/auth/guards';
 import { can } from '../../../lib/auth/rbac';
 import { db } from '../../../lib/db';
+import { isEnabled } from '../../../lib/flags';
 import { recurringSchedule, categories, bankAccounts } from '../../../lib/db/schema';
 import { EmptyState } from '@/components/ui/empty-state';
 import { RecurringRow, type RecurringItem } from './recurring-row';
 import { RecurringAddForm } from './recurring-add-form';
 import { GenerateForm } from './generate-form';
+import { AutoGenerateToggle } from './auto-generate-toggle';
 
 export default async function RecurringPage() {
   const user = await requireUser();
   const canManage = can(user.role, 'write');
+  const canManageSettings = can(user.role, 'manage_settings');
+  const autoGenerateEnabled = canManageSettings
+    ? await isEnabled(user.householdId, 'auto_generate')
+    : false;
 
   const [items, allCategories, allAccounts] = await Promise.all([
     db
@@ -67,9 +73,12 @@ export default async function RecurringPage() {
           </p>
         </div>
         {canManage && (
-          <div className="flex shrink-0 gap-2">
-            <GenerateForm />
-            <RecurringAddForm categories={allCategories} accounts={allAccounts} />
+          <div className="flex shrink-0 flex-col items-end gap-2">
+            <div className="flex gap-2">
+              <GenerateForm />
+              <RecurringAddForm categories={allCategories} accounts={allAccounts} />
+            </div>
+            {canManageSettings && <AutoGenerateToggle enabled={autoGenerateEnabled} />}
           </div>
         )}
       </div>

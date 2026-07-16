@@ -6,7 +6,11 @@ import { eq, and } from 'drizzle-orm';
 import { db } from './db';
 import { monthlyEntries } from './db/schema';
 import { centsToAmount } from './money';
-import { getMatchCandidates, getNameLookup } from './db/queries';
+import {
+  getMatchCandidates,
+  getNameLookup,
+  getOrCreateUncategorizedCategoryId,
+} from './db/queries';
 import {
   parseCsvText,
   checkCsvByteSize,
@@ -143,6 +147,25 @@ export async function commitImport(
     ? await getNameLookup(householdId)
     : { categoryIdByName: new Map<string, string>(), accountIdByName: new Map<string, string>() };
 
+  // Fallback for an EXPENSE 'new' row whose category column is unmapped or names
+  // something the household doesn't have: file it under the reserved Uncategorized
+  // (expense) category rather than categoryId: null. A null category means null
+  // direction, and every total/forecast/chart skips direction-null rows
+  // (lib/domain/dashboard.ts) — so an imported row would silently vanish from the
+  // numbers, the exact bug the Uncategorized category exists to prevent, matching what
+  // addAdhocAction already does for a no-category quick-add. Resolved once (not per row)
+  // and only when there ARE new rows.
+  //
+  // Deliberately EXPENSE-only: the system category is expense-direction, so filing an
+  // income row under it would misreport that income as an expense AND break re-import
+  // idempotency (the stored expense direction would stop matching the row's inferred
+  // income direction, so classifyRow would insert a duplicate every re-import). Income
+  // rows with no resolvable category keep categoryId: null — a rarer case, recategorized
+  // via the edit sheet.
+  const uncategorizedId = hasIncludedNewRows
+    ? await getOrCreateUncategorizedCategoryId(householdId)
+    : null;
+
   return db.transaction(async (tx) => {
     let applied = 0;
     for (const classification of classifications) {
@@ -165,9 +188,11 @@ export async function commitImport(
       } else if (classification.status === 'new') {
         if (excludedRowNumbers.has(classification.row.rowNumber)) continue;
         const { row } = classification;
-        const categoryId = row.categoryName
+        const resolvedCategoryId = row.categoryName
           ? (nameLookup.categoryIdByName.get(row.categoryName.trim().toLowerCase()) ?? null)
           : null;
+        const categoryId =
+          resolvedCategoryId ?? (row.direction === 'expense' ? uncategorizedId : null);
         const bankAccountId = row.accountName
           ? (nameLookup.accountIdByName.get(row.accountName.trim().toLowerCase()) ?? null)
           : null;

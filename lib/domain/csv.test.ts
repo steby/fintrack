@@ -387,40 +387,44 @@ describe('classifyRow', () => {
     accountName: null,
   };
 
+  // A forecast (unactualized) candidate has null actual amount AND null actual date;
+  // an already-applied one carries both. Defaults keep each test stating only the
+  // fields it actually cares about.
+  const makeCandidate = (overrides: Partial<MatchCandidateEntry> = {}): MatchCandidateEntry => ({
+    id: 'e1',
+    item: 'Groceries',
+    direction: 'expense',
+    budgetedCents: 10000,
+    actualCents: null,
+    actualDate: null,
+    ...overrides,
+  });
+
   it('classifies as "match" against an unactualized forecast with a close amount and similar name', () => {
-    const candidates: MatchCandidateEntry[] = [
-      {
-        id: 'e1',
-        item: 'Groceries',
-        direction: 'expense',
-        budgetedCents: 10000,
-        actualCents: null,
-      },
-    ];
-    const result = classifyRow(row, candidates);
+    const result = classifyRow(row, [makeCandidate()]);
     expect(result).toEqual({ status: 'match', row, entryId: 'e1', candidateItem: 'Groceries' });
   });
 
-  it('classifies as "already-applied" when an entry already has this exact actual', () => {
-    const candidates: MatchCandidateEntry[] = [
-      {
-        id: 'e1',
-        item: 'Groceries',
-        direction: 'expense',
-        budgetedCents: 10000,
-        actualCents: 10000,
-      },
-    ];
+  it('classifies as "already-applied" when an entry already has this exact actual amount AND date', () => {
+    const candidates = [makeCandidate({ actualCents: 10000, actualDate: '2026-01-05' })];
     expect(classifyRow(row, candidates)).toEqual({ status: 'already-applied', row, entryId: 'e1' });
   });
 
-  it('classifies an uncategorized (direction: null) entry as "already-applied" too, not just an exact direction match', () => {
+  it('does NOT treat a same-amount, same-item entry on a DIFFERENT day as already-applied (regression: two real repeat purchases in one month)', () => {
+    // A genuine second $100 Groceries purchase later the same month must import as its
+    // own entry, not be swallowed as a re-import no-op of the first. Matching on amount
+    // alone (no date) used to drop it silently.
+    const candidates = [makeCandidate({ actualCents: 10000, actualDate: '2026-01-17' })];
+    expect(classifyRow(row, candidates)).toEqual({ status: 'new', row });
+  });
+
+  it('classifies an uncategorized (direction: null) entry as "already-applied" too, when amount and date match', () => {
     // Regression: a row this same import previously created with no category mapped
     // has direction: null (no category to derive it from) — re-importing the
     // identical file must still recognize it as already-applied, or every re-import
     // of an unmapped-category file would insert a fresh duplicate forever.
-    const candidates: MatchCandidateEntry[] = [
-      { id: 'e1', item: 'Groceries', direction: null, budgetedCents: 10000, actualCents: 10000 },
+    const candidates = [
+      makeCandidate({ direction: null, actualCents: 10000, actualDate: '2026-01-05' }),
     ];
     expect(classifyRow(row, candidates)).toEqual({ status: 'already-applied', row, entryId: 'e1' });
   });
@@ -430,56 +434,30 @@ describe('classifyRow', () => {
   });
 
   it('does not match a forecast whose amount is far off, even with an identical name', () => {
-    const candidates: MatchCandidateEntry[] = [
-      {
-        id: 'e1',
-        item: 'Groceries',
-        direction: 'expense',
-        budgetedCents: 50000,
-        actualCents: null,
-      },
-    ];
-    expect(classifyRow(row, candidates)).toEqual({ status: 'new', row });
+    expect(classifyRow(row, [makeCandidate({ budgetedCents: 50000 })])).toEqual({
+      status: 'new',
+      row,
+    });
   });
 
   it('does not match a forecast with the wrong direction', () => {
-    const candidates: MatchCandidateEntry[] = [
-      { id: 'e1', item: 'Groceries', direction: 'income', budgetedCents: 10000, actualCents: null },
-    ];
-    expect(classifyRow(row, candidates)).toEqual({ status: 'new', row });
+    expect(classifyRow(row, [makeCandidate({ direction: 'income' })])).toEqual({
+      status: 'new',
+      row,
+    });
   });
 
   it('never matches an already-actualized entry as a "match" target (only as already-applied, or not at all)', () => {
-    const candidates: MatchCandidateEntry[] = [
-      {
-        id: 'e1',
-        item: 'Groceries',
-        direction: 'expense',
-        budgetedCents: 10000,
-        actualCents: 9999,
-      },
-    ];
     // Actualized to a DIFFERENT amount than this row — not a re-import no-op, and not
     // a valid "match" target either (that would silently overwrite a real actual).
+    const candidates = [makeCandidate({ actualCents: 9999, actualDate: '2026-01-05' })];
     expect(classifyRow(row, candidates)).toEqual({ status: 'new', row });
   });
 
   it('picks the best-scoring candidate when multiple forecasts qualify', () => {
-    const candidates: MatchCandidateEntry[] = [
-      {
-        id: 'weak',
-        item: 'Shopping',
-        direction: 'expense',
-        budgetedCents: 10000,
-        actualCents: null,
-      },
-      {
-        id: 'strong',
-        item: 'Groceries',
-        direction: 'expense',
-        budgetedCents: 10000,
-        actualCents: null,
-      },
+    const candidates = [
+      makeCandidate({ id: 'weak', item: 'Shopping' }),
+      makeCandidate({ id: 'strong', item: 'Groceries' }),
     ];
     const result = classifyRow(row, candidates);
     expect(result.status).toBe('match');
@@ -490,21 +468,9 @@ describe('classifyRow', () => {
     // Same scenario as above with the order reversed — proves the "keep existing
     // best" path (a later candidate that still clears the threshold but scores lower)
     // is itself exercised, not just the "replace with a better one" path.
-    const candidates: MatchCandidateEntry[] = [
-      {
-        id: 'strong',
-        item: 'Groceries',
-        direction: 'expense',
-        budgetedCents: 10000,
-        actualCents: null,
-      },
-      {
-        id: 'okay',
-        item: 'Groceries Store',
-        direction: 'expense',
-        budgetedCents: 10000,
-        actualCents: null,
-      },
+    const candidates = [
+      makeCandidate({ id: 'strong', item: 'Groceries' }),
+      makeCandidate({ id: 'okay', item: 'Groceries Store' }),
     ];
     const result = classifyRow(row, candidates);
     expect(result.status).toBe('match');
@@ -512,15 +478,7 @@ describe('classifyRow', () => {
   });
 
   it('a claimed entry cannot be matched again by a second row (regression: two distinct rows must never both target the same forecast)', () => {
-    const candidates: MatchCandidateEntry[] = [
-      {
-        id: 'e1',
-        item: 'Groceries',
-        direction: 'expense',
-        budgetedCents: 10000,
-        actualCents: null,
-      },
-    ];
+    const candidates = [makeCandidate()];
     const secondRow: NormalizedImportRow = { ...row, rowNumber: 2, item: 'Groceries Store' };
 
     const claimed = new Set<string>();
@@ -536,16 +494,7 @@ describe('classifyRow', () => {
   });
 
   it('an unclaimed entry-id set (the default) allows the historical single-row behavior unchanged', () => {
-    const candidates: MatchCandidateEntry[] = [
-      {
-        id: 'e1',
-        item: 'Groceries',
-        direction: 'expense',
-        budgetedCents: 10000,
-        actualCents: null,
-      },
-    ];
-    expect(classifyRow(row, candidates)).toEqual({
+    expect(classifyRow(row, [makeCandidate()])).toEqual({
       status: 'match',
       row,
       entryId: 'e1',

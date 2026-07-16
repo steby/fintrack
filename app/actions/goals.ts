@@ -1,10 +1,10 @@
 'use server';
 
 import { z } from 'zod';
-import { revalidatePath } from 'next/cache';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../../lib/db';
 import { goals } from '../../lib/db/schema';
+import { revalidateGoalViews } from '../../lib/revalidate';
 import { requireRole, requireConfigFlag } from '../../lib/auth/guards';
 import { env } from '../../lib/env';
 import { moneyInputSchema, optionalMoneyInputSchema, centsToAmount } from '../../lib/money';
@@ -56,7 +56,7 @@ export async function createGoalAction(
     targetDate: parsed.data.targetDate === '' ? null : parsed.data.targetDate,
   });
 
-  revalidatePath('/goals');
+  revalidateGoalViews();
   return { success: true };
 }
 
@@ -107,7 +107,7 @@ export async function updateGoalAction(
   if (!result[0]) {
     return { error: 'Goal not found.' };
   }
-  revalidatePath('/goals');
+  revalidateGoalViews();
   return { success: true };
 }
 
@@ -136,6 +136,6 @@ export async function deleteGoalAction(
   if (!result[0]) {
     return { error: 'Goal not found.' };
   }
-  revalidatePath('/goals');
+  revalidateGoalViews();
   return { success: true };
 }

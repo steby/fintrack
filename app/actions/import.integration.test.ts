@@ -331,6 +331,60 @@ describe('commitImportAction', () => {
     await cleanup(member.household.id);
   });
 
+  it('files an unmatched-category EXPENSE row under Uncategorized so it still counts, but leaves an income row null', async () => {
+    const { commitImportAction } = await import('./import');
+    const member = await makeHouseholdWithUser('member', 'Import commit Uncat');
+    await setFlag(member.household.id, 'csv_import', true);
+    mockToken = member.token;
+
+    // A Category column IS mapped, but neither value matches any household category. The
+    // expense row (negative amount) must land under the reserved Uncategorized category
+    // — never categoryId: null, which would drop it from every total. The income row
+    // (positive) stays null (no income system category exists to file it under).
+    const mapping: ColumnMapping = { ...DEFAULT_MAPPING, category: '3' };
+    const fd = new FormData();
+    fd.set(
+      'csvText',
+      'Date,Item,Amount,Category\n2026-07-02,Mystery Spend,-40.00,Nonexistent\n2026-07-03,Mystery Income,55.00,AlsoNonexistent\n',
+    );
+    fd.set('hasHeaderRow', 'true');
+    fd.set('mappingDate', mapping.date);
+    fd.set('mappingItem', mapping.item);
+    fd.set('mappingAmount', mapping.amount);
+    fd.set('mappingDirection', mapping.direction);
+    fd.set('mappingCategory', mapping.category);
+    fd.set('mappingAccount', mapping.account);
+
+    const result = await commitImportAction(undefined, fd);
+    expect(result).toEqual({ success: true, applied: 2 });
+
+    const [spend] = await db
+      .select({ categoryId: monthlyEntries.categoryId, isSystem: categories.isSystem })
+      .from(monthlyEntries)
+      .leftJoin(categories, eq(monthlyEntries.categoryId, categories.id))
+      .where(
+        and(
+          eq(monthlyEntries.householdId, member.household.id),
+          eq(monthlyEntries.item, 'Mystery Spend'),
+        ),
+      );
+    expect(spend.categoryId).not.toBeNull();
+    expect(spend.isSystem).toBe(true);
+
+    const [income] = await db
+      .select({ categoryId: monthlyEntries.categoryId })
+      .from(monthlyEntries)
+      .where(
+        and(
+          eq(monthlyEntries.householdId, member.household.id),
+          eq(monthlyEntries.item, 'Mystery Income'),
+        ),
+      );
+    expect(income.categoryId).toBeNull();
+
+    await cleanup(member.household.id);
+  });
+
   it('re-importing the identical file a second time applies nothing (idempotent)', async () => {
     const { commitImportAction } = await import('./import');
     const member = await makeHouseholdWithUser('member', 'Import commit C');

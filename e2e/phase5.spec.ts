@@ -77,7 +77,7 @@ test.describe('Phase 5: CSV import/export', () => {
     await closeTestDb();
   });
 
-  test('csv_import is off by default; an owner can enable it inline on the Import page', async ({
+  test('csv_import is off by default; an owner can toggle it on AND back off inline on the Import page', async ({
     page,
   }) => {
     await login(page, OWNER_EMAIL, OWNER_PASSWORD);
@@ -85,7 +85,18 @@ test.describe('Phase 5: CSV import/export', () => {
 
     await expect(page.getByText('CSV import is not enabled for this household.')).toBeVisible();
     await page.getByTestId('enable-csv-import').click();
+    await expect(page.getByTestId('csv-file-input')).toBeVisible();
 
+    // The kill-switch is bidirectional: the same toggle stays on the enabled page so an
+    // owner can turn the feature back OFF (regression — it was previously enable-only,
+    // leaving no in-app way to disable it once on).
+    await page.getByTestId('enable-csv-import').click();
+    await expect(page.getByText('CSV import is not enabled for this household.')).toBeVisible();
+    await expect(page.getByTestId('csv-file-input')).toHaveCount(0);
+
+    // Re-enable before leaving: this spec's beforeAll runs once, and the later import
+    // tests rely on csv_import being on (they use the upload form directly).
+    await page.getByTestId('enable-csv-import').click();
     await expect(page.getByTestId('csv-file-input')).toBeVisible();
   });
 

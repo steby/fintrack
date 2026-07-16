@@ -26,12 +26,17 @@ export interface FxRateResult {
 // or null (UI: "enter the SGD amount manually"). Never throws — an FX hiccup must
 // never break entry logging.
 export async function getRateToSgd(currency: FxCurrency): Promise<FxRateResult | null> {
-  const [cached] = await db.select().from(fxRates).where(eq(fxRates.currency, currency)).limit(1);
-  if (cached && !isFxRateStale(cached.fetchedAt)) {
-    return { rate: Number(cached.rateToSgd), asOf: cached.fetchedAt };
-  }
-
+  // Declared out here so the catch can still fall back to a stale row read before the
+  // fetch — but the read itself is INSIDE the try: a DB blip on this SELECT must degrade
+  // to null (enter SGD manually), not throw, or it breaks the documented "never throws"
+  // contract that app/actions/fx.ts's getFxRateAction relies on (it has no catch).
+  let cached: typeof fxRates.$inferSelect | undefined;
   try {
+    [cached] = await db.select().from(fxRates).where(eq(fxRates.currency, currency)).limit(1);
+    if (cached && !isFxRateStale(cached.fetchedAt)) {
+      return { rate: Number(cached.rateToSgd), asOf: cached.fetchedAt };
+    }
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     const response = await fetch(`${FRANKFURTER_URL}?from=${currency}&to=SGD`, {

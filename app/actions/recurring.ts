@@ -16,6 +16,8 @@ import { parseScheduleMonths, walkMonths } from '../../lib/domain/recurring';
 import { moneyInputSchema, centsToAmount } from '../../lib/money';
 import { generateEntriesForRange } from '../../lib/generate-entries';
 import { resolveOptionalRef } from '../../lib/db/queries';
+import { setFlag } from '../../lib/flags';
+import { revalidateEntryViews } from '../../lib/revalidate';
 
 export type RecurringActionState = { error?: string; success?: boolean } | undefined;
 
@@ -218,7 +220,10 @@ export async function updateRecurringAction(
   }
 
   revalidatePath('/recurring');
-  revalidatePath('/monthly');
+  // Propagation rewrites this schedule's forecast monthly_entries, which every
+  // entry-showing surface reads (Home, Money, Transactions, Insights) — see
+  // lib/revalidate.ts.
+  revalidateEntryViews();
   return { success: true };
 }
 
@@ -265,7 +270,9 @@ export async function deleteRecurringAction(
     return { error: 'Recurring item not found.' };
   }
   revalidatePath('/recurring');
-  revalidatePath('/monthly');
+  // removeForecast deletes this schedule's forecast monthly_entries — same surfaces as
+  // the propagate branch above (see lib/revalidate.ts).
+  revalidateEntryViews();
   return { success: true };
 }
 
@@ -347,6 +354,31 @@ export async function generateAction(
     { year: parsed.data.toYear, month: parsed.data.toMonth },
   );
 
-  revalidatePath('/monthly');
+  // Newly materialized entries can land in the current/next month, which Home's
+  // upcoming list and safe-to-spend read — not just /monthly (see lib/revalidate.ts).
+  revalidateEntryViews();
   return { success: true, generated };
+}
+
+const toggleAutoGenerateSchema = z.object({ enabled: z.enum(['true', 'false']) });
+
+// Owner-only kill-switch toggle for auto_generate (default ON) — the one kill-switch
+// that previously had no UI at all. Mirrors app/actions/import.ts's toggleCsvImportAction
+// and notifications.ts's toggles: per-flag action, matching this codebase's stated
+// preference for a little duplication over a flag-name-parameterized abstraction.
+// Surfaced on the Plan page (app/(app)/recurring/page.tsx), the feature it governs.
+export async function toggleAutoGenerateAction(
+  _prevState: RecurringActionState,
+  formData: FormData,
+): Promise<RecurringActionState> {
+  const actingUser = await requireRole('manage_settings');
+
+  const parsed = toggleAutoGenerateSchema.safeParse({ enabled: formData.get('enabled') });
+  if (!parsed.success) {
+    return { error: 'Invalid request.' };
+  }
+
+  await setFlag(actingUser.householdId, 'auto_generate', parsed.data.enabled === 'true');
+  revalidatePath('/recurring');
+  return { success: true };
 }

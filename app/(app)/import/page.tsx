@@ -25,7 +25,7 @@ export default async function ImportPage() {
             ? ' Enabling it lets any member with edit access upload a CSV and reconcile it against existing entries.'
             : ' Ask an owner to enable it in order to import transactions from a CSV file.'}
         </InlineNote>
-        {can(user.role, 'manage_settings') && <CsvImportToggle />}
+        {can(user.role, 'manage_settings') && <CsvImportToggle enabled={false} />}
       </div>
     );
   }
@@ -49,11 +49,16 @@ export default async function ImportPage() {
 
   return (
     <div className="flex max-w-3xl flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Import</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Upload a CSV, map its columns, and review matches before anything is saved.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">Import</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Upload a CSV, map its columns, and review matches before anything is saved.
+          </p>
+        </div>
+        {/* Owners get the off-switch right where the feature lives, so turning CSV import
+            back off never requires hunting through settings. */}
+        {can(user.role, 'manage_settings') && <CsvImportToggle enabled={true} />}
       </div>
       <ImportForm />
     </div>
